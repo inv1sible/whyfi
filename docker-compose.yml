@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-whyfi}
+      POSTGRES_USER: ${POSTGRES_USER:-whyfi}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-whyfi-dev-password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-whyfi}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-whyfi}
+      POSTGRES_USER: ${POSTGRES_USER:-whyfi}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-whyfi-dev-password}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-insecure-dev-key-do-not-use-in-production}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-true}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-*}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-}
+      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME:-admin}
+      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL:-admin@example.com}
+      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD:-change-me-admin-password}
+      LOAD_DEMO_DATA: ${LOAD_DEMO_DATA:-true}
+    ports:
+      # Single plain port — no nginx/Caddy in front. Point your own reverse
+      # proxy (e.g. Nginx Proxy Manager) at this port. See MEMORY.md.
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - media:/app/media
+      - build_output:/build-output
+
+  # Always-on watcher (not profile-gated) — it idles in a 3s poll loop until
+  # the backend writes a build-request signal file, so clicking "Build
+  # Android App" in the PWA works with zero terminal use. No Docker socket
+  # access here; see android/docker-build.sh and MEMORY.md.
+  android-builder:
+    build:
+      context: ./android
+    restart: unless-stopped
+    environment:
+      ANDROID_KEYSTORE_PATH: /keystore/release.keystore
+      ANDROID_KEYSTORE_PASSWORD: ${ANDROID_KEYSTORE_PASSWORD:-}
+      ANDROID_KEY_ALIAS: ${ANDROID_KEY_ALIAS:-}
+      ANDROID_KEY_PASSWORD: ${ANDROID_KEY_PASSWORD:-}
+      WHYFI_PUBLIC_URL: ${WHYFI_PUBLIC_URL:-}
+    volumes:
+      - ./android/keystore:/keystore:ro
+      - build_output:/build-output
+
+volumes:
+  postgres_data:
+  media:
+  build_output:

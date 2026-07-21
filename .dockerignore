@@ -1,0 +1,10 @@
+.git
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+backend/staticfiles
+backend/media
+android
+docs
+*.md

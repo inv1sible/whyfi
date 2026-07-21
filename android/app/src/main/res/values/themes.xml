@@ -1,0 +1,6 @@
+<resources>
+    <!-- Manifest placeholder theme only — all UI is Jetpack Compose
+         (see ui/MainActivity.kt), no classic Views/Material Components
+         theme attributes are needed beyond avoiding a blank-window flash. -->
+    <style name="Theme.Whyfi" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

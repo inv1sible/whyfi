@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- WiFi scanning (v1 core feature) -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- Required by Android for WiFi/BLE/GNSS scan results, not just GPS -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- Cellular serving/neighbor cell info -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+
+    <!-- BLE device discovery (Android 12+) -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+
+    <!-- Precision ranging enhancement tier (only used if both device and
+         target support it; see ble/UwbLocateManager.kt) -->
+    <uses-permission android:name="android.permission.UWB_RANGING" />
+
+    <!-- Uploading scans to the self-hosted backend + LAN subnet scanning -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Keeps a scan running (and visibly so, via the persistent
+         notification) when the user switches tabs or backgrounds the app —
+         see scan/ScanForegroundService.kt. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <uses-feature android:name="android.hardware.uwb" android:required="false" />
+
+    <application
+        android:name=".WhyfiApplication"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.Whyfi">
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".scan.ScanForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="location|connectedDevice" />
+
+    </application>
+</manifest>

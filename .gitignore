@@ -1,0 +1,39 @@
+# Python / Django
+__pycache__/
+*.py[cod]
+*.sqlite3
+/backend/staticfiles/
+/backend/media/
+.venv/
+venv/
+
+# Node / frontend
+node_modules/
+/frontend/dist/
+/frontend/.vite/
+npm-debug.log*
+
+# Android / Gradle
+.gradle/
+/android/.gradle/
+/android/app/build/
+/android/build/
+/android/local.properties
+*.apk
+*.jks
+*.keystore
+!android/keystore/.gitkeep
+
+# Docker build artifacts shared volume
+/build-output/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
