@@ -11,6 +11,20 @@ enum class ThemePreference {
     }
 }
 
+/** GPS is the original, unchanged behavior (pick the freshest of
+ * GPS_PROVIDER/NETWORK_PROVIDER) — default, so existing behavior doesn't
+ * silently change for anyone. FUSED requests Android's FUSED_PROVIDER
+ * (API 31+) as the reported location instead. BOTH keeps the GPS/network
+ * pick as the primary reading (identical to GPS mode) *and* additionally
+ * captures a fused reading alongside it, for comparing sources. */
+enum class LocationSourcePreference {
+    GPS, FUSED, BOTH;
+
+    companion object {
+        fun fromStored(value: String?): LocationSourcePreference = entries.find { it.name == value } ?: GPS
+    }
+}
+
 /**
  * Backend URL + sensor token, entered once on the Settings screen.
  *
@@ -45,9 +59,14 @@ class SettingsRepository(context: Context) {
         get() = ThemePreference.fromStored(prefs.getString(KEY_THEME, null))
         set(value) = prefs.edit { putString(KEY_THEME, value.name) }
 
+    var locationSourcePreference: LocationSourcePreference
+        get() = LocationSourcePreference.fromStored(prefs.getString(KEY_LOCATION_SOURCE, null))
+        set(value) = prefs.edit { putString(KEY_LOCATION_SOURCE, value.name) }
+
     companion object {
         private const val KEY_BACKEND_URL = "backend_url"
         private const val KEY_SENSOR_TOKEN = "sensor_token"
         private const val KEY_THEME = "theme_preference"
+        private const val KEY_LOCATION_SOURCE = "location_source_preference"
     }
 }

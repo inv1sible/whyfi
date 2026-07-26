@@ -1,0 +1,229 @@
+import { useEffect, useState } from "react";
+import { api } from "../api/client";
+import { SortableTh } from "../components/SortableTh";
+import { TableSearchBox } from "../components/TableSearchBox";
+import { useSortableData } from "../hooks/useSortableData";
+import { usePolling } from "../hooks/usePolling";
+import { filterBySearch } from "../searchFilter";
+import type { ScanSession } from "../api/types";
+
+// Free-text search runs on this instead of the raw ScanSession so a typed
+// date/time (in whatever format is actually shown in the table) matches,
+// not just the raw ISO string underneath.
+interface SearchableRow extends ScanSession {
+  started_display: string;
+}
+
+export function ManageScansPage() {
+  // Bumped after a successful delete/resolve to force an immediate refetch
+  // rather than waiting out the rest of the 15s poll interval — usePolling
+  // has no public refetch(), but changing a dep re-fires its effect right
+  // away.
+  const [refreshKey, setRefreshKey] = useState(0);
+  const { data, error, loading } = usePolling(() => api.scanSessions("?limit=200"), 15000, [refreshKey]);
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [armed, setArmed] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [resolving, setResolving] = useState(false);
+  const [resolveError, setResolveError] = useState<string | null>(null);
+
+  const rows: SearchableRow[] = (data?.results ?? []).map((s) => ({
+    ...s,
+    started_display: new Date(s.started_at).toLocaleString(),
+  }));
+  const filtered = filterBySearch<SearchableRow>(rows, query);
+  const { sorted, sortKey, direction, requestSort } = useSortableData<SearchableRow>(filtered, "started_at", "desc");
+
+  const allFilteredSelected = sorted.length > 0 && sorted.every((s) => selected.has(s.id));
+  const hasActiveFilter = query.trim().length > 0;
+  const missingAddressCount = rows.filter((s) => s.latitude != null && s.resolved_address == null).length;
+
+  // A stale "confirm delete?" prompt applying to a since-changed selection
+  // would be actively dangerous — disarm the moment the selection changes.
+  useEffect(() => {
+    setArmed(false);
+  }, [selected]);
+
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllFiltered() {
+    setSelected((prev) => {
+      if (allFilteredSelected) return new Set();
+      const next = new Set(prev);
+      sorted.forEach((s) => next.add(s.id));
+      return next;
+    });
+  }
+
+  // "Delete everything except X": search for X, then select its complement
+  // in one click instead of hand-picking every other row.
+  function selectAllExceptFiltered() {
+    const filteredIds = new Set(filtered.map((s) => s.id));
+    const next = new Set<string>();
+    rows.forEach((s) => {
+      if (!filteredIds.has(s.id)) next.add(s.id);
+    });
+    setSelected(next);
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+  }
+
+  async function handleDelete() {
+    if (!armed) {
+      setArmed(true);
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await api.bulkDeleteScanSessions([...selected]);
+      setSelected(new Set());
+      setRefreshKey((k) => k + 1);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Delete failed.");
+    } finally {
+      setDeleting(false);
+      setArmed(false);
+    }
+  }
+
+  async function handleResolveAddresses() {
+    setResolving(true);
+    setResolveError(null);
+    try {
+      await api.resolveScanAddresses(20);
+      setRefreshKey((k) => k + 1);
+    } catch (err) {
+      setResolveError(err instanceof Error ? err.message : "Could not resolve addresses.");
+    } finally {
+      setResolving(false);
+    }
+  }
+
+  return (
+    <section>
+      <h1>Manage scans</h1>
+      <p className="page-hint">
+        Every scan session recorded, most recent first. Deleting a scan removes it and every WiFi/cellular/BLE/
+        satellite/LAN observation tied to it — the aggregate network/tower/device rows themselves (BSSIDs, cell
+        towers, LAN devices) are left in place even if this was their only sighting.
+      </p>
+
+      <TableSearchBox
+        value={query}
+        onChange={setQuery}
+        placeholder="Search sensor, address, device, timestamp…"
+      />
+
+      {missingAddressCount > 0 && (
+        <p className="page-hint">
+          {missingAddressCount} scan{missingAddressCount === 1 ? "" : "s"} without a resolved address.{" "}
+          <button onClick={handleResolveAddresses} disabled={resolving}>
+            {resolving ? "Resolving…" : "Resolve addresses"}
+          </button>{" "}
+          (looks up up to 20 at a time via OpenStreetMap, rate-limited — click again for more)
+        </p>
+      )}
+      {resolveError && <p className="error-text">{resolveError}</p>}
+
+      {loading && !data && <p>Loading…</p>}
+      {error && <p className="error-text">Could not reach the backend: {error.message}</p>}
+      {data && sorted.length === 0 && <p className="empty-state">No scan sessions recorded yet.</p>}
+
+      {sorted.length > 0 && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", margin: "0.75rem 0", flexWrap: "wrap" }}>
+            <button onClick={selectAllExceptFiltered} disabled={!hasActiveFilter}>
+              Select all except filtered
+            </button>
+            {selected.size > 0 && <button onClick={clearSelection}>Clear selection</button>}
+          </div>
+
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>
+                  <input
+                    type="checkbox"
+                    checked={allFilteredSelected}
+                    onChange={toggleAllFiltered}
+                    aria-label="Select all filtered"
+                  />
+                </th>
+                <SortableTh label="Started" sortKey="started_at" currentKey={sortKey} direction={direction} onSort={requestSort} />
+                <SortableTh label="Sensor" sortKey="sensor_name" currentKey={sortKey} direction={direction} onSort={requestSort} />
+                <th>Address</th>
+                <th>Location</th>
+                <SortableTh label="WiFi" sortKey="wifi_count" currentKey={sortKey} direction={direction} onSort={requestSort} />
+                <SortableTh label="Cell" sortKey="cell_count" currentKey={sortKey} direction={direction} onSort={requestSort} />
+                <SortableTh label="BLE" sortKey="ble_count" currentKey={sortKey} direction={direction} onSort={requestSort} />
+                <SortableTh label="Sat" sortKey="satellite_count" currentKey={sortKey} direction={direction} onSort={requestSort} />
+                <SortableTh label="LAN" sortKey="lan_count" currentKey={sortKey} direction={direction} onSort={requestSort} />
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((s) => (
+                <tr key={s.id}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={selected.has(s.id)}
+                      onChange={() => toggleOne(s.id)}
+                      aria-label={`Select scan ${s.id}`}
+                    />
+                  </td>
+                  <td>{s.started_display}</td>
+                  <td>{s.sensor_name}</td>
+                  <td>{s.resolved_address || "—"}</td>
+                  <td>{s.latitude != null && s.longitude != null ? `${s.latitude.toFixed(4)}, ${s.longitude.toFixed(4)}` : "—"}</td>
+                  <td>{s.wifi_count}</td>
+                  <td>{s.cell_count}</td>
+                  <td>{s.ble_count}</td>
+                  <td>{s.satellite_count}</td>
+                  <td>{s.lan_count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {selected.size > 0 && (
+        <div className="floating-action-bar">
+          {deleteError && <p className="error-text">{deleteError}</p>}
+          {!armed ? (
+            <>
+              <span>{selected.size} scan{selected.size === 1 ? "" : "s"} selected</span>
+              <button onClick={handleDelete}>Delete selected</button>
+              <button onClick={clearSelection}>Cancel</button>
+            </>
+          ) : (
+            <>
+              <span>
+                Delete {selected.size} scan{selected.size === 1 ? "" : "s"}? This also deletes every WiFi/cellular/
+                BLE/satellite/LAN observation in {selected.size === 1 ? "it" : "them"} — cannot be undone.
+              </span>
+              <button onClick={handleDelete} disabled={deleting} className="danger-button">
+                {deleting ? "Deleting…" : "Confirm delete"}
+              </button>
+              <button onClick={() => setArmed(false)} disabled={deleting}>
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}

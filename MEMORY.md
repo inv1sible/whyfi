@@ -302,6 +302,162 @@ stale, and don't duplicate what's already obvious from code/tests.
   passing `docker compose exec ... test` run right after generating a
   migration means the file made it to disk.
 
+## PWA update gotcha: an open tab never reloads itself
+
+`vite.config.ts` uses `registerType: "autoUpdate"`, and the generated
+service worker does call `skipWaiting()`/`clientsClaim()` — but that only
+makes the *new* SW take over future network requests. It does **not**
+reload a tab that's already open, so an installed PWA left running keeps
+executing the *old* in-memory JS bundle indefinitely after every deploy,
+no matter how many times the server-side code changes. This produced
+several rounds of "I made this fix, the user says nothing changed" even
+though the exact same fix was independently verified correct via a direct
+authenticated HTTP request against the running container.
+
+Fixed in `src/main.tsx` by calling `registerSW({ immediate: true,
+onNeedRefresh: () => window.location.reload() })` from
+`virtual:pwa-register` — forces an actual reload the moment a new version
+is detected, rather than silently updating the SW and leaving the open
+page on stale code. Needs `/// <reference types="vite-plugin-pwa/client"
+/>` in `vite-env.d.ts` for the `virtual:pwa-register` import to typecheck.
+
+Since the *old* SW (from before this fix existed) won't have this
+reload-on-update logic yet, the very first update after shipping this
+still needs one manual close-and-reopen (or hard refresh) of the
+installed app — every update after that should auto-reload on its own.
+
+## "Current scan only" display mode (global, percent-based slider)
+
+`FilterContext` has `mapDisplayMode: "accumulate" | "current-scan"` plus a
+`scanIndexPercent` (0-100) and a `scanTimelineLabel` set by whichever map
+page is mounted. This restores the old per-page TimeSlider/Path-mode
+concept (removed earlier this project, see the "Detail pages: remove Path
+mode" work) but as one shared global control instead of N independent
+per-page ones — the same pattern as `compactTables`/`showScanPoints`.
+
+Key design point: the slider position is a **percent**, not a raw index,
+because every page has a different number of distinct scans within the
+current time/scan filter. Each page independently resolves that shared
+percent against its own local chronological list
+(`src/currentScan.ts::resolveCurrentScan`), so `scanIndexPercent=100`
+always means "latest scan" regardless of which page is open.
+
+For the combined Heatmap page (multiple devices, not one), a plain
+per-device percent index would desync — device A's "scan 3 of 8" and
+device B's "scan 3 of 12" aren't the same physical scan pass.
+`resolveCurrentScanMultiDevice` instead builds ONE shared timeline of
+distinct `scan_session_id`s across every active device (a single scan
+pass can observe several APs/towers/BLE devices at once), then shows only
+that one scan's reading per device. This needed `observed_at` added to
+the coverage endpoints' per-point payload (alongside the `scan_session_id`
+already added for the location-pin feature) purely to sort/build that
+timeline.
+
+`RadioMap`'s `MapPoint.normalizedWeight` is an escape hatch for this mode:
+normally heat-cell color/size is normalized against the min/max weight of
+whatever's in the current render batch, but "current scan only" passes
+just one point per device — nothing else in that batch to normalize
+against. Callers pre-compute `normalizedWeight` against that device's full
+signal range instead, so a single visible cell's size/color still means
+the same thing as you scrub between scans, and RadioMap uses it in place
+of the local min/max calculation when present.
+
+## Coverage shape: convex hull, NOT a fitted ellipse
+
+`classifyCoverage` (frontend/src/geo.ts) draws each device's coverage area
+as the **convex hull of the actual measurement points**. This has now been
+round-tripped twice — original convex hull → weighted-covariance ellipse →
+back to convex hull — so don't "improve" it back into an ellipse without
+re-reading this.
+
+Why the ellipse lost: a 95%-confidence covariance ellipse *extrapolates*
+outward from the spread of sightings, so it routinely claimed coverage
+tens of meters past anywhere a reading was actually taken, and looked like
+"ovals all over" the map. Capping the semi-axes (`maxRadiusMeters`) treated
+the symptom, not the cause. The hull can never claim area you didn't
+physically stand in, which is the honest thing for a passive survey tool
+that only knows where the *phone* was.
+
+Consequences that are deliberate, not bugs:
+- Collinear or near-duplicate readings produce no polygon (hull returns
+  `[]`) and fall back to `{kind:"points"}` — a zero-area sliver would be
+  worse than showing the raw points.
+- The hull's edge passes exactly *through* the outermost readings, so the
+  gradient's weak/orange edge lands on real measurements.
+- The weighted centroid still marks the estimated device location (gradient
+  center + radio icon) inside the hull, keeping "where the device is" and
+  "where I measured it from" visually distinct.
+
+## Solo mode = cone from the known AP, or an RSSI range estimate if not known yet
+
+The two map display modes (see MapDisplayMode in FilterContext.tsx) answer
+different questions, and the shapes are built from different math:
+
+- **Accumulate** — convex hull of every reading up to the slider position
+  (see the coverage-shape note above). Answers "where did I detect this?"
+- **Solo** — one scan only. Answers "given this one reading, where's the
+  device?" `soloShapes` (coverageConfig.ts) has two paths, tried in order:
+  1. **Cone** (`conePolygon` in geo.ts) — used whenever the device's
+     position is already known from its *entire* sighting history (the
+     weighted centroid, computed by the caller from the *full* geotagged
+     list, not the slider-filtered one — so the AP's known position stays
+     stable as you scrub Solo's slider). The cone runs from that real,
+     known apex to wherever the phone stood for this one reading — a
+     measured `haversineDistanceMeters`, not a guess. Green at the apex,
+     fading to that one reading's own `signalStrengthColor` at the far
+     end. A radio-type icon marks the apex, same as Accumulate's centroid.
+  2. **Range blob** (`circlePolygon` + `estimateRangeMeters`, log-distance
+     path loss) — the fallback when there's no known position yet (a
+     brand-new device with only this one sighting ever) or apex and
+     reading are too close for `conePolygon` to have a meaningful bearing
+     (returns null under ~5m). Flat-colored by that reading's own
+     `signalStrengthColor`, no center icon — a single reading with no
+     anchor gives a distance, never a direction, so marking an exact spot
+     would be a lie.
+  Forced-mobile BLE devices (worn headphones/wearables) always skip
+  straight to the blob: their sightings scatter with wherever the person
+  walked, so a weighted centroid of that scatter isn't a meaningful "AP
+  position" to point a cone at.
+
+**Bug that shipped once in the blob path, don't reintroduce it**: blobs
+originally set `gradientCenter` to the phone's own reading position,
+reusing Accumulate's green→orange gradient. That gradient means "green =
+strong signal here = the device is near this exact spot" — true for
+Accumulate's centroid, false for a lone reading's own position. A weak
+reading taken far from the device rendered *green at the phone's own
+position*, exactly backwards (caught by an actual bug report: user
+standing in a garden, weak signal, saw green under their feet). The blob
+path must stay a flat `color`, never `gradientCenter`.
+
+**Cone gradient positioning is NOT the default 50%/50%.** Unlike
+Accumulate's hull (symmetric around its own centroid by construction) or
+the old blob (a circle drawn *around* its center point, so trivially
+centered), a cone's apex sits at one *corner* of the shape, not the middle.
+`ensureGradientDef` in RadioMap.tsx takes explicit `cx`/`cy` fractions for
+this reason, computed by `fractionalPosition` from the apex's actual
+position within the polygon's own bounding box — and the y-axis is
+inverted (north = smaller fraction) because Leaflet's SVG renderer draws in
+screen space, where higher latitude is further *up* the screen. Verified
+with a standalone script before shipping: an eastward cone's apex lands at
+x=0 (west edge), a north-pointing cone's apex lands at y=1 (south/bottom
+edge) — get this backwards and green renders at the wrong end of every
+cone. `r` is fixed at 150% (not the default 50%) since an off-center
+anchor's farthest corner can be up to ~141% away in a unit bounding box.
+
+Cellular's path-loss reference (used only by the blob fallback) is **+10
+dBm at 1 m** while WiFi is -40 and BLE is -59. That looks wrong at a glance
+but isn't: a macro cell transmits orders of magnitude harder, and
+calibrating it like a short-range radio put -100 dBm at ~50 m when it
+really means well over a kilometer. Cellular also gets its own 1500 m
+ceiling since `RADIUS_CAP_METERS` is Infinity for it.
+
+Both shapes are drawn soft — corner-smoothed (`smoothPolygon`, Chaikin,
+1 pass so a cone's apex stays a recognizable point rather than fully
+rounding away) plus a CSS blur (`.coverage-soft`) — because both are
+estimates (the blob from an uncalibrated path-loss model; the cone's
+*length* is real but its ~22° half-angle is stylized, not a measured
+antenna pattern). A crisp edge would claim precision neither model has.
+
 ## Open/deferred (v-next, not forgotten, just not now)
 
 - Matter/Thread device discovery (via BLE commissioning adverts + mDNS) —

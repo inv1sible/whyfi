@@ -28,10 +28,12 @@ export interface AccessPoint {
   latest_band: string | null;
   latest_channel: number | null;
   latest_security_type: string | null;
+  latest_has_location: boolean;
 }
 
 export interface WiFiObservation {
   id: number;
+  scan_session: string;
   access_point: string;
   rssi: number;
   frequency_mhz: number;
@@ -46,6 +48,9 @@ export interface WiFiObservation {
   is_80211mc_responder: boolean;
   operator_friendly_name: string;
   venue_name: string;
+  latitude: number | null;
+  longitude: number | null;
+  location_accuracy_meters: number | null;
 }
 
 export interface ScanSession {
@@ -58,12 +63,23 @@ export interface ScanSession {
   longitude: number | null;
   location_accuracy_meters: number | null;
   location_provider: string;
+  fused_latitude: number | null;
+  fused_longitude: number | null;
+  fused_accuracy_meters: number | null;
   created_at: string;
+  wifi_count: number;
+  cell_count: number;
+  ble_count: number;
+  satellite_count: number;
+  lan_count: number;
+  resolved_address: string | null;
+  identifiers_summary: string;
 }
 
 export interface CellObservation {
   id: number;
   scan_session: string;
+  cell_tower: string | null;
   mcc: string;
   mnc: string;
   carrier_name: string;
@@ -81,11 +97,30 @@ export interface CellObservation {
   bandwidth_khz: number | null;
   timing_advance: number | null;
   observed_at: string;
+  latitude: number | null;
+  longitude: number | null;
+  location_accuracy_meters: number | null;
+}
+
+export interface CellTower {
+  tower_key: string;
+  mcc: string;
+  mnc: string;
+  tac_or_lac: string;
+  cell_id: string;
+  carrier_name: string;
+  radio_type: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  latest_signal_dbm: number | null;
+  latest_arfcn: number | null;
+  latest_has_location: boolean;
 }
 
 export interface BLEObservation {
   id: number;
   scan_session: string;
+  ble_device: string | null;
   ble_mac: string;
   stable_identifier: string;
   rssi: number;
@@ -99,6 +134,20 @@ export interface BLEObservation {
   observed_at: string;
   latitude: number | null;
   longitude: number | null;
+  location_accuracy_meters: number | null;
+}
+
+export interface BLEDevice {
+  device_key: string;
+  device_name: string;
+  device_type_guess: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  latest_rssi: number | null;
+  latest_device_name: string | null;
+  latest_is_connectable: boolean;
+  latest_primary_phy: string | null;
+  latest_has_location: boolean;
 }
 
 export interface SatelliteObservation {
@@ -119,6 +168,7 @@ export interface SatelliteObservation {
 export interface LANObservation {
   id: number;
   scan_session: string;
+  lan_device: string | null;
   ip_address: string;
   mac_address: string;
   hostname: string;
@@ -128,6 +178,26 @@ export interface LANObservation {
   banner: string;
   device_type_guess: string;
   observed_at: string;
+  latitude: number | null;
+  longitude: number | null;
+  location_accuracy_meters: number | null;
+}
+
+export interface LANDevice {
+  ip_address: string;
+  mac_address: string;
+  hostname: string;
+  vendor_oui: string;
+  device_type_guess: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  latest_open_ports: number[];
+  latest_device_type_guess: string | null;
+  latest_has_location: boolean;
+  latest_response_time_ms: number | null;
+  is_online: boolean;
+  is_new_in_window: boolean;
+  is_left_in_window: boolean;
 }
 
 export interface ChannelCongestionPoint {
@@ -135,10 +205,17 @@ export interface ChannelCongestionPoint {
   ap_count: number;
 }
 
+export interface HeatmapPointSource {
+  label: string;
+  detail_path: string;
+  extra_count: number;
+}
+
 export interface HeatmapPoint {
   lat: number;
   lng: number;
   weight: number;
+  source?: HeatmapPointSource | null;
 }
 
 export type BuildStatus = "NONE" | "QUEUED" | "BUILDING" | "SUCCESS" | "FAILED";
@@ -168,3 +245,49 @@ export interface BuildStatusResponse {
 }
 
 export type HeatmapSource = "wifi" | "cellular" | "ble";
+
+export interface AccessPointCoverage {
+  bssid: string;
+  ssid: string;
+  detail_path: string;
+  // scan_session_id/accuracy_meters identify the one (almost always
+  // exactly one, since buckets are rounded to ~1m) reading behind this
+  // point — lets the frontend's "show device location pins" toggle mark
+  // where the phone stood, same as the per-entity detail pages.
+  points: {
+    lat: number;
+    lng: number;
+    weight: number;
+    scan_session_id?: string;
+    accuracy_meters?: number | null;
+    // Powers "current scan only" display mode's shared chronological
+    // timeline across every active device on the combined Heatmap page.
+    observed_at?: string;
+  }[];
+}
+
+// Shared shape for the cellular/BLE coverage endpoints — unlike WiFi's
+// bssid/ssid pair, these have one natural grouping identifier each
+// (tower_key, MAC/stable_identifier), so a plain key/label suffices.
+export interface RadioCoverage {
+  key: string;
+  label: string;
+  detail_path: string;
+  // BLE-only — lets the frontend treat HEADPHONES/WEARABLE as inherently
+  // mobile regardless of measured sighting spread (see classifyCoverage).
+  device_type_guess?: string;
+  // scan_session_id/accuracy_meters identify the one (almost always
+  // exactly one, since buckets are rounded to ~1m) reading behind this
+  // point — lets the frontend's "show device location pins" toggle mark
+  // where the phone stood, same as the per-entity detail pages.
+  points: {
+    lat: number;
+    lng: number;
+    weight: number;
+    scan_session_id?: string;
+    accuracy_meters?: number | null;
+    // Powers "current scan only" display mode's shared chronological
+    // timeline across every active device on the combined Heatmap page.
+    observed_at?: string;
+  }[];
+}

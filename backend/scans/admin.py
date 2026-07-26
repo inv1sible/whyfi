@@ -2,8 +2,12 @@ from django.contrib import admin
 
 from .models import (
     AccessPoint,
+    BLEDevice,
     BLEObservation,
     CellObservation,
+    CellTower,
+    GeocodedLocation,
+    LANDevice,
     LANObservation,
     SatelliteObservation,
     ScanSession,
@@ -24,7 +28,11 @@ class ScanSessionAdmin(admin.ModelAdmin):
 
 
 admin.site.register(WiFiObservation)
+admin.site.register(CellTower)
 admin.site.register(CellObservation)
 admin.site.register(BLEObservation)
 admin.site.register(SatelliteObservation)
 admin.site.register(LANObservation)
+admin.site.register(LANDevice)
+admin.site.register(GeocodedLocation)
+admin.site.register(BLEDevice)

@@ -12,6 +12,7 @@ type IconName =
   | "heatmap"
   | "lan"
   | "download"
+  | "scans"
   | "settings";
 
 const commonProps: SVGProps<SVGSVGElement> = {
@@ -101,6 +102,16 @@ export function NavIcon({ name }: { name: IconName }) {
           <line x1="10" y1="2.5" x2="10" y2="12.5" />
           <polyline points="5.5,9 10,13.5 14.5,9" />
           <line x1="3.5" y1="17" x2="16.5" y2="17" />
+        </svg>
+      );
+    case "scans":
+      return (
+        <svg {...commonProps}>
+          <path d="M4 5h12l-1 11.5a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 5 16.5z" />
+          <line x1="2.5" y1="5" x2="17.5" y2="5" />
+          <path d="M7.5 5V3.5A1.5 1.5 0 0 1 9 2h2a1.5 1.5 0 0 1 1.5 1.5V5" />
+          <line x1="8" y1="8.5" x2="8" y2="13.5" />
+          <line x1="12" y1="8.5" x2="12" y2="13.5" />
         </svg>
       );
     case "settings":

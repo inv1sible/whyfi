@@ -24,6 +24,14 @@ class ScanSession(models.Model):
     longitude = models.FloatField(null=True, blank=True)
     location_accuracy_meters = models.FloatField(null=True, blank=True)
     location_provider = models.CharField(max_length=16, blank=True)
+    # Populated only when the Android app's location-source setting is
+    # "Fused" or "Both" (see SettingsRepository.LocationSourcePreference) —
+    # a *second*, independent reading alongside latitude/longitude above,
+    # not a replacement. Lets the two be compared for positioning-accuracy
+    # analysis rather than only ever recording whichever one "won".
+    fused_latitude = models.FloatField(null=True, blank=True)
+    fused_longitude = models.FloatField(null=True, blank=True)
+    fused_accuracy_meters = models.FloatField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -94,6 +102,30 @@ class WiFiObservation(models.Model):
         return f"{self.access_point_id} @ {self.rssi}dBm"
 
 
+class CellTower(models.Model):
+    """A physical cell tower/sector, deduplicated by MCC+MNC+LAC/TAC+CellID
+    across all sessions — mirrors AccessPoint's role for WiFi. Readings
+    lacking cell_id/tac_or_lac can't be grouped meaningfully, so
+    CellObservation.cell_tower is nullable rather than inventing a bogus
+    key for those."""
+
+    tower_key = models.CharField(max_length=64, primary_key=True)
+    mcc = models.CharField(max_length=3, blank=True)
+    mnc = models.CharField(max_length=3, blank=True)
+    tac_or_lac = models.CharField(max_length=32, blank=True)
+    cell_id = models.CharField(max_length=32, blank=True)
+    carrier_name = models.CharField(max_length=64, blank=True)
+    radio_type = models.CharField(max_length=8, blank=True)
+    first_seen_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-last_seen_at"]
+
+    def __str__(self):
+        return f"{self.carrier_name or f'{self.mcc}/{self.mnc}'} cell {self.cell_id}"
+
+
 class CellObservation(models.Model):
     """Phone's own serving/neighboring cell info (TelephonyManager). No SDR,
     no spectrum scanning — only what the phone's modem already exposes."""
@@ -106,6 +138,9 @@ class CellObservation(models.Model):
         NR = "NR", "5G NR"
 
     scan_session = models.ForeignKey(ScanSession, on_delete=models.CASCADE, related_name="cell_observations")
+    cell_tower = models.ForeignKey(
+        CellTower, null=True, blank=True, on_delete=models.CASCADE, related_name="observations"
+    )
     mcc = models.CharField(max_length=3, blank=True)
     mnc = models.CharField(max_length=3, blank=True)
     carrier_name = models.CharField(max_length=64, blank=True)
@@ -150,6 +185,13 @@ class BLEObservation(models.Model):
         OTHER = "OTHER", "Other"
 
     scan_session = models.ForeignKey(ScanSession, on_delete=models.CASCADE, related_name="ble_observations")
+    # Nullable only to allow backfilling rows that existed before this FK was
+    # added, and for the rare observation with neither ble_mac nor
+    # stable_identifier set (see BLEDevice.device_key below) — always
+    # populated otherwise.
+    ble_device = models.ForeignKey(
+        "BLEDevice", null=True, blank=True, on_delete=models.CASCADE, related_name="observations"
+    )
     ble_mac = models.CharField(max_length=17, blank=True)
     stable_identifier = models.CharField(max_length=64, blank=True)
     rssi = models.IntegerField()
@@ -168,6 +210,34 @@ class BLEObservation(models.Model):
 
     def __str__(self):
         return f"{self.ble_mac or self.stable_identifier} ({self.device_type_guess})"
+
+
+class BLEDevice(models.Model):
+    """A BLE device, deduplicated across all sessions — mirrors AccessPoint/
+    CellTower/LANDevice's grouping role for the other radio types.
+
+    device_key is ble_mac when present, falling back to stable_identifier
+    (matching the precedent already used for grouping BLE sightings
+    elsewhere — the heatmap's "ble" source and the coverage-ellipse
+    endpoint both key on `ble_mac or stable_identifier`, kept consistent
+    here rather than inverting it). Note this means a MAC-rotating device
+    (e.g. an AirTag) that was ever seen with a captured ble_mac will keep
+    grouping by that specific MAC — stable_identifier only takes over as
+    the key on observations where ble_mac was never captured at all."""
+
+    device_key = models.CharField(max_length=64, primary_key=True)
+    device_name = models.CharField(max_length=64, blank=True)
+    device_type_guess = models.CharField(
+        max_length=12, choices=BLEObservation.DeviceType.choices, default=BLEObservation.DeviceType.UNKNOWN
+    )
+    first_seen_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-last_seen_at"]
+
+    def __str__(self):
+        return self.device_name or self.device_key
 
 
 class SatelliteObservation(models.Model):
@@ -222,6 +292,12 @@ class LANObservation(models.Model):
         UNKNOWN = "UNKNOWN", "Unknown"
 
     scan_session = models.ForeignKey(ScanSession, on_delete=models.CASCADE, related_name="lan_observations")
+    # Nullable only to allow backfilling rows that existed before this FK was
+    # added — always populated for new observations since ip_address (the
+    # grouping key) is required at ingest time.
+    lan_device = models.ForeignKey(
+        "LANDevice", null=True, blank=True, on_delete=models.CASCADE, related_name="observations"
+    )
     ip_address = models.GenericIPAddressField()
     mac_address = models.CharField(max_length=17, blank=True)
     hostname = models.CharField(max_length=255, blank=True)
@@ -238,3 +314,52 @@ class LANObservation(models.Model):
 
     def __str__(self):
         return f"{self.ip_address} ({self.hostname or 'unknown'})"
+
+
+class LANDevice(models.Model):
+    """A physical device on the LAN, deduplicated by IP address across all
+    sessions — mirrors AccessPoint/CellTower's grouping role for WiFi/
+    cellular. IP (not MAC) is the natural key: a subnet sweep discovers and
+    groups devices by IP, and LAN devices typically hold a stable IP (DHCP
+    reservation or static assignment) even as other observed fields
+    (hostname, open ports, banner) change from scan to scan."""
+
+    ip_address = models.GenericIPAddressField(primary_key=True)
+    mac_address = models.CharField(max_length=17, blank=True)
+    hostname = models.CharField(max_length=255, blank=True)
+    vendor_oui = models.CharField(max_length=8, blank=True)
+    device_type_guess = models.CharField(
+        max_length=16, choices=LANObservation.DeviceType.choices, default=LANObservation.DeviceType.UNKNOWN
+    )
+    first_seen_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-last_seen_at"]
+
+    def __str__(self):
+        return f"{self.ip_address} ({self.hostname or self.mac_address or 'unknown'})"
+
+
+class GeocodedLocation(models.Model):
+    """Reverse-geocoded place name cache, keyed on lat/lng rounded to
+    GEOCODE_PRECISION (~111m at 3 decimals) — see scans/geocoding.py.
+    Many scan sessions cluster at nearly the same spot, and Nominatim's
+    usage policy requires caching results and capping request rate (max
+    ~1/sec), so this avoids re-geocoding the same area repeatedly.
+    Populated lazily by ScanSessionViewSet's resolve-addresses action, not
+    synchronously at scan ingest time — an external HTTP dependency has no
+    business blocking or failing a scan upload."""
+
+    lat_rounded = models.FloatField()
+    lng_rounded = models.FloatField()
+    address = models.CharField(max_length=255, blank=True)
+    resolved_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["lat_rounded", "lng_rounded"], name="unique_geocoded_location"),
+        ]
+
+    def __str__(self):
+        return self.address or f"{self.lat_rounded},{self.lng_rounded}"

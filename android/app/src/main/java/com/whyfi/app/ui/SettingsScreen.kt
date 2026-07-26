@@ -19,6 +19,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.whyfi.app.BuildConfig
+import com.whyfi.app.data.LocationSourcePreference
 import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.ThemePreference
 
@@ -36,6 +37,7 @@ fun SettingsScreen(
     }
     var token by remember { mutableStateOf(settingsRepository.sensorToken ?: "") }
     var savedMessage by remember { mutableStateOf<String?>(null) }
+    var locationSource by remember { mutableStateOf(settingsRepository.locationSourcePreference) }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -48,6 +50,27 @@ fun SettingsScreen(
             ThemeOption("System", ThemePreference.SYSTEM, themePreference, onThemePreferenceChange)
             ThemeOption("Light", ThemePreference.LIGHT, themePreference, onThemePreferenceChange)
             ThemeOption("Dark", ThemePreference.DARK, themePreference, onThemePreferenceChange)
+        }
+
+        Text("Location source", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "GPS is the original behavior (best of GPS/network) and stays the default. Fused uses Android's " +
+                "combined location (API 31+); Both records the GPS/network reading as usual plus a separate fused " +
+                "reading alongside it, for comparing the two.",
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            LocationSourceOption("GPS", LocationSourcePreference.GPS, locationSource) {
+                locationSource = it
+                settingsRepository.locationSourcePreference = it
+            }
+            LocationSourceOption("Fused", LocationSourcePreference.FUSED, locationSource) {
+                locationSource = it
+                settingsRepository.locationSourcePreference = it
+            }
+            LocationSourceOption("Both", LocationSourcePreference.BOTH, locationSource) {
+                locationSource = it
+                settingsRepository.locationSourcePreference = it
+            }
         }
 
         Text("Point this app at your self-hosted whyfi backend (see docs/deployment.md for creating a sensor + token).")
@@ -84,6 +107,16 @@ private fun ThemeOption(
     value: ThemePreference,
     current: ThemePreference,
     onSelect: (ThemePreference) -> Unit,
+) {
+    FilterChip(selected = current == value, onClick = { onSelect(value) }, label = { Text(label) })
+}
+
+@Composable
+private fun LocationSourceOption(
+    label: String,
+    value: LocationSourcePreference,
+    current: LocationSourcePreference,
+    onSelect: (LocationSourcePreference) -> Unit,
 ) {
     FilterChip(selected = current == value, onClick = { onSelect(value) }, label = { Text(label) })
 }

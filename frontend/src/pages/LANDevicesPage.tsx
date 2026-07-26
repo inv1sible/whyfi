@@ -1,85 +1,118 @@
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { DeviceTypeBadge, LAN_DEVICE_LABELS } from "../components/DeviceTypeBadge";
+import { SortableTh } from "../components/SortableTh";
+import { TableControls } from "../components/TableControls";
+import { useFilter } from "../context/FilterContext";
+import { useSortableData } from "../hooks/useSortableData";
 import { usePolling } from "../hooks/usePolling";
-
-const PORT_NAMES: Record<number, string> = {
-  21: "FTP",
-  22: "SSH",
-  23: "Telnet",
-  25: "SMTP",
-  53: "DNS",
-  80: "HTTP",
-  139: "NetBIOS",
-  443: "HTTPS",
-  445: "SMB",
-  554: "RTSP",
-  631: "IPP",
-  3389: "RDP",
-  5000: "UPnP",
-  5353: "mDNS",
-  7000: "AirPlay",
-  8000: "HTTP-alt",
-  8008: "HTTP-alt",
-  8009: "Chromecast",
-  8080: "HTTP-alt",
-  8443: "HTTPS-alt",
-  9100: "JetDirect",
-  32400: "Plex",
-  62078: "iOS sync",
-};
-
-function portLabel(port: number): string {
-  const name = PORT_NAMES[port];
-  return name ? `${port} (${name})` : `${port}`;
-}
+import { filterBySearch } from "../searchFilter";
+import type { LANDevice } from "../api/types";
 
 export function LANDevicesPage() {
-  const { data, error, loading } = usePolling(() => api.lanObservations("?limit=200"), 15000);
+  const filter = useFilter();
+  const { data, error, loading } = usePolling(
+    () =>
+      api.lanDevices(
+        `?limit=200${filter.sessionLimit ? `&session_limit=${filter.sessionLimit}` : filter.since ? `&active_since=${filter.since}` : ""}`,
+      ),
+    15000,
+    [filter.since, filter.sessionLimit],
+  );
+  const filtered = filterBySearch<LANDevice>(data?.results ?? [], filter.searchQuery);
+  const { sorted, sortKey, direction, requestSort } = useSortableData<LANDevice>(
+    filtered,
+    "last_seen_at",
+    "desc",
+  );
+
+  // "New"/"left" only mean something when comparing at least two distinct
+  // LAN scans — the backend only ever sets these flags in that situation,
+  // but gate the column on the client too so it doesn't flicker between
+  // renders.
+  const showChangeBadges = filter.mode === "last-n-scans" && filter.scanCount >= 2;
+
+  const onlineCount = sorted.filter((d) => d.is_online).length;
+  const newCount = sorted.filter((d) => d.is_new_in_window).length;
+  const leftCount = sorted.filter((d) => d.is_left_in_window).length;
 
   return (
     <section>
       <h1>LAN devices</h1>
       <p className="page-hint">
-        Devices discovered on the phone's current WiFi subnet — a separate, longer-running action in the Android app
-        (Scan screen → "Scan LAN"), not part of the regular WiFi/cellular/BLE/GNSS pass.
+        Devices discovered on the phone's current WiFi subnet, grouped by IP address (like WiFi networks are grouped
+        by BSSID) — one row per physical device, not one row per scan. A separate, longer-running action in the
+        Android app (Scan screen → "Scan LAN"), not part of the regular WiFi/cellular/BLE/GNSS pass. Click a device
+        for its full sighting history, open ports, banner, and quick links to any web services it exposes.
       </p>
 
       {loading && !data && <p>Loading…</p>}
       {error && <p className="error-text">Could not reach the backend: {error.message}</p>}
 
+      <TableControls />
+
       {data && data.results.length === 0 && (
         <p className="empty-state">No LAN scan results yet. Run "Scan LAN" from the Android app.</p>
       )}
 
-      {data && data.results.length > 0 && (
+      {sorted.length > 0 && (
+        <p className="page-hint">
+          {sorted.length} device{sorted.length === 1 ? "" : "s"} · {onlineCount} online · {sorted.length - onlineCount} offline
+          {showChangeBadges && (
+            <>
+              {" "}
+              · {newCount} new · {leftCount} left since the previous scan
+            </>
+          )}
+        </p>
+      )}
+
+      {showChangeBadges && (
+        <p className="page-hint">
+          Comparing the last {filter.scanCount} LAN scans: <span className="badge badge-ok">New</span> devices only
+          showed up in the most recent scan; <span className="badge badge-danger">Left</span> devices were seen
+          before but are missing from it. <span className="badge badge-ok">Online</span>/
+          <span className="badge badge-neutral">Offline</span> always reflects just the single most recent scan.
+        </p>
+      )}
+
+      {sorted.length > 0 && (
         <table className="data-table">
           <thead>
             <tr>
-              <th>IP address</th>
-              <th>Type</th>
-              <th>Hostname</th>
-              <th>MAC</th>
-              <th>Vendor</th>
-              <th>Open ports</th>
-              <th>Banner</th>
-              <th>Response</th>
-              <th>Observed</th>
+              <SortableTh label="IP address" sortKey="ip_address" currentKey={sortKey} direction={direction} onSort={requestSort} />
+              <SortableTh label="Name" sortKey="hostname" currentKey={sortKey} direction={direction} onSort={requestSort} hideMobile />
+              <SortableTh label="Type" sortKey="latest_device_type_guess" currentKey={sortKey} direction={direction} onSort={requestSort} hideMobile />
+              <SortableTh label="MAC" sortKey="mac_address" currentKey={sortKey} direction={direction} onSort={requestSort} hideMobile />
+              <th className="hide-mobile">Status</th>
+              <SortableTh label="Response time" sortKey="latest_response_time_ms" currentKey={sortKey} direction={direction} onSort={requestSort} />
+              <SortableTh label="Last seen" sortKey="last_seen_at" currentKey={sortKey} direction={direction} onSort={requestSort} />
             </tr>
           </thead>
           <tbody>
-            {data.results.map((device) => (
-              <tr key={device.id}>
-                <td className="mono">{device.ip_address}</td>
-                <td>
-                  <DeviceTypeBadge deviceType={device.device_type_guess} labels={LAN_DEVICE_LABELS} />
+            {sorted.map((device) => (
+              <tr key={device.ip_address}>
+                <td className="mono">
+                  <Link to={`/lan-devices/${encodeURIComponent(device.ip_address)}`}>{device.ip_address}</Link>
                 </td>
-                <td>{device.hostname || "—"}</td>
-                <td className="mono">{device.mac_address || "—"}</td>
-                <td>{device.vendor_oui || "—"}</td>
-                <td>{device.open_ports.length > 0 ? device.open_ports.map(portLabel).join(", ") : "—"}</td>
-                <td className="mono">{device.banner || "—"}</td>
-                <td>{device.response_time_ms != null ? `${device.response_time_ms.toFixed(0)} ms` : "—"}</td>
-                <td>{new Date(device.observed_at).toLocaleString()}</td>
+                <td className="hide-mobile">{device.hostname || "—"}</td>
+                <td className="hide-mobile">
+                  {device.latest_device_type_guess ? (
+                    <DeviceTypeBadge deviceType={device.latest_device_type_guess} labels={LAN_DEVICE_LABELS} />
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                <td className="mono hide-mobile">{device.mac_address || "—"}</td>
+                <td className="hide-mobile">
+                  <span className={`badge ${device.is_online ? "badge-ok" : "badge-neutral"}`}>
+                    {device.is_online ? "Online" : "Offline"}
+                  </span>{" "}
+                  {device.is_new_in_window && <span className="badge badge-ok">New</span>}
+                  {device.is_left_in_window && <span className="badge badge-danger">Left</span>}
+                </td>
+                <td>{device.latest_response_time_ms != null ? `${device.latest_response_time_ms.toFixed(0)} ms` : "—"}</td>
+                <td>{new Date(device.last_seen_at).toLocaleString()}</td>
               </tr>
             ))}
           </tbody>

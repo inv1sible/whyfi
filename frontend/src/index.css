@@ -146,10 +146,11 @@ a {
 
 .app-main {
   padding: 1.75rem 1.5rem;
-  max-width: 1000px;
+  max-width: 1400px;
   width: 100%;
   margin: 0 auto;
   flex: 1;
+  overflow-x: auto;
 }
 
 .app-footer {
@@ -181,6 +182,26 @@ h2 {
   font-style: italic;
 }
 
+/* A second line under an identifier-column link (SSID/Cell ID/BLE MAC) —
+   carries the one extra bit of context (BSSID/Provider/device name) that
+   used to need its own always-hidden-on-mobile column. Kept in the same
+   cell instead so it's visible at every screen width without spending
+   another column. */
+.identifier-subtext {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  font-weight: 400;
+  margin-top: 0.15rem;
+}
+
+/* Coverage polygons are an estimate of a fading radio field, not a surveyed
+   boundary — the outline is already corner-smoothed (see smoothPolygon in
+   geo.ts), and this feathers it further so nothing reads as a hard edge.
+   Applied via Leaflet's `className` path option in RadioMap. */
+.coverage-soft {
+  filter: blur(4px);
+}
+
 .error-text {
   color: var(--danger);
 }
@@ -204,6 +225,7 @@ h2 {
   text-align: left;
   padding: 0.6rem 0.7rem;
   border-bottom: 1px solid var(--border);
+  white-space: nowrap;
 }
 
 .data-table th {
@@ -215,8 +237,49 @@ h2 {
   background: color-mix(in srgb, var(--bg-elevated) 60%, var(--bg-card));
 }
 
+@media (max-width: 640px) {
+  /* The always-visible mobile columns (identifier/signal/last-seen) still
+     don't fit a narrow phone screen if their content is forced onto one
+     line — a full "7/24/2026, 3:45:12 PM" easily runs wider than the
+     screen on its own. Letting cells wrap keeps everything on one column
+     of screen width instead of needing .app-main's overflow-x fallback. */
+  .data-table th,
+  .data-table td {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    padding: 0.5rem 0.4rem;
+  }
+}
+
 .data-table tbody tr {
   transition: background-color 0.1s ease;
+}
+
+/* Every entity-browsing table (WiFi/Cellular/BLE/LAN/Dashboard) converges
+   on the same 3 always-visible columns below this breakpoint: the detail
+   link, a signal-strength-equivalent, and last seen — everything else gets
+   this class on both the <th> and its matching <td>s. Management/snapshot
+   tables (Manage Scans, Satellites) don't use this; they rely on
+   .app-main's existing horizontal scroll instead. */
+@media (max-width: 640px) {
+  .hide-mobile {
+    display: none;
+  }
+}
+
+/* "Zoom out to show all columns" toggle (see the global filter bar) — for
+   when the 3-column mobile reduction above still isn't enough and seeing
+   every column shrunk down is preferred over losing some of them. Higher
+   specificity than the bare .hide-mobile rule above, so this wins
+   regardless of source order. `zoom` (not width-affecting `transform:
+   scale`) so the table's layout footprint actually shrinks instead of
+   leaving dead space around a visually-scaled-but-still-full-size box. */
+.compact-tables .hide-mobile {
+  display: table-cell;
+}
+
+.compact-tables .data-table {
+  zoom: 0.65;
 }
 
 .data-table tbody tr:hover {
@@ -260,6 +323,28 @@ h2 {
   gap: 0.5rem;
   margin-bottom: 1.25rem;
   flex-wrap: wrap;
+}
+
+.global-filter-bar {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.9rem 1rem 0.1rem;
+  margin-bottom: 1.25rem;
+}
+
+.back-button {
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  padding: 0.2rem 0;
+}
+
+.back-button:hover {
+  color: var(--accent);
+  border-color: transparent;
 }
 
 .band-selector button,
@@ -332,6 +417,25 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 1rem 1.25rem;
+}
+
+.time-slider {
+  margin: 0.75rem 0 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.time-slider input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.time-slider-value {
+  font-size: 0.85rem;
+  white-space: nowrap;
+  color: var(--text-dim);
 }
 
 .detail-list dt {
@@ -434,6 +538,75 @@ button:disabled {
 }
 
 .field input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.table-search {
+  display: block;
+  width: 100%;
+  max-width: 24rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  margin: 0.75rem 0;
+}
+
+/* Search + column controls sitting directly on top of the table they act
+   on (see TableControls). Wraps to two rows on a phone rather than
+   squeezing the search field. */
+.table-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.table-controls .table-search {
+  flex: 1 1 14rem;
+  margin: 0;
+}
+
+.table-controls-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.floating-action-bar {
+  position: sticky;
+  bottom: 1rem;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 0.75rem 1rem;
+  margin-top: 1.25rem;
+  z-index: 20;
+}
+
+.danger-button {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+}
+
+.danger-button:hover {
+  border-color: var(--danger);
+  filter: brightness(1.1);
+}
+
+.table-search:focus {
   outline: none;
   border-color: var(--accent);
 }

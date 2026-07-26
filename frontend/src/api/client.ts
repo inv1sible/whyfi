@@ -1,14 +1,19 @@
 import type {
   AccessPoint,
+  AccessPointCoverage,
   AppRelease,
+  BLEDevice,
   BLEObservation,
   BuildStatusResponse,
   CellObservation,
+  CellTower,
   ChannelCongestionPoint,
   HeatmapPoint,
   HeatmapSource,
+  LANDevice,
   LANObservation,
   Paginated,
+  RadioCoverage,
   SatelliteObservation,
   ScanSession,
   Sensor,
@@ -114,6 +119,22 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function del<T>(path: string, body?: unknown): Promise<T> {
+  const csrfToken = getCsrfToken();
+  const response = await fetch(`${baseUrl()}${path}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: {
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...(csrfToken ? { "X-CSRFToken": csrfToken } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (response.status === 401) throw new UnauthorizedError(`Not logged in for ${path}`);
+  if (!response.ok) throw new ApiError(response.status, await parseErrorBody(response), path);
+  return response.json() as Promise<T>;
+}
+
 /**
  * Downloads a file (the APK) with progress reporting, and returns the
  * fully-assembled Blob rather than handing the browser a bare `<a href>`
@@ -167,29 +188,73 @@ export const api = {
 
   accessPoints: (query = "") => get<Paginated<AccessPoint>>(`/access-points/${query}`),
   accessPoint: (bssid: string) => get<AccessPoint>(`/access-points/${encodeURIComponent(bssid)}/`),
-  wifiObservationsForAp: (bssid: string, limit = 200) =>
-    get<WiFiObservation[]>(`/access-points/${encodeURIComponent(bssid)}/wifi-observations/?limit=${limit}`),
+  wifiObservationsForAp: (bssid: string, opts: { since?: string; sessionLimit?: number; limit?: number } = {}) =>
+    get<WiFiObservation[]>(
+      `/access-points/${encodeURIComponent(bssid)}/wifi-observations/?limit=${opts.limit ?? 200}` +
+        `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
+    ),
+  accessPointsCoverage: (opts: { since?: string; sessionLimit?: number; ssidExact?: string } = {}) =>
+    get<AccessPointCoverage[]>(
+      `/access-points/coverage/?${opts.sessionLimit ? `session_limit=${opts.sessionLimit}&` : opts.since ? `since=${opts.since}&` : ""}` +
+        `${opts.ssidExact ? `ssid_exact=${encodeURIComponent(opts.ssidExact)}` : ""}`,
+    ),
 
-  channelCongestion: (band: string, since?: string) =>
+  channelCongestion: (band: string, opts: { since?: string; sessionLimit?: number } = {}) =>
     get<ChannelCongestionPoint[]>(
-      `/channel-congestion/?band=${encodeURIComponent(band)}${since ? `&since=${since}` : ""}`,
+      `/channel-congestion/?band=${encodeURIComponent(band)}` +
+        `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
     ),
 
   cellObservations: (query = "") => get<Paginated<CellObservation>>(`/cell-observations/${query}`),
 
+  cellTowers: (query = "") => get<Paginated<CellTower>>(`/cell-towers/${query}`),
+  cellTower: (towerKey: string) => get<CellTower>(`/cell-towers/${encodeURIComponent(towerKey)}/`),
+  cellObservationsForTower: (towerKey: string, opts: { since?: string; sessionLimit?: number; limit?: number } = {}) =>
+    get<CellObservation[]>(
+      `/cell-towers/${encodeURIComponent(towerKey)}/cell-observations/?limit=${opts.limit ?? 200}` +
+        `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
+    ),
+  cellTowersCoverage: (opts: { since?: string; sessionLimit?: number } = {}) =>
+    get<RadioCoverage[]>(
+      `/cell-towers/coverage/?${opts.sessionLimit ? `session_limit=${opts.sessionLimit}` : opts.since ? `since=${opts.since}` : ""}`,
+    ),
+
   bleObservations: (query = "") => get<Paginated<BLEObservation>>(`/ble-observations/${query}`),
-  bleObservationsForDevice: (identifier: string) =>
-    get<Paginated<BLEObservation>>(`/ble-observations/?identifier=${encodeURIComponent(identifier)}`),
+  bleObservationsCoverage: (opts: { since?: string; sessionLimit?: number } = {}) =>
+    get<RadioCoverage[]>(
+      `/ble-observations/coverage/?${opts.sessionLimit ? `session_limit=${opts.sessionLimit}` : opts.since ? `since=${opts.since}` : ""}`,
+    ),
+
+  bleDevices: (query = "") => get<Paginated<BLEDevice>>(`/ble-devices/${query}`),
+  bleDevice: (deviceKey: string) => get<BLEDevice>(`/ble-devices/${encodeURIComponent(deviceKey)}/`),
+  bleObservationsForDevice: (deviceKey: string, opts: { since?: string; sessionLimit?: number; limit?: number } = {}) =>
+    get<BLEObservation[]>(
+      `/ble-devices/${encodeURIComponent(deviceKey)}/ble-observations/?limit=${opts.limit ?? 200}` +
+        `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
+    ),
 
   satelliteObservations: (query = "") => get<Paginated<SatelliteObservation>>(`/satellite-observations/${query}`),
 
   lanObservations: (query = "") => get<Paginated<LANObservation>>(`/lan-observations/${query}`),
+  lanObservation: (id: number) => get<LANObservation>(`/lan-observations/${id}/`),
+
+  lanDevices: (query = "") => get<Paginated<LANDevice>>(`/lan-devices/${query}`),
+  lanDevice: (ipAddress: string) => get<LANDevice>(`/lan-devices/${encodeURIComponent(ipAddress)}/`),
+  lanObservationsForDevice: (ipAddress: string, opts: { since?: string; sessionLimit?: number; limit?: number } = {}) =>
+    get<LANObservation[]>(
+      `/lan-devices/${encodeURIComponent(ipAddress)}/lan-observations/?limit=${opts.limit ?? 200}` +
+        `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
+    ),
 
   scanSessions: (query = "") => get<Paginated<ScanSession>>(`/scan-sessions/${query}`),
+  bulkDeleteScanSessions: (ids: string[]) => del<{ deleted: number }>("/scan-sessions/bulk-delete/", { ids }),
+  resolveScanAddresses: (limit = 20) =>
+    post<{ resolved: number }>("/scan-sessions/resolve-addresses/", { limit }),
 
-  heatmap: (source: HeatmapSource, opts: { bounds?: string; since?: string } = {}) =>
+  heatmap: (source: HeatmapSource, opts: { bounds?: string; since?: string; sessionLimit?: number } = {}) =>
     get<HeatmapPoint[]>(
-      `/heatmap/?source=${source}${opts.bounds ? `&bounds=${opts.bounds}` : ""}${opts.since ? `&since=${opts.since}` : ""}`,
+      `/heatmap/?source=${source}${opts.bounds ? `&bounds=${opts.bounds}` : ""}` +
+        `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
     ),
 
   latestRelease: () => get<AppRelease>("/app/latest/"),

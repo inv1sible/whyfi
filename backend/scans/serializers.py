@@ -1,10 +1,15 @@
 from rest_framework import serializers
 
+from .geocoding import GEOCODE_PRECISION
 from .models import (
     AccessPoint,
+    BLEDevice,
     BLEObservation,
     Band,
     CellObservation,
+    CellTower,
+    GeocodedLocation,
+    LANDevice,
     LANObservation,
     SatelliteObservation,
     ScanSession,
@@ -59,17 +64,18 @@ class AccessPointSerializer(serializers.ModelSerializer):
     latest_band = serializers.SerializerMethodField()
     latest_channel = serializers.SerializerMethodField()
     latest_security_type = serializers.SerializerMethodField()
+    latest_has_location = serializers.SerializerMethodField()
 
     class Meta:
         model = AccessPoint
         fields = [
             "bssid", "ssid", "vendor_oui", "first_seen_at", "last_seen_at",
-            "latest_rssi", "latest_band", "latest_channel", "latest_security_type",
+            "latest_rssi", "latest_band", "latest_channel", "latest_security_type", "latest_has_location",
         ]
 
     def _latest(self, obj):
         if not hasattr(obj, "_latest_observation_cache"):
-            obj._latest_observation_cache = obj.observations.order_by("-observed_at").first()
+            obj._latest_observation_cache = obj.observations.select_related("scan_session").order_by("-observed_at").first()
         return obj._latest_observation_cache
 
     def get_latest_rssi(self, obj):
@@ -88,33 +94,153 @@ class AccessPointSerializer(serializers.ModelSerializer):
         latest = self._latest(obj)
         return latest.security_type if latest else None
 
+    def get_latest_has_location(self, obj):
+        latest = self._latest(obj)
+        return bool(latest and latest.scan_session.latitude is not None)
+
 
 class WiFiObservationSerializer(serializers.ModelSerializer):
+    # Pulled from the parent session, same pattern as BLEObservationSerializer
+    # below — lets the network detail page plot a sighting map without a
+    # second round-trip per observation.
+    latitude = serializers.FloatField(source="scan_session.latitude", read_only=True)
+    longitude = serializers.FloatField(source="scan_session.longitude", read_only=True)
+    location_accuracy_meters = serializers.FloatField(source="scan_session.location_accuracy_meters", read_only=True)
+
     class Meta:
         model = WiFiObservation
         fields = [
-            "id", "access_point", "rssi", "frequency_mhz", "channel", "band", "security_type", "observed_at",
-            "channel_width_mhz", "center_freq0_mhz", "center_freq1_mhz", "wifi_standard",
+            "id", "scan_session", "access_point", "rssi", "frequency_mhz", "channel", "band", "security_type",
+            "observed_at", "channel_width_mhz", "center_freq0_mhz", "center_freq1_mhz", "wifi_standard",
             "is_80211mc_responder", "operator_friendly_name", "venue_name",
+            "latitude", "longitude", "location_accuracy_meters",
         ]
 
 
 class ScanSessionSerializer(serializers.ModelSerializer):
     sensor_name = serializers.CharField(source="sensor.name", read_only=True)
+    wifi_count = serializers.SerializerMethodField()
+    cell_count = serializers.SerializerMethodField()
+    ble_count = serializers.SerializerMethodField()
+    satellite_count = serializers.SerializerMethodField()
+    lan_count = serializers.SerializerMethodField()
+    resolved_address = serializers.SerializerMethodField()
+    identifiers_summary = serializers.SerializerMethodField()
 
     class Meta:
         model = ScanSession
         fields = [
             "id", "sensor", "sensor_name", "started_at", "completed_at",
             "latitude", "longitude", "location_accuracy_meters", "location_provider",
-            "created_at",
+            "fused_latitude", "fused_longitude", "fused_accuracy_meters",
+            "created_at", "wifi_count", "cell_count", "ble_count", "satellite_count", "lan_count",
+            "resolved_address", "identifiers_summary",
         ]
+
+    # ScanSessionViewSet.get_queryset() annotates these counts so listing
+    # many sessions (the scan-management page) doesn't run 5 extra queries
+    # per row — but create() serializes a freshly-created, unannotated
+    # instance, so fall back to a live count there.
+    def _count(self, obj, annotation_name, related_name):
+        if hasattr(obj, annotation_name):
+            return getattr(obj, annotation_name)
+        return getattr(obj, related_name).count()
+
+    def get_wifi_count(self, obj):
+        return self._count(obj, "wifi_count_annotated", "wifi_observations")
+
+    def get_cell_count(self, obj):
+        return self._count(obj, "cell_count_annotated", "cell_observations")
+
+    def get_ble_count(self, obj):
+        return self._count(obj, "ble_count_annotated", "ble_observations")
+
+    def get_satellite_count(self, obj):
+        return self._count(obj, "satellite_count_annotated", "satellite_observations")
+
+    def get_lan_count(self, obj):
+        return self._count(obj, "lan_count_annotated", "lan_observations")
+
+    def get_resolved_address(self, obj):
+        # Cache-only lookup — a live Nominatim call has no business running
+        # inline during a list/retrieve response (see scans/geocoding.py).
+        # ScanSessionViewSet.get_serializer_context() populates
+        # "geocode_cache" once per request so this doesn't run one query
+        # per row; fall back to a single direct query outside that context
+        # (e.g. serializing the just-created session in create()).
+        if obj.latitude is None or obj.longitude is None:
+            return None
+        key = (round(obj.latitude, GEOCODE_PRECISION), round(obj.longitude, GEOCODE_PRECISION))
+        cache = self.context.get("geocode_cache")
+        if cache is not None:
+            return cache.get(key)
+        entry = GeocodedLocation.objects.filter(lat_rounded=key[0], lng_rounded=key[1]).first()
+        return entry.address if entry else None
+
+    def get_identifiers_summary(self, obj):
+        # A handful of the SSIDs/BLE names/LAN hostnames seen during this
+        # session — lets the scan-management page's free-text search match
+        # "delete every scan that saw my phone" without a separate UI for
+        # it. obj.wifi_observations.all() etc. read from
+        # ScanSessionViewSet's prefetch_related() when listing, so this
+        # doesn't add per-row queries there.
+        names = []
+        for w in obj.wifi_observations.all():
+            ssid = w.access_point.ssid
+            if ssid and ssid not in names:
+                names.append(ssid)
+        for b in obj.ble_observations.all():
+            name = b.device_name or b.ble_mac or b.stable_identifier
+            if name and name not in names:
+                names.append(name)
+        for lan in obj.lan_observations.all():
+            name = lan.hostname or lan.ip_address
+            if name and name not in names:
+                names.append(name)
+        return ", ".join(names[:15])
 
 
 class CellObservationSerializer(serializers.ModelSerializer):
+    # Pulled from the parent session, same pattern as WiFi/BLE — lets the
+    # cell tower detail page plot a sighting map without a second
+    # round-trip per observation.
+    latitude = serializers.FloatField(source="scan_session.latitude", read_only=True)
+    longitude = serializers.FloatField(source="scan_session.longitude", read_only=True)
+    location_accuracy_meters = serializers.FloatField(source="scan_session.location_accuracy_meters", read_only=True)
+
     class Meta:
         model = CellObservation
         fields = "__all__"
+
+
+class CellTowerSerializer(serializers.ModelSerializer):
+    latest_signal_dbm = serializers.SerializerMethodField()
+    latest_arfcn = serializers.SerializerMethodField()
+    latest_has_location = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CellTower
+        fields = [
+            "tower_key", "mcc", "mnc", "tac_or_lac", "cell_id", "carrier_name", "radio_type",
+            "first_seen_at", "last_seen_at", "latest_signal_dbm", "latest_arfcn", "latest_has_location",
+        ]
+
+    def _latest(self, obj):
+        if not hasattr(obj, "_latest_observation_cache"):
+            obj._latest_observation_cache = obj.observations.select_related("scan_session").order_by("-observed_at").first()
+        return obj._latest_observation_cache
+
+    def get_latest_signal_dbm(self, obj):
+        latest = self._latest(obj)
+        return latest.signal_dbm if latest else None
+
+    def get_latest_arfcn(self, obj):
+        latest = self._latest(obj)
+        return latest.arfcn if latest else None
+
+    def get_latest_has_location(self, obj):
+        latest = self._latest(obj)
+        return bool(latest and latest.scan_session.latitude is not None)
 
 
 class BLEObservationSerializer(serializers.ModelSerializer):
@@ -122,10 +248,52 @@ class BLEObservationSerializer(serializers.ModelSerializer):
     # view doesn't need a second round-trip per sighting.
     latitude = serializers.FloatField(source="scan_session.latitude", read_only=True)
     longitude = serializers.FloatField(source="scan_session.longitude", read_only=True)
+    location_accuracy_meters = serializers.FloatField(source="scan_session.location_accuracy_meters", read_only=True)
 
     class Meta:
         model = BLEObservation
         fields = "__all__"
+
+
+class BLEDeviceSerializer(serializers.ModelSerializer):
+    latest_rssi = serializers.SerializerMethodField()
+    latest_device_name = serializers.SerializerMethodField()
+    latest_is_connectable = serializers.SerializerMethodField()
+    latest_primary_phy = serializers.SerializerMethodField()
+    latest_has_location = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BLEDevice
+        fields = [
+            "device_key", "device_name", "device_type_guess", "first_seen_at", "last_seen_at",
+            "latest_rssi", "latest_device_name", "latest_is_connectable", "latest_primary_phy",
+            "latest_has_location",
+        ]
+
+    def _latest(self, obj):
+        if not hasattr(obj, "_latest_observation_cache"):
+            obj._latest_observation_cache = obj.observations.select_related("scan_session").order_by("-observed_at").first()
+        return obj._latest_observation_cache
+
+    def get_latest_rssi(self, obj):
+        latest = self._latest(obj)
+        return latest.rssi if latest else None
+
+    def get_latest_device_name(self, obj):
+        latest = self._latest(obj)
+        return latest.device_name if latest else None
+
+    def get_latest_is_connectable(self, obj):
+        latest = self._latest(obj)
+        return bool(latest and latest.is_connectable)
+
+    def get_latest_primary_phy(self, obj):
+        latest = self._latest(obj)
+        return latest.primary_phy if latest else None
+
+    def get_latest_has_location(self, obj):
+        latest = self._latest(obj)
+        return bool(latest and latest.scan_session.latitude is not None)
 
 
 class SatelliteObservationSerializer(serializers.ModelSerializer):
@@ -135,9 +303,71 @@ class SatelliteObservationSerializer(serializers.ModelSerializer):
 
 
 class LANObservationSerializer(serializers.ModelSerializer):
+    # Same pattern as WiFi/BLE/Cell — lets the Dashboard's unified activity
+    # view (and the LAN device detail page's accuracy circles) work without
+    # a second round-trip.
+    latitude = serializers.FloatField(source="scan_session.latitude", read_only=True)
+    longitude = serializers.FloatField(source="scan_session.longitude", read_only=True)
+    location_accuracy_meters = serializers.FloatField(source="scan_session.location_accuracy_meters", read_only=True)
+
     class Meta:
         model = LANObservation
         fields = "__all__"
+
+
+class LANDeviceSerializer(serializers.ModelSerializer):
+    latest_open_ports = serializers.SerializerMethodField()
+    latest_device_type_guess = serializers.SerializerMethodField()
+    latest_has_location = serializers.SerializerMethodField()
+    # LAN has no RSSI/signal_dbm equivalent — response time is its closest
+    # analog for the overview table's "signal strength" column.
+    latest_response_time_ms = serializers.SerializerMethodField()
+    # Unconditional — was this device seen in the single most recent LAN
+    # scan, regardless of any filtering applied to the request.
+    is_online = serializers.SerializerMethodField()
+    # Only meaningfully non-False when LANDeviceViewSet.list() is filtering
+    # by a session_limit of >=2 LAN scans — otherwise there's nothing
+    # discrete to compare against (single scan, or a time-based window).
+    is_new_in_window = serializers.SerializerMethodField()
+    is_left_in_window = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LANDevice
+        fields = [
+            "ip_address", "mac_address", "hostname", "vendor_oui", "device_type_guess",
+            "first_seen_at", "last_seen_at", "latest_open_ports", "latest_device_type_guess", "latest_has_location",
+            "latest_response_time_ms", "is_online", "is_new_in_window", "is_left_in_window",
+        ]
+
+    def _latest(self, obj):
+        if not hasattr(obj, "_latest_observation_cache"):
+            obj._latest_observation_cache = obj.observations.select_related("scan_session").order_by("-observed_at").first()
+        return obj._latest_observation_cache
+
+    def get_latest_open_ports(self, obj):
+        latest = self._latest(obj)
+        return latest.open_ports if latest else []
+
+    def get_latest_device_type_guess(self, obj):
+        latest = self._latest(obj)
+        return latest.device_type_guess if latest else None
+
+    def get_latest_has_location(self, obj):
+        latest = self._latest(obj)
+        return bool(latest and latest.scan_session.latitude is not None)
+
+    def get_latest_response_time_ms(self, obj):
+        latest = self._latest(obj)
+        return latest.response_time_ms if latest else None
+
+    def get_is_online(self, obj):
+        return getattr(obj, "_is_online", False)
+
+    def get_is_new_in_window(self, obj):
+        return getattr(obj, "_is_new_in_window", False)
+
+    def get_is_left_in_window(self, obj):
+        return getattr(obj, "_is_left_in_window", False)
 
 
 # --- Ingest (write) serializers ---
@@ -231,6 +461,9 @@ class ScanSessionIngestSerializer(serializers.Serializer):
     longitude = serializers.FloatField(required=False, allow_null=True)
     location_accuracy_meters = serializers.FloatField(required=False, allow_null=True)
     location_provider = serializers.CharField(max_length=16, allow_blank=True, default="")
+    fused_latitude = serializers.FloatField(required=False, allow_null=True)
+    fused_longitude = serializers.FloatField(required=False, allow_null=True)
+    fused_accuracy_meters = serializers.FloatField(required=False, allow_null=True)
     wifi_observations = WiFiObservationInputSerializer(many=True, required=False, default=list)
     cell_observations = CellObservationInputSerializer(many=True, required=False, default=list)
     ble_observations = BLEObservationInputSerializer(many=True, required=False, default=list)
@@ -249,6 +482,9 @@ class ScanSessionIngestSerializer(serializers.Serializer):
                 "longitude": validated_data.get("longitude"),
                 "location_accuracy_meters": validated_data.get("location_accuracy_meters"),
                 "location_provider": validated_data.get("location_provider", ""),
+                "fused_latitude": validated_data.get("fused_latitude"),
+                "fused_longitude": validated_data.get("fused_longitude"),
+                "fused_accuracy_meters": validated_data.get("fused_accuracy_meters"),
             },
         )
         if not created:
@@ -291,8 +527,32 @@ class ScanSessionIngestSerializer(serializers.Serializer):
             )
 
         for item in validated_data.get("cell_observations", []):
+            cell_tower = None
+            cell_id = item.get("cell_id", "")
+            tac_or_lac = item.get("tac_or_lac", "")
+            if cell_id and tac_or_lac:
+                mcc = item.get("mcc", "")
+                mnc = item.get("mnc", "")
+                tower_key = f"{mcc}-{mnc}-{tac_or_lac}-{cell_id}"
+                cell_tower, tower_created = CellTower.objects.get_or_create(
+                    tower_key=tower_key,
+                    defaults={
+                        "mcc": mcc, "mnc": mnc, "tac_or_lac": tac_or_lac, "cell_id": cell_id,
+                        "carrier_name": item.get("carrier_name", ""), "radio_type": item["radio_type"],
+                    },
+                )
+                if not tower_created:
+                    # Same always-save reasoning as AccessPoint: last_seen_at
+                    # (auto_now) must actually fire on every sighting, not
+                    # just when carrier_name/radio_type happen to change.
+                    if item.get("carrier_name"):
+                        cell_tower.carrier_name = item["carrier_name"]
+                    cell_tower.radio_type = item["radio_type"]
+                    cell_tower.save()
+
             CellObservation.objects.create(
                 scan_session=session,
+                cell_tower=cell_tower,
                 mcc=item.get("mcc", ""),
                 mnc=item.get("mnc", ""),
                 carrier_name=item.get("carrier_name", ""),
@@ -313,8 +573,27 @@ class ScanSessionIngestSerializer(serializers.Serializer):
             )
 
         for item in validated_data.get("ble_observations", []):
+            device_key = item.get("ble_mac") or item.get("stable_identifier")
+            ble_device = None
+            if device_key:
+                ble_device, device_created = BLEDevice.objects.get_or_create(
+                    device_key=device_key,
+                    defaults={
+                        "device_name": item.get("device_name", ""),
+                        "device_type_guess": item.get("device_type_guess", BLEObservation.DeviceType.UNKNOWN),
+                    },
+                )
+                if not device_created:
+                    # Always save (not just on change) so last_seen_at
+                    # (auto_now) actually reflects this sighting — same
+                    # reasoning as AccessPoint/CellTower/LANDevice above.
+                    ble_device.device_name = item.get("device_name", "") or ble_device.device_name
+                    ble_device.device_type_guess = item.get("device_type_guess", ble_device.device_type_guess)
+                    ble_device.save()
+
             BLEObservation.objects.create(
                 scan_session=session,
+                ble_device=ble_device,
                 ble_mac=item.get("ble_mac", ""),
                 stable_identifier=item.get("stable_identifier", ""),
                 rssi=item["rssi"],
@@ -344,8 +623,28 @@ class ScanSessionIngestSerializer(serializers.Serializer):
             )
 
         for item in validated_data.get("lan_observations", []):
+            lan_device, device_created = LANDevice.objects.get_or_create(
+                ip_address=item["ip_address"],
+                defaults={
+                    "mac_address": item.get("mac_address", ""),
+                    "hostname": item.get("hostname", ""),
+                    "vendor_oui": item.get("vendor_oui", ""),
+                    "device_type_guess": item.get("device_type_guess", LANObservation.DeviceType.UNKNOWN),
+                },
+            )
+            if not device_created:
+                # Always save (not just on change) so last_seen_at (auto_now)
+                # actually reflects this sighting — same reasoning as
+                # AccessPoint/CellTower above.
+                lan_device.mac_address = item.get("mac_address", "") or lan_device.mac_address
+                lan_device.hostname = item.get("hostname", "") or lan_device.hostname
+                lan_device.vendor_oui = item.get("vendor_oui", "") or lan_device.vendor_oui
+                lan_device.device_type_guess = item.get("device_type_guess", lan_device.device_type_guess)
+                lan_device.save()
+
             LANObservation.objects.create(
                 scan_session=session,
+                lan_device=lan_device,
                 ip_address=item["ip_address"],
                 mac_address=item.get("mac_address", ""),
                 hostname=item.get("hostname", ""),

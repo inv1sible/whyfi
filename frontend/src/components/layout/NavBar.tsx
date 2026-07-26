@@ -4,13 +4,14 @@ import { NavIcon } from "../icons";
 
 const LINKS = [
   { to: "/", label: "Dashboard", end: true, icon: "dashboard" as const },
-  { to: "/channel-congestion", label: "Channels", icon: "channels" as const },
+  { to: "/channel-congestion", label: "WiFi", icon: "channels" as const },
   { to: "/cellular", label: "Cellular", icon: "cellular" as const },
   { to: "/ble-devices", label: "BLE Devices", icon: "ble" as const },
   { to: "/satellites", label: "Location", icon: "location" as const },
   { to: "/heatmap", label: "Heatmap", icon: "heatmap" as const },
   { to: "/lan-devices", label: "LAN", icon: "lan" as const },
   { to: "/download", label: "Download", icon: "download" as const },
+  { to: "/scans", label: "Manage Scans", icon: "scans" as const },
   { to: "/settings", label: "Settings", icon: "settings" as const },
 ];
 

@@ -1,14 +1,38 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
+import { CompassArrow } from "../components/CompassArrow";
 import { DeviceTypeBadge } from "../components/DeviceTypeBadge";
+import { MapDisplayModeControls } from "../components/MapDisplayModeControls";
 import { RadioMap } from "../components/RadioMap";
+import type { CoveragePolygon, MapPoint } from "../components/RadioMap";
+import { SimpleLineChart } from "../components/SimpleLineChart";
+import { ALWAYS_MOBILE_BLE_TYPES, COVERAGE_STROKE_COLOR, classifyDeviceCoverage, soloShapes } from "../coverageConfig";
+import { useFilter } from "../context/FilterContext";
+import { resolveCurrentScan } from "../currentScan";
+import { useDeleteScanSession } from "../hooks/useDeleteScanSession";
 import { usePolling } from "../hooks/usePolling";
-import { bearingToCompass, formatDistance, haversineDistanceMeters, initialBearingDegrees } from "../geo";
+import { bearingToCompass, formatDistance, haversineDistanceMeters, initialBearingDegrees, weightedCentroid } from "../geo";
+import { signalStrengthColor, signalStrengthLabel } from "../signalColor";
 
 export function BLEDeviceDetailPage() {
   const { identifier = "" } = useParams();
-  const sightings = usePolling(() => api.bleObservationsForDevice(identifier), 15000, [identifier]);
+  const { refreshKey, deleteScanSession } = useDeleteScanSession();
+  const {
+    since,
+    sessionLimit,
+    mapDisplayMode,
+    setMapDisplayMode,
+    scanIndexPercent,
+    setScanIndexPercent,
+  } = useFilter();
+
+  const device = usePolling(() => api.bleDevice(identifier), 20000, [identifier]);
+  const observations = usePolling(
+    () => api.bleObservationsForDevice(identifier, { since, sessionLimit }),
+    20000,
+    [identifier, refreshKey, since, sessionLimit],
+  );
 
   const [browserLocation, setBrowserLocation] = useState<GeolocationCoordinates | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
@@ -18,23 +42,106 @@ export function BLEDeviceDetailPage() {
       setLocationError("This browser doesn't support geolocation.");
       return;
     }
-    navigator.geolocation.getCurrentPosition(
+    // watchPosition, not a one-shot getCurrentPosition — while the Android
+    // app is continuously scanning, keeping the browser's own position
+    // live too is what makes the compass below actually useful for
+    // walking toward the device instead of a single stale reading.
+    const watchId = navigator.geolocation.watchPosition(
       (position) => setBrowserLocation(position.coords),
       (err) => setLocationError(err.message),
       { enableHighAccuracy: true, timeout: 10000 },
     );
+    return () => navigator.geolocation.clearWatch(watchId);
   }, []);
 
-  const results = sightings.data?.results ?? [];
-  const latest = results[0];
-  // Results come back newest-first; the path line should trace the
-  // device's movement in the order it actually happened.
-  const mapPoints = results
-    .filter((s) => s.latitude != null && s.longitude != null)
-    .map((s) => ({ lat: s.latitude as number, lng: s.longitude as number, weight: s.rssi }))
-    .reverse();
+  // API returns newest-first; the chart wants chronological (oldest→newest)
+  // order, same as the other detail pages.
+  const chronological = observations.data ? [...observations.data].reverse() : [];
+  const geotagged = chronological.filter((s) => s.latitude != null && s.longitude != null);
+
+  const latest = observations.data?.[0];
+
+  const currentScan = resolveCurrentScan(
+    geotagged.map((s) => ({
+      lat: s.latitude as number,
+      lng: s.longitude as number,
+      weight: s.rssi,
+      scanSessionId: s.scan_session,
+      observedAt: s.observed_at,
+    })),
+    scanIndexPercent,
+  );
+  const isRowVisible = (scanSession: string, observedAt: string) =>
+    mapDisplayMode === "solo"
+      ? currentScan.scanSessionId === null || scanSession === currentScan.scanSessionId
+      : currentScan.cutoffObservedAt === null || observedAt <= currentScan.cutoffObservedAt;
+
+  const visibleGeotagged = geotagged.filter((s) => isRowVisible(s.scan_session, s.observed_at));
+  const visibleChronological = chronological.filter((s) => isRowVisible(s.scan_session, s.observed_at));
+
+  // Headphones/wearables are worn on a person — always mobile, no distance
+  // check needed (see coverageConfig.ts).
+  const isForcedMobile = device.data != null && ALWAYS_MOBILE_BLE_TYPES.has(device.data.device_type_guess);
+  const heatShape =
+    visibleGeotagged.length > 0
+      ? classifyDeviceCoverage(
+          visibleGeotagged.map((s) => ({ lat: s.latitude as number, lng: s.longitude as number, weight: s.rssi })),
+          "ble",
+          isForcedMobile,
+        )
+      : null;
+  const heatPolygons: CoveragePolygon[] =
+    heatShape?.kind === "polygon"
+      ? [
+          {
+            points: heatShape.polygon,
+            color: COVERAGE_STROKE_COLOR,
+            label: device.data?.latest_device_name || identifier,
+            gradientCenter: heatShape.center,
+            centerIconType: "ble",
+          },
+        ]
+      : [];
+  const rawPoints: MapPoint[] = visibleGeotagged.map((s) => ({
+    lat: s.latitude as number,
+    lng: s.longitude as number,
+    weight: s.rssi,
+    accuracyMeters: s.location_accuracy_meters,
+    scanSessionId: s.scan_session,
+    observedAt: s.observed_at,
+  }));
+  const heatPoints = heatShape?.kind === "points" ? rawPoints : [];
+
+  // The device's estimated position from its *entire* sighting history —
+  // see NetworkDetailPage.tsx for why full history rather than just the
+  // slider-visible readings. Skipped for forced-mobile devices (worn
+  // headphones/wearables): there's no fixed "where it stands" to average
+  // toward, so a weighted centroid of scattered sightings would just be a
+  // meaningless point along wherever the person happened to walk.
+  const apEstimatedLocation =
+    !isForcedMobile && geotagged.length > 0
+      ? weightedCentroid(geotagged.map((s) => ({ lat: s.latitude as number, lng: s.longitude as number, weight: s.rssi })))
+      : null;
+
+  // Solo mode: a cone from the device's known position to this one
+  // reading, or an RSSI-derived range blob when the position isn't known
+  // (or isn't meaningful, as with forced-mobile devices above).
+  const soloPolygons: CoveragePolygon[] = soloShapes(currentScan.points, apEstimatedLocation, "ble").map((shape) => ({
+    points: shape.polygon,
+    color: shape.color,
+    label: device.data?.latest_device_name || identifier,
+    fillOpacity: shape.fillOpacity,
+    gradientCenter: shape.gradientCenter,
+    gradientEdgeColor: shape.gradientEdgeColor,
+    centerIconType: shape.gradientCenter ? "ble" : undefined,
+  }));
+
+  const displayPolygons = mapDisplayMode === "solo" ? soloPolygons : heatPolygons;
+  const displayPoints: MapPoint[] =
+    mapDisplayMode === "solo" ? (soloPolygons.length > 0 ? [] : currentScan.points) : heatPoints;
 
   let distanceBearingText: string | null = null;
+  let bearingDegrees: number | null = null;
   if (browserLocation && latest?.latitude != null && latest?.longitude != null) {
     const distance = haversineDistanceMeters(
       browserLocation.latitude,
@@ -42,36 +149,37 @@ export function BLEDeviceDetailPage() {
       latest.latitude,
       latest.longitude,
     );
-    const bearing = initialBearingDegrees(
+    bearingDegrees = initialBearingDegrees(
       browserLocation.latitude,
       browserLocation.longitude,
       latest.latitude,
       latest.longitude,
     );
-    distanceBearingText = `${formatDistance(distance)} away, bearing ${bearingToCompass(bearing)} (${Math.round(bearing)}°) from where you are now`;
+    distanceBearingText = `${formatDistance(distance)} away, bearing ${bearingToCompass(bearingDegrees)} (${Math.round(bearingDegrees)}°) from where you are now`;
   }
 
   return (
     <section>
-      <h1>BLE device</h1>
+      <h1>{device.data?.latest_device_name || device.data?.device_key || "BLE device"}</h1>
       <p className="mono page-hint">{identifier}</p>
 
-      {sightings.loading && !sightings.data && <p>Loading…</p>}
-      {sightings.error && <p className="error-text">Could not reach the backend: {sightings.error.message}</p>}
-      {sightings.data && results.length === 0 && <p className="empty-state">No sightings found for this device.</p>}
+      {device.error && <p className="error-text">Could not reach the backend: {device.error.message}</p>}
 
-      {latest && (
+      {device.data && (
         <dl className="detail-list">
           <dt>Type</dt>
           <dd>
-            <DeviceTypeBadge deviceType={latest.device_type_guess} />
+            <DeviceTypeBadge deviceType={device.data.device_type_guess} />
           </dd>
-          {latest.device_name && (
-            <>
-              <dt>Name</dt>
-              <dd>{latest.device_name}</dd>
-            </>
-          )}
+          <dt>First seen</dt>
+          <dd>{new Date(device.data.first_seen_at).toLocaleString()}</dd>
+          <dt>Last seen</dt>
+          <dd>{new Date(device.data.last_seen_at).toLocaleString()}</dd>
+        </dl>
+      )}
+
+      {latest && (
+        <dl className="detail-list">
           <dt>Last signal</dt>
           <dd>{latest.rssi} dBm</dd>
           <dt>Connectable</dt>
@@ -82,13 +190,20 @@ export function BLEDeviceDetailPage() {
               <dd>{latest.primary_phy}</dd>
             </>
           )}
-          <dt>Last seen</dt>
-          <dd>{new Date(latest.observed_at).toLocaleString()}</dd>
         </dl>
       )}
 
       <h2>Direction</h2>
-      {distanceBearingText && <p>{distanceBearingText}</p>}
+      {distanceBearingText && bearingDegrees != null && (
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+          <CompassArrow bearingDegrees={bearingDegrees} />
+          <p>
+            {distanceBearingText}
+            <br />
+            <span className="page-hint">Updates live as your own location changes and the device is re-scanned.</span>
+          </p>
+        </div>
+      )}
       {!distanceBearingText && locationError && (
         <p className="page-hint">
           Can't compute direction — {locationError}. Direction needs your browser's location and at least one
@@ -101,12 +216,33 @@ export function BLEDeviceDetailPage() {
       )}
 
       <h2>Sighting locations</h2>
-      {mapPoints.length === 0 && <p className="empty-state">No geotagged sightings yet.</p>}
-      {mapPoints.length === 1 && <p className="page-hint">Only one geotagged sighting so far — no path to draw yet.</p>}
-      {mapPoints.length > 0 && <RadioMap points={mapPoints} mode="path" />}
+      {geotagged.length === 0 && <p className="empty-state">No geotagged sightings yet.</p>}
+      {geotagged.length > 0 && (
+        <>
+          <RadioMap points={displayPoints} mode="heat" polygons={displayPolygons} onDeleteScanSession={deleteScanSession} />
+          <MapDisplayModeControls
+            mode={mapDisplayMode}
+            onModeChange={setMapDisplayMode}
+            percent={scanIndexPercent}
+            onPercentChange={setScanIndexPercent}
+            label={currentScan.label}
+          />
+        </>
+      )}
+
+      <h2>Signal history</h2>
+      {observations.data && (
+        <SimpleLineChart
+          unit=" dBm"
+          points={visibleChronological.map((s) => ({ label: s.observed_at, value: s.rssi }))}
+          valueColor={signalStrengthColor}
+          valueLabel={signalStrengthLabel}
+        />
+      )}
 
       <h2>Sighting history</h2>
-      {results.length > 0 && (
+      <p className="page-hint">Follows the slider above — chart and table show the same readings the map does.</p>
+      {observations.data && observations.data.length > 0 && (
         <table className="data-table">
           <thead>
             <tr>
@@ -115,9 +251,11 @@ export function BLEDeviceDetailPage() {
             </tr>
           </thead>
           <tbody>
-            {results.map((sighting) => (
+            {observations.data
+              .filter((s) => isRowVisible(s.scan_session, s.observed_at))
+              .map((sighting) => (
               <tr key={sighting.id}>
-                <td>{sighting.rssi} dBm</td>
+                <td style={{ color: signalStrengthColor(sighting.rssi) }}>{sighting.rssi} dBm</td>
                 <td>{new Date(sighting.observed_at).toLocaleString()}</td>
               </tr>
             ))}

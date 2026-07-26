@@ -132,7 +132,12 @@ export function DownloadPage() {
               {buildStatus.build_status}
             </p>
             {buildStatus.build_status === "FAILED" && <p className="error-text">Build failed — see log below.</p>}
-            {buildStatus.build_log_tail && <pre className="build-log">{buildStatus.build_log_tail}</pre>}
+            {buildStatus.build_log_tail && (
+              <details>
+                <summary>Build log</summary>
+                <pre className="build-log">{buildStatus.build_log_tail}</pre>
+              </details>
+            )}
           </div>
         )}
       </div>
