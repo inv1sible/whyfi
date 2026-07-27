@@ -50,6 +50,56 @@ Because of this, the Android app is a first-class native scanning client
 browser/PWA client reads from. See `docs/android-setup.md` for permission and
 build details.
 
+## Remote scanning control
+
+The PWA can start and stop scanning on a phone, set the cadence, and pick
+which radios run. What makes the design non-obvious is that **the backend can
+never reach a phone**, so the control flow is inverted.
+
+Two independent walls, either of which alone defeats a push-based design:
+
+1. Since **Android 12** an app may not start a foreground service from the
+   background at all (`ForegroundServiceStartNotAllowedException`). The
+   exemptions are `BOOT_COMPLETED`, high-priority FCM, and notification
+   interaction — "a server said so" isn't one.
+2. Since **Android 11** a background-*started* location foreground service
+   gets no location access without `ACCESS_BACKGROUND_LOCATION` — so even a
+   service that did start would scan nothing.
+
+Both restrictions exist specifically to prevent covert remote activation of a
+device's sensors, which is a property worth keeping rather than working
+around. Phones also sit behind carrier NAT with no inbound route.
+
+So the phone asks. `ScanForegroundService` (the same service that already
+runs scans — there is no second service) hosts a poll loop that calls
+`POST /sensors/me/heartbeat/`, sending what it's doing and receiving what it
+should be doing, then converges via the same `startContinuous`/`stopContinuous`
+entry points the on-screen buttons use.
+
+The backend stores **desired state**, not commands (`SensorScanPolicy`). That
+makes "stop, then start again immediately" two writes where the last wins,
+and lets a phone that was offline for an hour catch up correctly with no
+queue to drain and no stale instruction to replay. `policy_revision` /
+`reported_policy_revision` (Kubernetes' generation/observedGeneration idea)
+let the UI distinguish *pending* from *applied but not scanning* — and the
+structured `reported_*` fields then explain the latter ("Bluetooth is off",
+"permissions not granted").
+
+Consequences worth knowing:
+
+- Remote control only reaches a phone whose agent is **already running**. It
+  must be armed by hand once, in the app, and it stays off after a reboot or
+  force-stop. The `/remote` page says so.
+- While armed the foreground-service notification stays up permanently. That
+  is the honest signal — the phone really is standing by to scan on command.
+- Deliberately excluded: `ACCESS_BACKGROUND_LOCATION`, start-on-boot, FCM,
+  and any silent mode.
+- The service's `foregroundServiceType` stays `location|connectedDevice`.
+  Adding `dataSync` for the polling would subject the whole service to
+  Android 15's 6h/24h FGS timeout the moment `targetSdk` reaches 35.
+- Long-polling was rejected: gunicorn runs 3 *sync* workers, so a handful of
+  hanging requests would deadlock the backend, PWA included.
+
 ## Data model
 
 One event = one `ScanSession` (a scan pass, or a LAN sweep), geotagged

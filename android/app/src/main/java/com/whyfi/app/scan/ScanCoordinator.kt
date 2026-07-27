@@ -13,6 +13,7 @@ import com.whyfi.app.ble.BleDeviceScanner
 import com.whyfi.app.cellular.CellularManager
 import com.whyfi.app.data.LocationSourcePreference
 import com.whyfi.app.data.SettingsRepository
+import com.whyfi.app.data.local.PendingScanDao
 import com.whyfi.app.data.local.PendingScanEntity
 import com.whyfi.app.data.local.WhyfiDatabase
 import com.whyfi.app.data.remote.LanObservationDto
@@ -148,7 +149,35 @@ class ScanCoordinator(private val context: Context) {
                 createdAtEpochMs = System.currentTimeMillis(),
             ),
         )
+        enforceOutboxQuota(dao)
         UploadWorker.enqueue(context)
+    }
+
+    /** Keeps the offline outbox inside the user's storage budget by dropping
+     * the oldest queued scans first.
+     *
+     * Budgeted in bytes rather than "keep the newest N scans" because payload
+     * size swings by an order of magnitude with how crowded the airwaves are
+     * — a fixed count would mean wildly different disk use in a quiet street
+     * versus an apartment block. Oldest-first because when a survey has to
+     * lose something, the stale end is worth less than what's happening now.
+     */
+    private suspend fun enforceOutboxQuota(dao: PendingScanDao) {
+        val quotaBytes = settingsRepository.outboxQuotaBytes
+        if ((dao.totalBytes() ?: 0L) <= quotaBytes) return
+
+        val sizes = dao.sizesOldestFirst()
+        var remaining = sizes.sumOf { it.bytes }
+        val doomed = mutableListOf<String>()
+        for (entry in sizes) {
+            // Never evict the last row: if a single scan somehow exceeds the
+            // whole quota, dropping it would silently discard every scan
+            // forever. Better to overshoot the budget by one payload.
+            if (remaining <= quotaBytes || doomed.size == sizes.size - 1) break
+            doomed += entry.clientScanId
+            remaining -= entry.bytes
+        }
+        if (doomed.isNotEmpty()) dao.deleteAll(doomed)
     }
 
     private data class ResolvedLocation(val primary: Location?, val fused: Location?)

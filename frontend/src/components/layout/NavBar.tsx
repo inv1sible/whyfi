@@ -11,6 +11,7 @@ const LINKS = [
   { to: "/heatmap", label: "Heatmap", icon: "heatmap" as const },
   { to: "/lan-devices", label: "LAN", icon: "lan" as const },
   { to: "/download", label: "Download", icon: "download" as const },
+  { to: "/remote", label: "Remote", icon: "remote" as const },
   { to: "/scans", label: "Manage Scans", icon: "scans" as const },
   { to: "/settings", label: "Settings", icon: "settings" as const },
 ];

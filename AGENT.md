@@ -69,6 +69,16 @@ local iteration, keep the production path as "build into the backend image."
   new sweep mode) should go through this service, not a fresh
   `rememberCoroutineScope()` — that's exactly the bug this replaced (see
   MEMORY.md).
+- **Control-plane state is desired/reported reconciliation, not a command
+  queue.** Remote scanning control (`SensorScanPolicy`) stores what a device
+  *should* be doing; the device polls `POST /sensors/me/heartbeat/`, reports
+  what it *is* doing, and converges. Any future "tell a device to do X"
+  feature should follow this rather than queueing commands: it's idempotent,
+  survives offline periods with no replay of stale instructions, and makes
+  "stop then start again" just two writes where the last wins. The
+  `policy_revision`/`reported_policy_revision` pair is what lets the UI tell
+  *pending* from *applied*; keep echoing it. Note the backend can never push
+  to a phone — see MEMORY.md for why FCM isn't the fix.
 - **Theme is System/Light/Dark on both clients, implemented independently
   per stack.** PWA: `frontend/src/theme.ts` + `data-theme` attribute + CSS
   variables in `index.css`. Android: `ui/theme/Theme.kt`'s `WhyfiTheme` +
@@ -85,6 +95,15 @@ local iteration, keep the production path as "build into the backend image."
   ones pick it up automatically), the `create()` logic, and the matching
   Android DTO — see any of the `*ObservationInputSerializer`s for the
   pattern.
+- **Verify Android changes by building an APK through the Build button, not
+  by compiling a mounted copy.** `android-builder` bind-mounts
+  `./android:/workspace` (docker-compose) so it sees current source — but the
+  image also bakes a copy via `COPY . .`, so if that mount is ever removed the
+  watcher silently compiles stale code and still reports `SUCCESS`. That
+  already shipped an APK missing an entire feature. To actually confirm new
+  code is in the artifact, grep the dex:
+  `unzip -o <build>.apk 'classes*.dex' && grep -a <NewClassName> classes*.dex`.
+  See MEMORY.md.
 - **Generate migrations against a real Postgres, then copy the file to the
   host immediately.** `backend/` is not bind-mounted into the `backend`
   container, so `docker compose exec backend python manage.py

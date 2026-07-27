@@ -17,7 +17,7 @@ from scans.views import (
     health,
     heatmap,
 )
-from sensors.views import SensorViewSet
+from sensors.views import SensorViewSet, sensor_heartbeat
 
 router = DefaultRouter()
 router.register("sensors", SensorViewSet, basename="sensor")
@@ -41,5 +41,8 @@ urlpatterns = [
     path("app/latest/", latest_release),
     path("android-build/trigger/", trigger_build_view),
     path("android-build/status/", build_status_view),
+    # Must stay ahead of the router include: "me" isn't a sensor pk, it means
+    # "whichever sensor this token belongs to".
+    path("sensors/me/heartbeat/", sensor_heartbeat),
     path("", include(router.urls)),
 ]

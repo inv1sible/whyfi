@@ -26,7 +26,13 @@ RUN apt-get update \
         "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" > /dev/null
 
 WORKDIR /workspace
+# Only a fallback for running this image standalone — docker-compose
+# bind-mounts ./android over /workspace so the watcher always builds current
+# source instead of whatever was frozen in at image-build time.
 COPY . .
-RUN chmod +x docker-build.sh
 
-ENTRYPOINT ["./docker-build.sh"]
+# Run via `sh` rather than as an executable, and deliberately without relying
+# on `chmod +x`: the bind-mounted copy carries the *host's* permissions, and
+# this repo sits on a filesystem that hands out 0666 and doesn't preserve
+# exec bits — `./docker-build.sh` fails there with permission denied.
+ENTRYPOINT ["sh", "./docker-build.sh"]

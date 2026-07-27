@@ -7,13 +7,20 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.os.BatteryManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.whyfi.app.BuildConfig
 import com.whyfi.app.R
+import com.whyfi.app.data.SettingsRepository
+import com.whyfi.app.data.local.WhyfiDatabase
 import com.whyfi.app.data.remote.LanObservationDto
+import com.whyfi.app.data.remote.ScanPolicyResponse
+import com.whyfi.app.data.remote.SensorHeartbeatRequest
+import com.whyfi.app.permissions.PermissionHelper
 import com.whyfi.app.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -48,6 +55,14 @@ data class ScanUiState(
     val lanDevices: List<LanObservationDto> = emptyList(),
 )
 
+/** What the continuous loop should be doing right now. Held in a StateFlow
+ * the loop re-reads each iteration so the web UI can retune a running scan
+ * without restarting it. */
+data class ContinuousConfig(
+    val options: ScanOptions = ScanOptions(),
+    val intervalMs: Long = 30_000L,
+)
+
 /**
  * Hosts scan execution independently of any Activity/Composable lifecycle.
  * Without this, an in-progress scan used to get cancelled the instant the
@@ -65,8 +80,31 @@ class ScanForegroundService : Service() {
 
     private val binder = LocalBinder()
     private lateinit var scanCoordinator: ScanCoordinator
+    private lateinit var settingsRepository: SettingsRepository
     private val serviceScope = CoroutineScope(SupervisorJob())
     private var continuousJob: Job? = null
+    private var remoteAgentJob: Job? = null
+
+    /** Read at the top of every continuous iteration rather than captured
+     * when the loop starts, so changing the interval or radio selection
+     * mid-run takes effect without cancelling a pass that's in flight. */
+    private val continuousConfig = MutableStateFlow(ContinuousConfig())
+
+    /** Set to ask the continuous loop to finish its current pass and then
+     * stop, instead of being cancelled where it stands. See [stopContinuous]. */
+    @Volatile
+    private var gracefulStopRequested = false
+
+    // Echoed back to the backend so the web UI can tell "the phone hasn't
+    // picked this up yet" from "it picked it up and still isn't scanning".
+    @Volatile
+    private var appliedPolicyRevision = 0
+
+    @Volatile
+    private var appliedScanNowNonce = 0
+
+    @Volatile
+    private var appliedResetCountersNonce = 0
 
     private val _uiState = MutableStateFlow(ScanUiState())
     val uiState: StateFlow<ScanUiState> = _uiState.asStateFlow()
@@ -78,14 +116,147 @@ class ScanForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         scanCoordinator = ScanCoordinator(applicationContext)
+        settingsRepository = SettingsRepository(applicationContext)
         createNotificationChannel()
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, buildNotification("whyfi is idle"))
+        // On API 34 startForeground throws if a prerequisite permission for a
+        // declared foregroundServiceType has been revoked since the last run —
+        // which is reachable here, because a sticky restart can happen long
+        // after the user last opened the app.
+        val started = runCatching {
+            startForeground(NOTIFICATION_ID, buildNotification(idleNotificationText()))
+        }.isSuccess
+        if (!started) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        if (settingsRepository.remoteControlEnabled) {
+            startRemoteAgentIfNeeded()
+            // Worth coming back after a process kill, since the whole point of
+            // remote control is an unattended device. (Not after a reboot,
+            // though — nothing restarts us there by design; see the manifest.)
+            return START_STICKY
+        }
         return START_NOT_STICKY
+    }
+
+    // --- Remote control ---------------------------------------------------
+
+    /** Arms or disarms obeying the backend. Only ever called from the UI:
+     * Android requires the foreground service to be started from the
+     * foreground, and a persistent notification is worth an explicit opt-in. */
+    fun setRemoteControlEnabled(enabled: Boolean) {
+        settingsRepository.remoteControlEnabled = enabled
+        if (enabled) {
+            startRemoteAgentIfNeeded()
+            updateNotification(idleNotificationText())
+        } else {
+            remoteAgentJob?.cancel()
+            remoteAgentJob = null
+            // Whoever is holding the phone wins: disarming locally also stops
+            // whatever the backend had it doing.
+            stopContinuous()
+        }
+    }
+
+    fun isRemoteControlEnabled(): Boolean = settingsRepository.remoteControlEnabled
+
+    /** Zeroes the per-session tallies (completed passes and the last pass's
+     * per-radio counts).
+     *
+     * "Session" used to mean "since the service last started", which was fine
+     * when the service died whenever it went idle. Under remote control it
+     * never dies, so the count would otherwise climb forever with no way to
+     * zero it short of force-stopping the app. */
+    fun resetSessionCounters() {
+        _uiState.update {
+            it.copy(
+                completedScanCount = 0,
+                wifiCount = null,
+                cellularCount = null,
+                bleCount = null,
+                satelliteCount = null,
+            )
+        }
+    }
+
+    private fun startRemoteAgentIfNeeded() {
+        if (remoteAgentJob?.isActive == true) return
+        val agent = RemoteControlAgent(applicationContext, RemoteCallbacks())
+        remoteAgentJob = serviceScope.launch { agent.run() }
+    }
+
+    private inner class RemoteCallbacks : RemoteControlAgent.Callbacks {
+        override suspend fun currentReport(): SensorHeartbeatRequest {
+            val state = _uiState.value
+            val dao = WhyfiDatabase.getInstance(applicationContext).pendingScanDao()
+            return SensorHeartbeatRequest(
+                reportedIsContinuous = state.isContinuous,
+                reportedIsScanning = state.isScanning,
+                reportedPhase = state.currentPhase?.name ?: "",
+                reportedCompletedScans = state.completedScanCount,
+                reportedWifiUnavailableReason = state.wifiUnavailableReason ?: "",
+                reportedCellularUnavailableReason = state.cellularUnavailableReason ?: "",
+                reportedBleUnavailableReason = state.bleUnavailableReason ?: "",
+                reportedPermissionsGranted = PermissionHelper.hasAllRequiredPermissions(applicationContext),
+                reportedLocationServicesEnabled = PermissionHelper.isLocationServicesEnabled(applicationContext),
+                reportedPendingUploads = dao.count(),
+                reportedOutboxBytes = dao.totalBytes() ?: 0L,
+                reportedOutboxQuotaMb = settingsRepository.outboxQuotaMb,
+                reportedBatteryPercent = batteryPercent(),
+                reportedAppVersion = BuildConfig.VERSION_NAME,
+                reportedPolicyRevision = appliedPolicyRevision,
+                reportedScanNowNonce = appliedScanNowNonce,
+                reportedResetCountersNonce = appliedResetCountersNonce,
+            )
+        }
+
+        override suspend fun onPolicy(policy: ScanPolicyResponse) {
+            refreshAvailability()
+            val options = ScanOptions(
+                includeWifi = policy.includeWifi,
+                includeCellular = policy.includeCellular,
+                includeBle = policy.includeBle,
+                includeGnss = policy.includeGnss,
+            )
+            val intervalMs = policy.scanIntervalSeconds.toLong() * 1000L
+
+            if (policy.remoteScanEnabled) {
+                // Also the update path: if the loop is already running this
+                // just swaps the config it reads each iteration.
+                startContinuous(options, intervalMs)
+            } else if (_uiState.value.isContinuous) {
+                stopContinuous(graceful = true)
+            }
+
+            // A one-off pass, only when not already looping (the loop covers it).
+            if (policy.scanNowNonce != appliedScanNowNonce) {
+                appliedScanNowNonce = policy.scanNowNonce
+                if (!policy.remoteScanEnabled) scanOnce(options)
+            }
+
+            if (policy.resetCountersNonce != appliedResetCountersNonce) {
+                appliedResetCountersNonce = policy.resetCountersNonce
+                resetSessionCounters()
+            }
+
+            appliedPolicyRevision = policy.policyRevision
+        }
+
+        override suspend fun onAuthRejected() {
+            setRemoteControlEnabled(false)
+            updateNotification("Remote control off — backend rejected this device's token")
+        }
+    }
+
+    private fun batteryPercent(): Int? {
+        val manager = getSystemService(BatteryManager::class.java) ?: return null
+        return manager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).takeIf { it in 0..100 }
     }
 
     fun refreshAvailability() {
@@ -105,30 +276,75 @@ class ScanForegroundService : Service() {
         if (_uiState.value.isScanning || _uiState.value.isContinuous) return
         serviceScope.launch {
             runOnePass(options)
-            stopIfIdle()
+            stopIfNothingKeepsUsAlive()
         }
     }
 
+    /** Starts the continuous loop, or — if it's already running — updates the
+     * interval and radio selection in place.
+     *
+     * Updating in place rather than restarting matters for remote control:
+     * changing the cadence from the web UI would otherwise cancel whatever
+     * pass happened to be in flight, silently losing it (the upload is the
+     * last thing a pass does). */
     fun startContinuous(options: ScanOptions, intervalMs: Long) {
+        continuousConfig.value = ContinuousConfig(options, intervalMs)
         if (_uiState.value.isContinuous) return
+
+        gracefulStopRequested = false
         _uiState.update { it.copy(isContinuous = true) }
         continuousJob = serviceScope.launch {
-            while (isActive) {
-                if (canScanNow(options.includeWifi)) {
-                    runOnePass(options)
-                    delay(intervalMs)
-                } else {
-                    delay(2000)
+            try {
+                while (isActive && !gracefulStopRequested) {
+                    val config = continuousConfig.value
+                    if (canScanNow(config.options.includeWifi)) {
+                        runOnePass(config.options)
+                        interruptibleDelay(config.intervalMs)
+                    } else {
+                        interruptibleDelay(throttleBackoffMs())
+                    }
                 }
+            } finally {
+                // Runs on cancellation too, so both stop paths converge here.
+                continuousJob = null
+                _uiState.update { it.copy(isContinuous = false, currentPhase = null) }
+                stopIfNothingKeepsUsAlive()
             }
         }
     }
 
-    fun stopContinuous() {
+    /**
+     * @param graceful finish the pass that's in flight before stopping.
+     *
+     * The local button stops immediately — a human is watching and pressed
+     * it deliberately. A remote stop is graceful, because cancelling
+     * mid-pass discards that pass's data and nobody would be there to notice.
+     */
+    fun stopContinuous(graceful: Boolean = false) {
+        if (graceful) {
+            gracefulStopRequested = true
+            return
+        }
         continuousJob?.cancel()
-        continuousJob = null
-        _uiState.update { it.copy(isContinuous = false, currentPhase = null) }
-        stopIfIdle()
+    }
+
+    /** Waits in short slices so a graceful stop doesn't have to sit through a
+     * full scan interval (which can be minutes) before taking effect. */
+    private suspend fun interruptibleDelay(totalMs: Long) {
+        var remaining = totalMs
+        while (remaining > 0 && !gracefulStopRequested) {
+            val slice = minOf(remaining, GRACEFUL_STOP_CHECK_MS)
+            delay(slice)
+            remaining -= slice
+        }
+    }
+
+    /** How long until Android's WiFi scan throttle lets us go again.
+     * Beats a fixed retry: at intervals near the throttle floor a blind 2s
+     * poll wakes the device repeatedly for nothing. */
+    private fun throttleBackoffMs(): Long {
+        val waitMs = scanCoordinator.wifiScanManager.throttle.nextAllowedScanAtMs() - System.currentTimeMillis()
+        return waitMs.coerceIn(500L, 30_000L)
     }
 
     fun scanLan() {
@@ -141,7 +357,7 @@ class ScanForegroundService : Service() {
                 onDeviceFound = { device -> _uiState.update { it.copy(lanDevices = it.lanDevices + device) } },
             )
             _uiState.update { it.copy(isLanScanning = false, lanDeviceCount = result.lanObservations.size) }
-            stopIfIdle()
+            stopIfNothingKeepsUsAlive()
         }
     }
 
@@ -173,15 +389,30 @@ class ScanForegroundService : Service() {
         _uiState.update { it.copy(isScanning = false, currentPhase = null, completedScanCount = it.completedScanCount + 1) }
     }
 
-    /** Drops the persistent notification once there's nothing left running
-     * — it should only be visible while a scan is actually in flight. */
-    private fun stopIfIdle() {
+    /** Drops the persistent notification once nothing needs us alive.
+     *
+     * Remote control counts as needing us alive: the whole point is that the
+     * backend can reach this device while it's sitting idle, and a stopped
+     * service can't be reached by anything. That does mean the notification
+     * stays up permanently while armed — which is the honest signal, since
+     * the phone really is standing by to scan on command. */
+    private fun stopIfNothingKeepsUsAlive() {
         val state = _uiState.value
-        if (!state.isScanning && !state.isContinuous && !state.isLanScanning) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+        val busy = state.isScanning || state.isContinuous || state.isLanScanning
+        if (busy || settingsRepository.remoteControlEnabled) {
+            if (!busy) updateNotification(idleNotificationText())
+            return
         }
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
+
+    private fun idleNotificationText(): String =
+        if (settingsRepository.remoteControlEnabled) {
+            "Standing by for remote scan commands"
+        } else {
+            "whyfi is idle"
+        }
 
     private fun phaseNotificationLabel(phase: ScanPhase): String = when (phase) {
         ScanPhase.WIFI -> "Scanning WiFi…"
@@ -226,6 +457,10 @@ class ScanForegroundService : Service() {
     companion object {
         private const val CHANNEL_ID = "whyfi_scanning"
         private const val NOTIFICATION_ID = 1001
+
+        /** Slice length for [interruptibleDelay] — the worst-case latency
+         * between a remote stop arriving and the loop noticing. */
+        private const val GRACEFUL_STOP_CHECK_MS = 500L
 
         /** Ensures the service is independently started (not just bound) so
          * it survives its UI client unbinding — call before/alongside

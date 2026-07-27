@@ -63,10 +63,37 @@ class SettingsRepository(context: Context) {
         get() = LocationSourcePreference.fromStored(prefs.getString(KEY_LOCATION_SOURCE, null))
         set(value) = prefs.edit { putString(KEY_LOCATION_SOURCE, value.name) }
 
+    /** Whether this device obeys start/stop instructions from the backend.
+     *
+     * Off by default and only ever turned on from the Scan screen: Android
+     * won't let a server start a location foreground service in the
+     * background, so the agent has to be armed by hand once — which is also
+     * the honest place to consent to a persistent notification and the
+     * battery cost that comes with it. */
+    var remoteControlEnabled: Boolean
+        get() = prefs.getBoolean(KEY_REMOTE_CONTROL, false)
+        set(value) = prefs.edit { putBoolean(KEY_REMOTE_CONTROL, value) }
+
+    /** How much storage the offline outbox may use before the oldest queued
+     * scans are dropped. Only bites while uploads are failing — a reachable
+     * backend drains the queue continuously, so steady-state usage is ~0. */
+    var outboxQuotaMb: Int
+        get() = prefs.getInt(KEY_OUTBOX_QUOTA_MB, DEFAULT_OUTBOX_QUOTA_MB)
+        set(value) = prefs.edit { putInt(KEY_OUTBOX_QUOTA_MB, value.coerceIn(MIN_OUTBOX_QUOTA_MB, MAX_OUTBOX_QUOTA_MB)) }
+
+    val outboxQuotaBytes: Long
+        get() = outboxQuotaMb.toLong() * 1024L * 1024L
+
     companion object {
+        const val DEFAULT_OUTBOX_QUOTA_MB = 100
+        const val MIN_OUTBOX_QUOTA_MB = 5
+        const val MAX_OUTBOX_QUOTA_MB = 10_000
+
         private const val KEY_BACKEND_URL = "backend_url"
         private const val KEY_SENSOR_TOKEN = "sensor_token"
         private const val KEY_THEME = "theme_preference"
         private const val KEY_LOCATION_SOURCE = "location_source_preference"
+        private const val KEY_REMOTE_CONTROL = "remote_control_enabled"
+        private const val KEY_OUTBOX_QUOTA_MB = "outbox_quota_mb"
     }
 }

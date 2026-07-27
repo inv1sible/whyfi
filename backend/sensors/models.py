@@ -1,7 +1,10 @@
+import datetime
 import secrets
 import uuid
 
+from django.core.validators import MinValueValidator
 from django.db import models
+from django.utils import timezone
 
 
 def generate_sensor_token() -> str:
@@ -25,7 +28,12 @@ class Sensor(models.Model):
     token = models.CharField(max_length=64, unique=True, editable=False, default=generate_sensor_token)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Any authenticated request at all — SensorTokenAuthentication bumps this
+    # on every call, so once a device is running the remote-control agent it
+    # reads "seconds ago" continuously. Use last_scan_upload_at when you want
+    # "when did this device last actually contribute data".
     last_seen_at = models.DateTimeField(null=True, blank=True)
+    last_scan_upload_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.name} ({self.sensor_type})"
@@ -36,3 +44,105 @@ class Sensor(models.Model):
         # (returned by SensorTokenAuthentication in place of a Django user)
         # as authenticated without pulling in a full user-account system.
         return True
+
+
+class SensorScanPolicy(models.Model):
+    """Remote scanning control for one device, as desired-state reconciliation
+    rather than a command queue.
+
+    The backend can't reach a phone — it sits behind carrier NAT, and Android
+    forbids a server-initiated start of a location foreground service anyway
+    (deliberately: that restriction exists to stop covert remote activation).
+    So the direction is inverted: the phone polls
+    ``POST /sensors/me/heartbeat/``, reports what it's actually doing, and
+    receives what it *should* be doing. Nothing here is a command; it's all
+    state the device converges on.
+
+    That makes "stop then start again quickly" two writes where the last one
+    wins, and makes an offline device catch up correctly whenever it returns,
+    with no queue to drain and no stale command to replay.
+
+    ``policy_revision`` / ``reported_policy_revision`` are the Kubernetes
+    ``metadata.generation`` / ``status.observedGeneration`` trick: any desired
+    change bumps the former, the device echoes it into the latter. Without
+    that pair the UI can only say "sent"; with it, it can tell *pending*
+    (device hasn't picked it up) apart from *applied but not scanning* —
+    which is the state the reported_* fields below then explain.
+    """
+
+    sensor = models.OneToOneField(Sensor, on_delete=models.CASCADE, related_name="scan_policy")
+
+    # --- Desired state (written by the web UI) ---
+    remote_scan_enabled = models.BooleanField(default=False)
+    # 30s is the floor whenever WiFi is included: Android allows 4 WiFi scans
+    # per 2 minutes, so anything tighter just trips the OS throttle. Without
+    # WiFi there's no such limit, hence the lower hard floor here and the
+    # conditional check in SensorScanPolicyUpdateSerializer.
+    scan_interval_seconds = models.PositiveIntegerField(default=60, validators=[MinValueValidator(15)])
+    heartbeat_interval_seconds = models.PositiveIntegerField(default=10, validators=[MinValueValidator(5)])
+    include_wifi = models.BooleanField(default=True)
+    include_cellular = models.BooleanField(default=True)
+    include_ble = models.BooleanField(default=True)
+    include_gnss = models.BooleanField(default=True)
+    # Incremented to ask for exactly one pass now. The device echoes it into
+    # reported_scan_now_nonce once run, giving at-most-once semantics without
+    # a command queue.
+    scan_now_nonce = models.PositiveIntegerField(default=0)
+    # Same nonce trick, for zeroing the device's session counters. Without
+    # this they only reset when the scan service stops — which, once remote
+    # control is armed, is never.
+    reset_counters_nonce = models.PositiveIntegerField(default=0)
+    policy_revision = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # --- Reported state (written by the device's heartbeat) ---
+    # Every field nullable/blank with a default, per AGENT.md: an older APK
+    # simply omits what it doesn't know about, and must keep working.
+    last_heartbeat_at = models.DateTimeField(null=True, blank=True)
+    reported_is_continuous = models.BooleanField(null=True, blank=True)
+    reported_is_scanning = models.BooleanField(null=True, blank=True)
+    reported_phase = models.CharField(max_length=32, blank=True)
+    reported_completed_scans = models.PositiveIntegerField(null=True, blank=True)
+    reported_wifi_unavailable_reason = models.CharField(max_length=200, blank=True)
+    reported_cellular_unavailable_reason = models.CharField(max_length=200, blank=True)
+    reported_ble_unavailable_reason = models.CharField(max_length=200, blank=True)
+    reported_permissions_granted = models.BooleanField(null=True, blank=True)
+    reported_location_services_enabled = models.BooleanField(null=True, blank=True)
+    reported_pending_uploads = models.PositiveIntegerField(null=True, blank=True)
+    reported_outbox_bytes = models.PositiveBigIntegerField(null=True, blank=True)
+    reported_outbox_quota_mb = models.PositiveIntegerField(null=True, blank=True)
+    reported_battery_percent = models.PositiveIntegerField(null=True, blank=True)
+    reported_app_version = models.CharField(max_length=32, blank=True)
+    reported_policy_revision = models.PositiveIntegerField(null=True, blank=True)
+    reported_scan_now_nonce = models.PositiveIntegerField(null=True, blank=True)
+    reported_reset_counters_nonce = models.PositiveIntegerField(null=True, blank=True)
+
+    class Meta:
+        verbose_name_plural = "sensor scan policies"
+
+    def __str__(self):
+        return f"scan policy for {self.sensor.name}"
+
+    @property
+    def agent_online(self) -> bool:
+        """Whether the device's agent is currently reachable.
+
+        Three missed heartbeats plus a grace margin — generous enough to ride
+        out one dropped poll on a flaky mobile connection. Measured against
+        the server's own clock; a device-supplied timestamp is never trusted,
+        which keeps clock skew out of the picture entirely.
+        """
+        if self.last_heartbeat_at is None:
+            return False
+        stale_after = datetime.timedelta(seconds=self.heartbeat_interval_seconds * 3 + 15)
+        return timezone.now() - self.last_heartbeat_at < stale_after
+
+    @property
+    def policy_pending(self) -> bool:
+        """True while the device hasn't yet confirmed the latest desired state.
+
+        A device that has never reported (None) counts as being at revision 0,
+        so a fresh device nobody has given an instruction to reads as settled
+        rather than perpetually "pending".
+        """
+        return (self.reported_policy_revision or 0) != self.policy_revision

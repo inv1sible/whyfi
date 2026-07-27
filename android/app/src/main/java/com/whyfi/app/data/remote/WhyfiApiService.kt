@@ -13,6 +13,16 @@ interface WhyfiApiService {
         @Header("Authorization") authorization: String,
         @Body payload: ScanSessionUploadRequest,
     ): Response<ScanSessionResponse>
+
+    /** One round trip for remote control: the body is what this device is
+     * doing, the response is what it should be doing. Combined into a single
+     * call because the poll runs continuously — two would double the request
+     * count and open a read-modify-write window for no benefit. */
+    @POST("sensors/me/heartbeat/")
+    suspend fun sensorHeartbeat(
+        @Header("Authorization") authorization: String,
+        @Body report: SensorHeartbeatRequest,
+    ): Response<ScanPolicyResponse>
 }
 
 object ApiClientFactory {

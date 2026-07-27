@@ -458,6 +458,115 @@ estimates (the blob from an uncalibrated path-loss model; the cone's
 *length* is real but its ~22° half-angle is stylized, not a measured
 antenna pattern). A crisp edge would claim precision neither model has.
 
+## The android-builder built stale source for days (green builds, missing code)
+
+`android/Dockerfile` does `COPY . .` into `/workspace`, and docker-compose
+originally bind-mounted **only** the keystore and the build-output volume —
+not the app source. So the always-on watcher built whatever source was frozen
+into the image when it was last `docker compose build`-ed. Clicking "Build
+Android App" produced a perfectly green `SUCCESS` and a working APK that
+simply did not contain recent work: the remote-control feature was entirely
+absent from a freshly built APK while every backend test passed.
+
+This is the *same trap* as the `backend/` migrations one further up — a
+container that doesn't see host source — and it's worse here because there is
+no error at all, just silently old code.
+
+Fixed by bind-mounting `./android:/workspace` in docker-compose, so the
+watcher always compiles current source. The `COPY` stays as a fallback for
+running the image standalone.
+
+Two things that fall out of that mount:
+
+- The `ENTRYPOINT` had to change from `["./docker-build.sh"]` to
+  `["sh", "./docker-build.sh"]`. The image's `chmod +x` only applied to the
+  baked copy; the bind-mounted file carries the *host's* permissions, and
+  this repo lives on a filesystem that hands out 0666 and doesn't preserve
+  exec bits, so the old entrypoint would fail with permission denied.
+- Gradle now writes `android/app/build/` and `android/.gradle/` on the host
+  (root-owned, both already gitignored). That's the price of the mount, and
+  it buys incremental builds across runs.
+
+**Verification lesson:** compile-checking with `docker run -v "$PWD/android":/workspace`
+proved nothing about the button, because the button's container had no such
+mount. When verifying a build pipeline, exercise the pipeline — trigger a real
+build and grep the resulting APK's dex for a symbol that only exists in the
+new code (`unzip -o app.apk 'classes*.dex' && grep -a RemoteControlAgent classes*.dex`).
+
+## Remote scanning control: reconciliation, not push
+
+The PWA can start/stop scanning on a phone. It is **not** implemented by the
+backend telling the phone anything, because the backend cannot: the phone is
+behind carrier NAT, and there are two independent Android walls.
+
+Since **Android 12** an app can't start a foreground service from the
+background (`ForegroundServiceStartNotAllowedException`; exemptions are
+`BOOT_COMPLETED`, high-priority FCM, notification interaction). Since
+**Android 11** a background-started *location* FGS gets no location access
+without `ACCESS_BACKGROUND_LOCATION`. Clearing only the first — which is all
+FCM would do — yields a service that starts and scans nothing.
+
+**So don't reach for FCM.** It wouldn't work without also adding background
+location, it contradicts this project's Play-Services-free posture (see the
+`FUSED_PROVIDER` decision), and both restrictions exist precisely to stop
+covert remote activation of a device's sensors — a property worth keeping
+rather than engineering around.
+
+The phone polls `POST /sensors/me/heartbeat/` instead, sending observed state
+and receiving desired state. Desired state (`SensorScanPolicy`), not a
+command queue: idempotent, no stale command replayed after an offline
+stretch, and "stop then start again" is just two writes where the last wins.
+`policy_revision`/`reported_policy_revision` is the Kubernetes
+generation/observedGeneration trick — without it the UI can only say "sent",
+never "the phone has it and still isn't scanning".
+
+Other decisions here that would otherwise look arbitrary:
+
+- The poll lives inside the existing `ScanForegroundService`, not a second
+  service. Two FGSs means two persistent notifications; users kill one and
+  you'd have no idea which.
+- `foregroundServiceType` stays `location|connectedDevice`. **Do not add
+  `dataSync`** for the polling: it carries Android 15's 6h-per-24h FGS
+  timeout at `targetSdk` 35+, which would silently kill this feature on the
+  next SDK bump. `location` has no timeout, and the real work is scanning.
+- `stopIfIdle()` became `stopIfNothingKeepsUsAlive()`. The service used to
+  die whenever idle, which would leave nothing alive to be reached.
+- Remote stop is *graceful* (finishes the pass in flight); the local button
+  still stops immediately. `enqueueForUpload()` is the last thing a pass
+  does, so cancelling mid-pass silently discards its data — tolerable when a
+  human just pressed the button, not when nobody is watching.
+- No `RECEIVE_BOOT_COMPLETED`: a location FGS started from boot gets no
+  location access anyway, so it'd be a running service that scans nothing —
+  worse than being honestly off.
+- Long-polling/WebSocket rejected: `entrypoint.sh` runs gunicorn with 3
+  **sync** workers, so a few hanging requests deadlock the backend, PWA
+  included.
+- `Sensor.last_seen_at` now means "last contact" (heartbeats bump it every
+  few seconds via `SensorTokenAuthentication`). `last_scan_upload_at` was
+  added to preserve "last actually contributed data".
+
+## Android outbox: retry policy and the MB quota
+
+Two latent bugs that only became dangerous once scanning could run
+unattended.
+
+`UploadWorker` used to `Result.retry()` on *any* non-2xx, including a
+permanent 400 from the ingest serializer. One poison payload would wedge the
+entire queue forever: the phone keeps scanning, the map stays empty, and
+nothing anywhere says why. It now deletes on 4xx except 401/403/408/429 —
+those four are about the token or timing rather than the payload, so the scan
+data is still good and stays queued.
+
+The queue cap is a **storage quota in MB (user-set, default 100)**, not a
+scan count. A count is the wrong unit: payload size swings by an order of
+magnitude between a quiet street and an apartment block, so a fixed count
+means wildly different disk use. Eviction is oldest-first, and never evicts
+the last row — a single scan larger than the whole quota would otherwise
+discard every scan forever. Sizes come from
+`SUM(LENGTH(CAST(payloadJson AS BLOB)))`; the `CAST` matters because SQLite's
+`LENGTH()` on TEXT counts characters, not bytes. No Room schema change, so no
+version bump.
+
 ## Open/deferred (v-next, not forgotten, just not now)
 
 - Matter/Thread device discovery (via BLE commissioning adverts + mDNS) —
@@ -469,5 +578,6 @@ antenna pattern). A crisp edge would claim precision neither model has.
   app.
 - Self-hosted offline map tiles (v1 uses public OSM tiles, requires internet
   on the viewing device).
-- Background/periodic Android scanning (v1 is foreground-only, manual/auto
-  "Scan Now" while the app is open).
+- Watching a *specific* WiFi/BLE/LAN device for online/offline transitions.
+  Remote scanning control is a reasonable foundation, but it needs its own
+  watch-list model and a per-device "seen recently" notion.

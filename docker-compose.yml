@@ -57,6 +57,14 @@ services:
       ANDROID_KEY_PASSWORD: ${ANDROID_KEY_PASSWORD:-}
       WHYFI_PUBLIC_URL: ${WHYFI_PUBLIC_URL:-}
     volumes:
+      # The app source is bind-mounted, NOT just baked in by the Dockerfile's
+      # COPY. Without this the watcher builds whatever source was frozen into
+      # the image, so every APK from the PWA's "Build Android App" button
+      # silently ships stale code until someone remembers to
+      # `docker compose build android-builder`. That already happened once —
+      # a whole feature was missing from the APK with a green build. See
+      # MEMORY.md.
+      - ./android:/workspace
       - ./android/keystore:/keystore:ro
       - build_output:/build-output
 

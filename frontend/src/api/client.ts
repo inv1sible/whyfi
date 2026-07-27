@@ -17,6 +17,8 @@ import type {
   SatelliteObservation,
   ScanSession,
   Sensor,
+  SensorScanPolicy,
+  SensorScanPolicyUpdate,
   SensorWithToken,
   WiFiObservation,
 } from "./types";
@@ -185,6 +187,10 @@ export const api = {
   createSensor: (name: string, sensorType = "android") =>
     post<SensorWithToken>("/sensors/", { name, sensor_type: sensorType }),
   regenerateSensorToken: (id: string) => post<SensorWithToken>(`/sensors/${id}/regenerate-token/`),
+  setSensorScanPolicy: (id: string, patch: SensorScanPolicyUpdate) =>
+    post<SensorScanPolicy>(`/sensors/${id}/scan-policy/`, patch),
+  sensorScanNow: (id: string) => post<SensorScanPolicy>(`/sensors/${id}/scan-now/`),
+  resetSensorCounters: (id: string) => post<SensorScanPolicy>(`/sensors/${id}/reset-counters/`),
 
   accessPoints: (query = "") => get<Paginated<AccessPoint>>(`/access-points/${query}`),
   accessPoint: (bssid: string) => get<AccessPoint>(`/access-points/${encodeURIComponent(bssid)}/`),

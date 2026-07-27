@@ -520,6 +520,80 @@ button:disabled {
   background: var(--accent-hover);
 }
 
+/* Remote scanning page — one card per device. Everything else on the page
+   reuses download-card / badge / band-selector / page-hint as-is. */
+.remote-card-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.remote-card-header h2 {
+  margin: 0;
+  margin-right: 0.25rem;
+}
+
+.remote-card-actions {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.remote-intervals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  margin: 0.75rem 0;
+}
+
+/* Overrides .field's column stacking so each interval reads as one line —
+   including the label itself, which otherwise wraps under its own input. */
+.remote-interval {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0;
+  max-width: none;
+  white-space: nowrap;
+}
+
+.remote-interval input {
+  width: 4.5rem;
+}
+
+/* An inline action inside running text, styled as a link rather than a
+   button so it doesn't compete with the card's real controls. */
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-button:disabled {
+  color: var(--text-dim);
+  cursor: default;
+  text-decoration: none;
+}
+
+.remote-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  margin-bottom: 0;
+}
+
+.download-card + .download-card {
+  margin-top: 1rem;
+}
+
 .field {
   display: flex;
   flex-direction: column;

@@ -13,6 +13,22 @@ connection your browser makes visiting a router's admin page — no
 exploitation, no payloads, just connect-and-close). Only run this against a
 network you own or are authorized to test.
 
+whyfi can also be told to scan from its web UI ("Remote control"), which lets
+a phone collect on a schedule while unattended. This collects nothing new —
+the same passive observations, on your own device, to your own server — but
+it does mean a phone can be logging for hours without anyone watching it.
+It is off by default and can only be switched on physically, in the app, on
+the phone itself: no server can turn it on, and it stays off after a reboot
+until someone opens the app again. While it's on, the scanning notification
+is visible the entire time. Keep it that way — if you find yourself wanting
+to hide that notification or auto-start it on boot, you are building
+something this project deliberately isn't.
+
+Be aware that unattended collection accumulates a detailed record of the
+devices around wherever the phone is left, including BLE identifiers that
+may belong to other people's personal devices. Where you leave it, and for
+how long, is a choice with consequences for people who never agreed to it.
+
 You are responsible for using whyfi in compliance with the law and with any
 policies that apply to networks and devices you scan. Only use it on:
 

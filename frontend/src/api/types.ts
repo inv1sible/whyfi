@@ -5,6 +5,63 @@ export interface Paginated<T> {
   results: T[];
 }
 
+/** Remote scanning control for one device.
+ *
+ * Split into what the device *should* be doing (set from this UI) and what it
+ * reports it's *actually* doing. The device converges on the desired state —
+ * nothing here is a queued command, so a click that lands while the phone is
+ * offline simply takes effect whenever it comes back. */
+export interface SensorScanPolicy {
+  // Desired — written from the web UI
+  remote_scan_enabled: boolean;
+  scan_interval_seconds: number;
+  heartbeat_interval_seconds: number;
+  include_wifi: boolean;
+  include_cellular: boolean;
+  include_ble: boolean;
+  include_gnss: boolean;
+  scan_now_nonce: number;
+  reset_counters_nonce: number;
+  policy_revision: number;
+  updated_at: string;
+  // Reported — written by the device's heartbeat
+  last_heartbeat_at: string | null;
+  reported_is_continuous: boolean | null;
+  reported_is_scanning: boolean | null;
+  reported_phase: string;
+  reported_completed_scans: number | null;
+  reported_wifi_unavailable_reason: string;
+  reported_cellular_unavailable_reason: string;
+  reported_ble_unavailable_reason: string;
+  reported_permissions_granted: boolean | null;
+  reported_location_services_enabled: boolean | null;
+  reported_pending_uploads: number | null;
+  reported_outbox_bytes: number | null;
+  reported_outbox_quota_mb: number | null;
+  reported_battery_percent: number | null;
+  reported_app_version: string;
+  reported_policy_revision: number | null;
+  reported_scan_now_nonce: number | null;
+  reported_reset_counters_nonce: number | null;
+  // Derived server-side
+  agent_online: boolean;
+  policy_pending: boolean;
+}
+
+/** The subset a browser may write — reported_* fields are device-only. */
+export type SensorScanPolicyUpdate = Partial<
+  Pick<
+    SensorScanPolicy,
+    | "remote_scan_enabled"
+    | "scan_interval_seconds"
+    | "heartbeat_interval_seconds"
+    | "include_wifi"
+    | "include_cellular"
+    | "include_ble"
+    | "include_gnss"
+  >
+>;
+
 export interface Sensor {
   id: string;
   name: string;
@@ -12,6 +69,10 @@ export interface Sensor {
   is_active: boolean;
   created_at: string;
   last_seen_at: string | null;
+  /** When this device last actually uploaded a scan — distinct from
+   * last_seen_at, which any authenticated request bumps, heartbeats included. */
+  last_scan_upload_at: string | null;
+  scan_policy: SensorScanPolicy;
 }
 
 export interface SensorWithToken extends Sensor {

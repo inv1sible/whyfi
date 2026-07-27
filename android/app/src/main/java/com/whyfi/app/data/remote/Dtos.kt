@@ -98,3 +98,49 @@ data class LanObservationDto(
 data class ScanSessionResponse(
     @SerializedName("id") val id: String,
 )
+
+/**
+ * What this device tells the backend it's actually doing, once per
+ * heartbeat. Everything here is observed state — the backend refuses to let
+ * a device write its own desired state, so none of this can enable scanning.
+ */
+data class SensorHeartbeatRequest(
+    @SerializedName("reported_is_continuous") val reportedIsContinuous: Boolean,
+    @SerializedName("reported_is_scanning") val reportedIsScanning: Boolean,
+    @SerializedName("reported_phase") val reportedPhase: String = "",
+    @SerializedName("reported_completed_scans") val reportedCompletedScans: Int = 0,
+    @SerializedName("reported_wifi_unavailable_reason") val reportedWifiUnavailableReason: String = "",
+    @SerializedName("reported_cellular_unavailable_reason") val reportedCellularUnavailableReason: String = "",
+    @SerializedName("reported_ble_unavailable_reason") val reportedBleUnavailableReason: String = "",
+    @SerializedName("reported_permissions_granted") val reportedPermissionsGranted: Boolean,
+    @SerializedName("reported_location_services_enabled") val reportedLocationServicesEnabled: Boolean,
+    @SerializedName("reported_pending_uploads") val reportedPendingUploads: Int,
+    @SerializedName("reported_outbox_bytes") val reportedOutboxBytes: Long,
+    @SerializedName("reported_outbox_quota_mb") val reportedOutboxQuotaMb: Int,
+    @SerializedName("reported_battery_percent") val reportedBatteryPercent: Int?,
+    @SerializedName("reported_app_version") val reportedAppVersion: String = "",
+    @SerializedName("reported_policy_revision") val reportedPolicyRevision: Int,
+    @SerializedName("reported_scan_now_nonce") val reportedScanNowNonce: Int,
+    @SerializedName("reported_reset_counters_nonce") val reportedResetCountersNonce: Int,
+)
+
+/**
+ * What the backend says this device *should* be doing. Not a command — it's
+ * the target state to converge on, so an instruction issued while this phone
+ * was offline simply takes effect on the next successful heartbeat.
+ *
+ * Defaults are the safe interpretation of a malformed/partial response:
+ * don't scan.
+ */
+data class ScanPolicyResponse(
+    @SerializedName("remote_scan_enabled") val remoteScanEnabled: Boolean = false,
+    @SerializedName("scan_interval_seconds") val scanIntervalSeconds: Int = 60,
+    @SerializedName("heartbeat_interval_seconds") val heartbeatIntervalSeconds: Int = 15,
+    @SerializedName("include_wifi") val includeWifi: Boolean = true,
+    @SerializedName("include_cellular") val includeCellular: Boolean = true,
+    @SerializedName("include_ble") val includeBle: Boolean = true,
+    @SerializedName("include_gnss") val includeGnss: Boolean = true,
+    @SerializedName("scan_now_nonce") val scanNowNonce: Int = 0,
+    @SerializedName("reset_counters_nonce") val resetCountersNonce: Int = 0,
+    @SerializedName("policy_revision") val policyRevision: Int = 0,
+)

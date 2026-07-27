@@ -17,8 +17,10 @@
 - Self-hosted Android build pipeline (Docker, no Android Studio/emulator) and
   self-hosted APK distribution + update-check via the backend's Download
   page.
-- Foreground-only scanning (manual "Scan Now" + in-app auto-scan while the
-  app is open).
+- Scanning is always user-armed: either tapped on the phone, or remotely
+  started from the PWA *after* the phone's owner has switched on Remote
+  control in the app. Nothing scans unattended without that opt-in, and the
+  foreground-service notification is visible the whole time.
 - Zero offensive capability (the LAN scanner's TCP-connect probes are the
   one active exception — see `DISCLAIMER.md`).
 
@@ -26,8 +28,11 @@
 
 - Matter/smart-home device discovery (BLE commissioning adverts + mDNS
   service records) — schema left open, not designed yet.
-- Background/periodic Android scanning service (persistent notification,
-  battery-optimization-exemption flow).
+- Watch a *specific* WiFi/BLE/LAN device and alert when it comes online or
+  goes offline. Remote scanning control (shipped) is a reasonable foundation
+  — the backend already knows what each phone should be doing and hears from
+  it regularly — but this needs its own watch-list model and a per-device
+  notion of "seen recently".
 - SDR/external-hardware sensor track (Kali Linux box, RTL-SDR/HackRF)
   contributing via the same sensor-agnostic ingest API — the actual path to
   monitor-mode WiFi capture and packet crafting, kept off the phone.

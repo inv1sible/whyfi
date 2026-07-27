@@ -13,6 +13,7 @@ type IconName =
   | "lan"
   | "download"
   | "scans"
+  | "remote"
   | "settings";
 
 const commonProps: SVGProps<SVGSVGElement> = {
@@ -112,6 +113,16 @@ export function NavIcon({ name }: { name: IconName }) {
           <path d="M7.5 5V3.5A1.5 1.5 0 0 1 9 2h2a1.5 1.5 0 0 1 1.5 1.5V5" />
           <line x1="8" y1="8.5" x2="8" y2="13.5" />
           <line x1="12" y1="8.5" x2="12" y2="13.5" />
+        </svg>
+      );
+    case "remote":
+      // A phone with signal arcs coming off it — controlling a device remotely.
+      return (
+        <svg {...commonProps}>
+          <rect x="2.5" y="2.5" width="8" height="15" rx="1.5" />
+          <line x1="5.5" y1="14.5" x2="7.5" y2="14.5" />
+          <path d="M13.5 7a4 4 0 0 1 0 6" />
+          <path d="M15.8 4.7a7.2 7.2 0 0 1 0 10.6" />
         </svg>
       );
     case "settings":

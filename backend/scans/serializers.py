@@ -492,6 +492,13 @@ class ScanSessionIngestSerializer(serializers.Serializer):
             # network blip) — return the existing session, don't duplicate.
             return session
 
+        # Distinct from Sensor.last_seen_at, which SensorTokenAuthentication
+        # bumps on *any* authenticated request — including remote-control
+        # heartbeats every few seconds. This is the one that still means
+        # "when did this device last actually contribute data".
+        sensor.last_scan_upload_at = session.completed_at
+        sensor.save(update_fields=["last_scan_upload_at"])
+
         default_observed_at = validated_data["completed_at"]
 
         for item in validated_data.get("wifi_observations", []):

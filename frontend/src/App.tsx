@@ -16,6 +16,7 @@ import { LANDevicesPage } from "./pages/LANDevicesPage";
 import { LoginPage } from "./pages/LoginPage";
 import { ManageScansPage } from "./pages/ManageScansPage";
 import { NetworkDetailPage } from "./pages/NetworkDetailPage";
+import { RemoteScanPage } from "./pages/RemoteScanPage";
 import { SatelliteViewPage } from "./pages/SatelliteViewPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SSIDGroupPage } from "./pages/SSIDGroupPage";
@@ -57,6 +58,7 @@ export function App() {
           <Route path="/lan-devices" element={<LANDevicesPage />} />
           <Route path="/lan-devices/:ip" element={<LANDeviceDetailPage />} />
           <Route path="/download" element={<DownloadPage />} />
+          <Route path="/remote" element={<RemoteScanPage />} />
           <Route path="/scans" element={<ManageScansPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>

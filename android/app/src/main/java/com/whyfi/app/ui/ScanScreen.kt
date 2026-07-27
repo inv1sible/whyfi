@@ -88,6 +88,13 @@ fun ScanScreen() {
 
     var permissionsGranted by remember { mutableStateOf(PermissionHelper.hasAllRequiredPermissions(context)) }
     var locationServicesOn by remember { mutableStateOf(PermissionHelper.isLocationServicesEnabled(context)) }
+    var remoteControlOn by remember { mutableStateOf(false) }
+
+    // The setting outlives this screen (and the service), so re-read it once
+    // the binding lands rather than assuming the local default.
+    LaunchedEffect(service) {
+        service?.let { remoteControlOn = it.isRemoteControlEnabled() }
+    }
 
     var includeWifi by remember { mutableStateOf(true) }
     var includeCellular by remember { mutableStateOf(true) }
@@ -203,6 +210,12 @@ fun ScanScreen() {
             enabled = permissionsGranted && service != null && !uiState.isScanning,
             onClick = {
                 if (uiState.isContinuous) {
+                    // Doubles as the local kill switch while remote control is
+                    // on: whoever is physically holding the phone wins.
+                    if (remoteControlOn) {
+                        service?.setRemoteControlEnabled(false)
+                        remoteControlOn = false
+                    }
                     service?.stopContinuous()
                 } else {
                     locationServicesOn = PermissionHelper.isLocationServicesEnabled(context)
@@ -218,6 +231,14 @@ fun ScanScreen() {
             Text(
                 "Walk around while this runs — each pass is a new map point. Keeps going even if you switch tabs " +
                     "or apps. Completed passes: ${uiState.completedScanCount}",
+            )
+        }
+
+        if (remoteControlOn) {
+            Text(
+                "Remote control is on — the scan settings above are being driven from the web UI. " +
+                    "Turn it off in Settings, or press Stop above, to take back local control.",
+                style = MaterialTheme.typography.bodySmall,
             )
         }
     }

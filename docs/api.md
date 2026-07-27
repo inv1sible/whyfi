@@ -86,7 +86,10 @@ Every `*_observations` array is optional/independently empty. Idempotent on
 - `GET /lan-observations/?since=`
 - `GET /heatmap/?source=wifi|cellular|ble&bounds=<sw_lat>,<sw_lng>,<ne_lat>,<ne_lng>&since=`
 - `GET /app/latest/` — latest **successful** Android release metadata + download URL (session **or** sensor token); 404 while a build is in progress or none has ever succeeded
-- `GET /sensors/` — list, **never includes the token** (see write endpoints below for the one time it's shown)
+- `GET /sensors/` — list, **never includes the token** (see write endpoints below for the one time it's shown).
+  Each sensor carries a nested `scan_policy` object: the desired scanning state, whatever the device last
+  reported about itself, plus derived `agent_online` and `policy_pending` flags. A sensor that has never been
+  controlled or heard from returns defaults without a row being created — reads never write.
 - `GET /android-build/status/` — most recent build attempt (any status), including a live log tail while `QUEUED`/`BUILDING`
 
 ## Write (session login + CSRF required)
@@ -101,6 +104,33 @@ Every `*_observations` array is optional/independently empty. Idempotent on
   Android app's Settings screen.
 - `POST /sensors/{id}/regenerate-token/` — invalidates the old token immediately, returns the new one (again,
   only shown this once). Use this if a token is lost — there's no way to retrieve an existing one afterwards.
+- `POST /sensors/{id}/scan-policy/` — set the *desired* scanning state for one device. Partial: send only what
+  you're changing. Accepts `remote_scan_enabled`, `scan_interval_seconds`, `heartbeat_interval_seconds`,
+  `include_wifi|cellular|ble|gnss`. Every write bumps `policy_revision`. 400 if `scan_interval_seconds` is under
+  30 while `include_wifi` is set (Android throttles WiFi scans to 4 per 2 minutes, so a shorter interval doesn't
+  produce more scans) — the check considers the resulting state, so re-enabling WiFi against an already-stored
+  short interval is rejected too. Hard floor is 15s with WiFi off.
+- `POST /sensors/{id}/scan-now/` — increments `scan_now_nonce`, asking for exactly one pass without changing the
+  running mode. The device echoes the nonce back once it's run it, giving at-most-once semantics with no queue.
+- `POST /sensors/{id}/reset-counters/` — increments `reset_counters_nonce`, zeroing the device's session
+  tallies (completed passes). Same nonce/echo shape as scan-now, and deliberately does *not* bump
+  `policy_revision` — it's a one-off action, not a change to desired state. Needed because those counters
+  otherwise only reset when the scan service stops, which under remote control is never.
+
+## Remote scanning control (sensor token)
+
+- `POST /sensors/me/heartbeat/` — the device half of remote control, and the only endpoint besides ingest that a
+  sensor token can reach. The body is what the device is currently doing (all `reported_*` fields, all optional
+  — an older APK omitting one must not 400); the response is the desired policy. One round trip, called every
+  `heartbeat_interval_seconds`. `me` resolves from the token, so a device can only ever address itself.
+
+  The device cannot write desired state: the request serializer accepts `reported_*` fields only. `last_heartbeat_at`
+  is stamped from the server's clock, never the device's, which keeps clock skew out of the online/offline
+  determination.
+
+  Note this endpoint runs frequently, and `SensorTokenAuthentication` bumps `Sensor.last_seen_at` on every
+  authenticated request — so `last_seen_at` means "last contact". Use `last_scan_upload_at` for "last actually
+  contributed data".
 
 ## Public
 
