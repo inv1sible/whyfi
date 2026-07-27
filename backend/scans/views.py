@@ -67,14 +67,71 @@ def recent_session_ids(n, radio_related_name=None):
     return list(qs.values_list("id", flat=True)[:n])
 
 
-def parse_session_limit(request):
-    raw = request.query_params.get("session_limit")
-    if not raw:
-        return None
+# Grouped coverage/heatmap payloads are assembled row-by-row in Python, so
+# they're bounded to keep one request from reading an unbounded number of
+# observations. Hitting the bound is now reported to the caller rather than
+# silently changing the answer — see capped_take()/capped_response().
+COVERAGE_OBSERVATION_CAP = 20000
+HEATMAP_OBSERVATION_CAP = 5000
+
+# Ceilings for caller-supplied row counts. Generous — these exist to keep a
+# hand-edited URL from turning into an unbounded read, not to constrain the UI.
+MAX_OBSERVATION_LIMIT = 1000
+MAX_GEOCODE_LIMIT = 50
+
+
+def positive_int(raw, default=None, maximum=None):
+    """Parses a caller-supplied positive integer, falling back to `default`
+    for anything unusable: missing, blank, non-numeric, zero or negative.
+
+    Every value these parse into ends up as a queryset slice bound, and
+    Django raises ValueError("Negative indexing is not supported.") on a
+    negative one — so `?session_limit=-1` used to be a plain unhandled 500,
+    as did `?limit=abc` on every per-entity observation endpoint. Falling
+    back beats 400ing: these are view/window hints from the UI, not
+    semantically load-bearing input worth rejecting a whole request over.
+    """
+    if raw is None or raw == "":
+        return default
     try:
-        return int(raw)
-    except ValueError:
-        return None
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    if value <= 0:
+        return default
+    return min(value, maximum) if maximum is not None else value
+
+
+def parse_session_limit(request):
+    return positive_int(request.query_params.get("session_limit"))
+
+
+def parse_observation_limit(request, default=200):
+    return positive_int(request.query_params.get("limit"), default=default, maximum=MAX_OBSERVATION_LIMIT)
+
+
+def capped_take(queryset, cap):
+    """Materializes at most `cap` rows, plus whether more of them matched.
+
+    Fetches one row past the cap rather than running a separate COUNT(*) —
+    the caller only needs "was anything left out", and counting the full
+    unbounded match set is the expensive half of that question.
+    """
+    rows = list(queryset[: cap + 1])
+    return rows[:cap], len(rows) > cap
+
+
+def capped_response(results, truncated, cap):
+    """Envelope for the grouped coverage/heatmap payloads.
+
+    These used to be bare JSON arrays, silently sliced at `cap`, which made
+    an incomplete answer indistinguishable from a complete one — the map
+    just quietly left APs out, in a UI whose entire job is showing you what
+    was there. `truncated` is what lets the PWA say so (see HeatmapPage /
+    SSIDGroupPage) instead of the operator finding out by noticing something
+    missing. Don't flatten this back to a bare list.
+    """
+    return {"results": results, "truncated": truncated, "observation_limit": cap}
 
 
 class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
@@ -118,7 +175,7 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
         session_limit = parse_session_limit(request)
         if session_limit:
             obs = obs.filter(scan_session_id__in=recent_session_ids(session_limit))
-        limit = int(request.query_params.get("limit", 200))
+        limit = parse_observation_limit(request)
         return Response(WiFiObservationSerializer(obs[:limit], many=True).data)
 
     @action(detail=False, methods=["get"])
@@ -148,8 +205,9 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
             # sharing an SSID (e.g. a mesh network), not the whole dataset.
             qs = qs.filter(access_point__ssid=ssid_exact)
 
+        observations, truncated = capped_take(qs, COVERAGE_OBSERVATION_CAP)
         by_ap = {}
-        for obs in qs[:20000]:
+        for obs in observations:
             entry = by_ap.setdefault(
                 obs.access_point_id,
                 {
@@ -194,7 +252,7 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
             }
             for v in by_ap.values()
         ]
-        return Response(results)
+        return Response(capped_response(results, truncated, COVERAGE_OBSERVATION_CAP))
 
 
 class ScanSessionViewSet(
@@ -280,7 +338,11 @@ class ScanSessionViewSet(
         locations (see scans/geocoding.py) — an explicit, human-triggered
         action rather than something that runs automatically, since it
         makes live calls to a third-party service."""
-        limit = int(request.data.get("limit", 20))
+        # Bounded and type-safe: a bare int() here 500'd on any non-numeric
+        # body value, and each resolution sleeps ~1.1s to respect Nominatim's
+        # rate limit, so an unbounded count would tie up one of gunicorn's
+        # three sync workers for as long as the caller asked for.
+        limit = positive_int(request.data.get("limit"), default=20, maximum=MAX_GEOCODE_LIMIT)
         sessions = self.filter_queryset(self.get_queryset()).exclude(latitude__isnull=True).exclude(
             longitude__isnull=True
         )
@@ -355,7 +417,7 @@ class CellTowerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         session_limit = parse_session_limit(request)
         if session_limit:
             obs = obs.filter(scan_session_id__in=recent_session_ids(session_limit))
-        limit = int(request.query_params.get("limit", 200))
+        limit = parse_observation_limit(request)
         return Response(CellObservationSerializer(obs[:limit], many=True).data)
 
     @action(detail=False, methods=["get"])
@@ -378,8 +440,9 @@ class CellTowerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         if session_limit:
             qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
 
+        observations, truncated = capped_take(qs, COVERAGE_OBSERVATION_CAP)
         by_tower = {}
-        for obs in qs[:20000]:
+        for obs in observations:
             entry = by_tower.setdefault(
                 obs.cell_tower_id,
                 {
@@ -418,7 +481,7 @@ class CellTowerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
             }
             for v in by_tower.values()
         ]
-        return Response(results)
+        return Response(capped_response(results, truncated, COVERAGE_OBSERVATION_CAP))
 
 
 class CellObservationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
@@ -487,8 +550,9 @@ class BLEObservationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         if session_limit:
             qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
 
+        observations, truncated = capped_take(qs, COVERAGE_OBSERVATION_CAP)
         by_device = {}
-        for obs in qs[:20000]:
+        for obs in observations:
             identifier = obs.ble_mac or obs.stable_identifier
             if not identifier:
                 continue
@@ -534,7 +598,7 @@ class BLEObservationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
             }
             for v in by_device.values()
         ]
-        return Response(results)
+        return Response(capped_response(results, truncated, COVERAGE_OBSERVATION_CAP))
 
 
 class BLEDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
@@ -565,7 +629,7 @@ class BLEDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         session_limit = parse_session_limit(request)
         if session_limit:
             obs = obs.filter(scan_session_id__in=recent_session_ids(session_limit))
-        limit = int(request.query_params.get("limit", 200))
+        limit = parse_observation_limit(request)
         return Response(BLEObservationSerializer(obs[:limit], many=True).data)
 
 
@@ -667,7 +731,7 @@ class LANDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
             obs = obs.filter(
                 scan_session_id__in=recent_session_ids(session_limit, radio_related_name="lan_observations")
             )
-        limit = int(request.query_params.get("limit", 200))
+        limit = parse_observation_limit(request)
         return Response(LANObservationSerializer(obs[:limit], many=True).data)
 
 
@@ -743,8 +807,9 @@ def heatmap(request):
     # also tracks which sources (APs/towers/BLE devices) contributed to it,
     # so the map can show "what's actually here" with a link through to the
     # detail page — not just an anonymous intensity value.
+    observations, truncated = capped_take(qs, HEATMAP_OBSERVATION_CAP)
     buckets = {}
-    for obs in qs[:5000]:
+    for obs in observations:
         key = (round(obs.scan_session.latitude, 4), round(obs.scan_session.longitude, 4))
         value = getattr(obs, weight_field) or 0
         bucket = buckets.setdefault(key, {"sum": 0, "count": 0, "sources": {}})
@@ -783,4 +848,4 @@ def heatmap(request):
             }
         points.append(point)
 
-    return Response(points)
+    return Response(capped_response(points, truncated, HEATMAP_OBSERVATION_CAP))

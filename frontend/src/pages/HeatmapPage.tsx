@@ -11,7 +11,7 @@ import { resolveCurrentScanMultiDevice } from "../currentScan";
 import { weightedCentroid } from "../geo";
 import { usePolling } from "../hooks/usePolling";
 import { signalStrengthColor, signalStrengthLabel } from "../signalColor";
-import type { AccessPointCoverage, HeatmapSource, RadioCoverage } from "../api/types";
+import type { AccessPointCoverage, CappedList, HeatmapSource, RadioCoverage } from "../api/types";
 
 const SOURCES: { value: HeatmapSource; label: string }[] = [
   { value: "wifi", label: "WiFi signal" },
@@ -37,6 +37,15 @@ function toGenericCoverage(items: AccessPointCoverage[] | RadioCoverage[]): Radi
   );
 }
 
+interface CoverageData {
+  bySource: Record<HeatmapSource, RadioCoverage[]>;
+  // Which active sources came back capped (see CappedList) — the map is
+  // missing devices for these, and saying so is the whole point of tracking
+  // it: a silently short answer here looks exactly like a quiet area.
+  truncatedSources: HeatmapSource[];
+  observationLimit: number | null;
+}
+
 export function HeatmapPage() {
   // Independently toggleable — any combination of the three can be active
   // at once, not just "one at a time" or "all three".
@@ -53,19 +62,25 @@ export function HeatmapPage() {
     setEnabled((prev) => ({ ...prev, [source]: !prev[source] }));
   }
 
-  const { data, error, loading } = usePolling<Record<HeatmapSource, RadioCoverage[]>>(
+  const { data, error, loading } = usePolling<CoverageData>(
     async () => {
-      const fetchers: Record<HeatmapSource, () => Promise<AccessPointCoverage[] | RadioCoverage[]>> = {
+      const fetchers: Record<
+        HeatmapSource,
+        () => Promise<CappedList<AccessPointCoverage> | CappedList<RadioCoverage>>
+      > = {
         wifi: () => api.accessPointsCoverage({ since: filter.since, sessionLimit: filter.sessionLimit }),
         cellular: () => api.cellTowersCoverage({ since: filter.since, sessionLimit: filter.sessionLimit }),
         ble: () => api.bleObservationsCoverage({ since: filter.since, sessionLimit: filter.sessionLimit }),
       };
-      const results = await Promise.all(activeSources.map((source) => fetchers[source]()));
+      const responses = await Promise.all(activeSources.map((source) => fetchers[source]()));
       const bySource = { wifi: [], cellular: [], ble: [] } as Record<HeatmapSource, RadioCoverage[]>;
+      const truncatedSources: HeatmapSource[] = [];
       activeSources.forEach((source, index) => {
-        bySource[source] = toGenericCoverage(results[index]);
+        bySource[source] = toGenericCoverage(responses[index].results);
+        if (responses[index].truncated) truncatedSources.push(source);
       });
-      return bySource;
+      // Same cap for every source, so any response reports it.
+      return { bySource, truncatedSources, observationLimit: responses[0]?.observation_limit ?? null };
     },
     20000,
     [activeSources.join(","), filter.since, filter.sessionLimit],
@@ -73,7 +88,7 @@ export function HeatmapPage() {
 
   const { coveragePolygons, mobilePoints, devicePoints, deviceCount, currentScanLabel, visibleReadings } = useMemo(() => {
     const allDevices: RadioCoverage[] = [];
-    activeSources.forEach((source) => (data?.[source] ?? []).forEach((device) => allDevices.push(device)));
+    activeSources.forEach((source) => (data?.bySource[source] ?? []).forEach((device) => allDevices.push(device)));
 
     // ONE shared chronological timeline across every active device (a
     // single scan pass observes several APs/towers/BLE devices at once) —
@@ -101,7 +116,7 @@ export function HeatmapPage() {
       // it, same as the detail pages).
       const soloPolygons: CoveragePolygon[] = [];
       activeSources.forEach((source) => {
-        (data?.[source] ?? []).forEach((device) => {
+        (data?.bySource[source] ?? []).forEach((device) => {
           const readingsHere = device.points.filter(isPointVisible);
           const isForcedMobile =
             source === "ble" && device.device_type_guess != null && ALWAYS_MOBILE_BLE_TYPES.has(device.device_type_guess);
@@ -142,7 +157,7 @@ export function HeatmapPage() {
     const points: MapPoint[] = [];
 
     activeSources.forEach((source) => {
-      const devices = data?.[source] ?? [];
+      const devices = data?.bySource[source] ?? [];
       devices.forEach((device) => {
         const visiblePoints =
           cutoff === null ? device.points : device.points.filter((p) => !p.observed_at || p.observed_at <= cutoff);
@@ -230,6 +245,15 @@ export function HeatmapPage() {
         <p className="page-hint">
           "All time" can span very different locations if you've traveled with the phone — the map zooms out to fit
           everything, which can make individual shapes hard to see. Narrow the range above for a clearer local view.
+        </p>
+      )}
+
+      {data && data.truncatedSources.length > 0 && (
+        <p className="warning-text">
+          Incomplete map:{" "}
+          {data.truncatedSources.map((source) => SOURCES.find((s) => s.value === source)?.label).join(" and ")} matched
+          more than {data.observationLimit?.toLocaleString()} observations, so some devices are missing from the shapes
+          below. Narrow the time range or scan window above for the full picture.
         </p>
       )}
 

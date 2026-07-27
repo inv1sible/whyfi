@@ -307,6 +307,22 @@ export interface BuildStatusResponse {
 
 export type HeatmapSource = "wifi" | "cellular" | "ble";
 
+/**
+ * The coverage and heatmap endpoints group raw observations server-side, so
+ * they're bounded by an observation cap rather than paginated.
+ *
+ * `truncated` means that cap was hit and the payload is therefore an
+ * incomplete answer. Surface it — these used to be bare arrays, silently
+ * sliced, which made a partial map indistinguishable from a complete one on
+ * a page whose whole purpose is showing what's out there. See
+ * `capped_response()` in `backend/scans/views.py`.
+ */
+export interface CappedList<T> {
+  results: T[];
+  truncated: boolean;
+  observation_limit: number;
+}
+
 export interface AccessPointCoverage {
   bssid: string;
   ssid: string;

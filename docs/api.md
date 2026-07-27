@@ -12,7 +12,13 @@ Two independent auth mechanisms, layered on top of each other:
   session-authenticated action (a human managing their own devices), not
   something a device can do for itself.
 
-Only `/health/` and the three `/auth/` endpoints below are public.
+Only `/health/` and the three `/auth/` endpoints below are public. That
+includes `/media/` (the built APKs): it's served through a login-gated view
+rather than a bare `static_serve`, and accepts either a session or a
+short-lived signed `?t=` token scoped to that one file. `download_url` in
+`/app/latest/` always carries such a token, which is what keeps the Download
+page's QR code scannable from the phone being sideloaded — a browser with no
+whyfi session.
 
 ## Auth endpoints
 
@@ -75,6 +81,18 @@ Every `*_observations` array is optional/independently empty. Idempotent on
 `client_scan_id` — replaying the same payload returns the existing session
 (200) instead of duplicating rows.
 
+Also **atomic** (`@transaction.atomic` on the ingest serializer's `create`),
+and that isn't optional given the idempotency above: a session committed with
+only part of its observations would make the device's retry a no-op — it hits
+the "already exists" branch, gets a 201 and drops the payload from its outbox
+— so the missing rows would never be written by anyone.
+
+`security_type` is derived server-side from the raw `capabilities` string,
+keyed on the *key management* token rather than the protocol prefix: Android
+reports WPA3 as `[RSN-SAE-CCMP]`, containing the substring "WPA3" nowhere at
+all. Values are `OPEN`, `WEP`, `WPA`, `WPA2`, `WPA3`, `WPA2_WPA3`, `OWE`
+(Enhanced Open — encrypted, but joinable with no credential) and `UNKNOWN`.
+
 ## Read (session login required)
 
 - `GET /access-points/` (includes `latest_channel`), `/access-points/{bssid}/`, `/access-points/{bssid}/wifi-observations/`
@@ -84,13 +102,38 @@ Every `*_observations` array is optional/independently empty. Idempotent on
 - `GET /ble-observations/?device_type=&since=&identifier=` — `identifier` matches either `ble_mac` or `stable_identifier`, for one device's sighting history; also includes each sighting's `latitude`/`longitude` (from its scan session)
 - `GET /satellite-observations/`
 - `GET /lan-observations/?since=`
-- `GET /heatmap/?source=wifi|cellular|ble&bounds=<sw_lat>,<sw_lng>,<ne_lat>,<ne_lng>&since=`
-- `GET /app/latest/` — latest **successful** Android release metadata + download URL (session **or** sensor token); 404 while a build is in progress or none has ever succeeded
+- `GET /heatmap/?source=wifi|cellular|ble&bounds=<sw_lat>,<sw_lng>,<ne_lat>,<ne_lng>&since=` — grid-bucketed points; **capped envelope**, see below
+- `GET /access-points/coverage/?ssid_exact=&since=`, `GET /cell-towers/coverage/?since=`, `GET /ble-observations/coverage/?since=` — per-AP/tower/device list of distinct observed locations with a weight (mean RSSI/dBm from that spot), which is what the map's coverage shapes are built from. **Capped envelope**, see below
+- `GET /app/latest/` — latest **successful** Android release metadata + download URL (session **or** sensor token); 404 while a build is in progress or none has ever succeeded. `download_url` is absolute and carries a signed, path-scoped, 30-minute `?t=` token so it's fetchable from a phone with no session
 - `GET /sensors/` — list, **never includes the token** (see write endpoints below for the one time it's shown).
   Each sensor carries a nested `scan_policy` object: the desired scanning state, whatever the device last
   reported about itself, plus derived `agent_online` and `policy_pending` flags. A sensor that has never been
   controlled or heard from returns defaults without a row being created — reads never write.
 - `GET /android-build/status/` — most recent build attempt (any status), including a live log tail while `QUEUED`/`BUILDING`
+
+### Shared read parameters
+
+- `session_limit=N` — "last N scans" instead of a time cutoff (`since`), because a duration doesn't line up with how
+  often you actually scanned. Takes precedence over `since` where both are accepted. For LAN endpoints it counts only
+  sessions that contain LAN observations (a LAN sweep is its own session type and is much sparser).
+- `limit=N` — row cap on the per-entity observation endpoints; defaults to 200, ceiling 1000.
+- Unusable values for either (non-numeric, zero, negative) fall back to the default rather than erroring — they're view
+  hints from the UI, not load-bearing input. They used to be passed straight to `int()` and into a queryset slice, where
+  a negative number is an unhandled `ValueError` and therefore a 500.
+
+### Capped envelopes (coverage + heatmap)
+
+These four group raw observations in Python rather than paginating, so they're bounded by an observation cap
+(20 000 for coverage, 5 000 for the heatmap) and return an envelope rather than a bare array:
+
+```json
+{"results": [...], "truncated": false, "observation_limit": 20000}
+```
+
+`truncated` means the cap was reached and the answer is knowingly incomplete. It exists because these used to be bare
+arrays, silently sliced — a partial map was indistinguishable from a complete one, on a page whose whole job is showing
+what's out there. The PWA surfaces it as a warning above the map (HeatmapPage/SSIDGroupPage); any new consumer should
+too, rather than reading `results` and ignoring the flag.
 
 ## Write (session login + CSRF required)
 
@@ -127,6 +170,13 @@ Every `*_observations` array is optional/independently empty. Idempotent on
   The device cannot write desired state: the request serializer accepts `reported_*` fields only. `last_heartbeat_at`
   is stamped from the server's clock, never the device's, which keeps clock skew out of the online/offline
   determination.
+
+  `agent_online` is judged against the cadence the device *actually* polls at, not `heartbeat_interval_seconds`:
+  while armed but not scanning it backs off to `min(interval * 4, 60s)` to save battery, and the staleness window
+  (`expected_heartbeat_interval_seconds * 2 + 15s`) mirrors that. Computing it from the configured interval instead
+  left 5s of margin at the default and made a healthy idle device at `heartbeat_interval_seconds=15` flap between
+  online and offline forever. If you change the backoff in `RemoteControlAgent`, change the constants in
+  `sensors/models.py` with it.
 
   Note this endpoint runs frequently, and `SensorTokenAuthentication` bumps `Sensor.last_seen_at` on every
   authenticated request — so `last_seen_at` means "last contact". Use `last_scan_upload_at` for "last actually

@@ -61,6 +61,11 @@ class SecurityType(models.TextChoices):
     WPA2 = "WPA2", "WPA2"
     WPA3 = "WPA3", "WPA3"
     WPA2_WPA3 = "WPA2_WPA3", "WPA2/WPA3"
+    # Enhanced Open: no credential to join, but the link is still encrypted
+    # per-client. Its own value rather than OPEN (which the UI flags red as
+    # unencrypted) or WPA2 (which implies a password) — see
+    # security_type_from_capabilities() in serializers.py.
+    OWE = "OWE", "Enhanced Open (OWE)"
     UNKNOWN = "UNKNOWN", "Unknown"
 
 

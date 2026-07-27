@@ -11,6 +11,18 @@ def generate_sensor_token() -> str:
     return secrets.token_hex(32)
 
 
+# These two mirror RemoteControlAgent.IDLE_BACKOFF / IDLE_MAX_MS in the
+# Android app: while armed but not scanning, the device polls at
+# min(interval * 4, 60s) rather than at the configured interval. The server
+# has to know that to judge whether a device has actually gone quiet — see
+# SensorScanPolicy.expected_heartbeat_interval_seconds. Keep them in step.
+AGENT_IDLE_BACKOFF_MULTIPLIER = 4
+AGENT_IDLE_POLL_CEILING_SECONDS = 60
+
+# Absorbs mobile-network jitter on top of one tolerated missed check-in.
+AGENT_HEARTBEAT_GRACE_SECONDS = 15
+
+
 class Sensor(models.Model):
     """A reporting device (in v1: an Android phone). Auth is a per-device
     token, managed via the PWA's Settings > Sensors tab (or Django admin) —
@@ -124,17 +136,51 @@ class SensorScanPolicy(models.Model):
         return f"scan policy for {self.sensor.name}"
 
     @property
+    def expected_heartbeat_interval_seconds(self) -> int:
+        """How often this device is actually expected to check in right now.
+
+        The device does not poll at ``heartbeat_interval_seconds`` unless it's
+        scanning: while armed-but-idle it backs off (there's nothing to be
+        responsive to, and it's a phone on battery). That backoff lives in
+        ``RemoteControlAgent.run()`` and the constants below mirror it — if
+        you change one side, change the other, because staleness is judged
+        against this number.
+
+        Keyed on desired *and* reported state agreeing, not desired alone.
+        Right after the operator enables scanning the device is still on its
+        idle cadence for one more poll, so trusting desired state by itself
+        would tighten the window before the device could possibly meet it.
+        """
+        scanning = bool(self.remote_scan_enabled and self.reported_is_continuous)
+        if scanning:
+            return self.heartbeat_interval_seconds
+        return min(
+            self.heartbeat_interval_seconds * AGENT_IDLE_BACKOFF_MULTIPLIER,
+            AGENT_IDLE_POLL_CEILING_SECONDS,
+        )
+
+    @property
     def agent_online(self) -> bool:
         """Whether the device's agent is currently reachable.
 
-        Three missed heartbeats plus a grace margin — generous enough to ride
-        out one dropped poll on a flaky mobile connection. Measured against
-        the server's own clock; a device-supplied timestamp is never trusted,
-        which keeps clock skew out of the picture entirely.
+        One fully missed check-in at the device's *actual* cadence, plus a
+        grace margin for network jitter. Measured against the server's own
+        clock; a device-supplied timestamp is never trusted, which keeps clock
+        skew out of the picture entirely.
+
+        This used to be ``heartbeat_interval_seconds * 3 + 15``, which sounds
+        generous but is computed from the wrong number: an idle device polls
+        at four times that interval. At the default 10s it left 5s of margin
+        (a 40s poll against a 45s window), and at 15s the window and the
+        device's capped 60s idle poll coincided exactly — so a perfectly
+        healthy armed device flapped between online and offline forever. See
+        expected_heartbeat_interval_seconds.
         """
         if self.last_heartbeat_at is None:
             return False
-        stale_after = datetime.timedelta(seconds=self.heartbeat_interval_seconds * 3 + 15)
+        stale_after = datetime.timedelta(
+            seconds=self.expected_heartbeat_interval_seconds * 2 + AGENT_HEARTBEAT_GRACE_SECONDS
+        )
         return timezone.now() - self.last_heartbeat_at < stale_after
 
     @property

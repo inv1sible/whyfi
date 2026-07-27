@@ -179,6 +179,14 @@ export function DownloadPage() {
             <div>
               <p className="page-hint">Or scan from another device:</p>
               <img src={qrDataUrl} alt="QR code linking to the APK download" width={220} height={220} />
+              {/* APK downloads require a login, so this link carries a signed
+                  token instead — the scanning phone has no whyfi session. It's
+                  deliberately short-lived, which is worth saying out loud
+                  since a stale QR just fails on the phone with no context. */}
+              <p className="page-hint">
+                This link is signed and expires after 30 minutes — reload this page for a fresh code if the phone says
+                the download isn't allowed.
+              </p>
             </div>
           )}
           <p className="page-hint">

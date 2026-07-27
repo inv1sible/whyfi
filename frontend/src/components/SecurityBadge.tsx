@@ -5,12 +5,15 @@ const LABELS: Record<string, string> = {
   WPA2: "WPA2",
   WPA3: "WPA3",
   WPA2_WPA3: "WPA2/WPA3",
+  OWE: "Enhanced Open (OWE)",
   UNKNOWN: "Unknown",
 };
 
 function severity(securityType: string | null): "danger" | "warning" | "ok" | "neutral" {
   if (securityType === "OPEN") return "danger";
-  if (securityType === "WEP") return "warning";
+  // OWE encrypts the link but takes no credential to join — better than an
+  // open network, not equivalent to a password-protected one.
+  if (securityType === "WEP" || securityType === "OWE") return "warning";
   if (securityType === "WPA2" || securityType === "WPA3" || securityType === "WPA2_WPA3") return "ok";
   return "neutral";
 }

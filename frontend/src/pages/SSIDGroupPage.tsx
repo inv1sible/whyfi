@@ -31,13 +31,17 @@ export function SSIDGroupPage() {
         currentScanLabel: null,
         visibleReadings: [] as { bssid: string; weight: number; observedAt?: string }[],
       };
+    // .results, not the response itself — the coverage endpoints return a
+    // CappedList envelope so a capped (incomplete) answer can be told apart
+    // from a complete one. See the warning below the map.
+    const devices = coverage.data.results;
     const polys: CoveragePolygon[] = [];
     const points: MapPoint[] = [];
 
     // Same shared multi-device timeline as the Heatmap page — one scan
     // pass sees several of this SSID's BSSIDs at once, so the slider
     // means the same physical scan for all of them.
-    const timeline = resolveCurrentScanMultiDevice(coverage.data, filter.scanIndexPercent);
+    const timeline = resolveCurrentScanMultiDevice(devices, filter.scanIndexPercent);
 
     // Same slider-following readings the map shows, flattened for the
     // signal chart and sighting table below — mirrors the detail pages.
@@ -45,7 +49,7 @@ export function SSIDGroupPage() {
       filter.mapDisplayMode === "solo"
         ? timeline.scanSessionId === null || p.scan_session_id === timeline.scanSessionId
         : timeline.cutoffObservedAt === null || !p.observed_at || p.observed_at <= timeline.cutoffObservedAt;
-    const readings = coverage.data.flatMap((ap) =>
+    const readings = devices.flatMap((ap) =>
       ap.points.filter(isPointVisible).map((p) => ({ bssid: ap.bssid, weight: p.weight, observedAt: p.observed_at })),
     );
 
@@ -56,7 +60,7 @@ export function SSIDGroupPage() {
       // way the outline keeps that BSSID's palette color (matching the
       // table's color dots) while the fill carries the signal-strength
       // info, same split as everywhere else on this page.
-      coverage.data.forEach((ap, index) => {
+      devices.forEach((ap, index) => {
         const apEstimatedLocation =
           ap.points.length > 0 ? weightedCentroid(ap.points.map((p) => ({ lat: p.lat, lng: p.lng, weight: p.weight }))) : null;
         soloShapes(ap.points.filter(isPointVisible), apEstimatedLocation, "wifi").forEach((shape) => {
@@ -81,7 +85,7 @@ export function SSIDGroupPage() {
     }
 
     const cutoff = timeline.cutoffObservedAt;
-    coverage.data.forEach((ap, index) => {
+    devices.forEach((ap, index) => {
       const color = PALETTE[index % PALETTE.length];
       const visiblePoints = cutoff === null ? ap.points : ap.points.filter((p) => !p.observed_at || p.observed_at <= cutoff);
       if (visiblePoints.length === 0) return;
@@ -177,6 +181,12 @@ export function SSIDGroupPage() {
       )}
 
       <h2>Coverage per access point</h2>
+      {coverage.data?.truncated && (
+        <p className="warning-text">
+          Incomplete: this SSID matched more than {coverage.data.observation_limit.toLocaleString()} observations, so
+          some sightings are missing from the shapes below.
+        </p>
+      )}
       {polygons.length === 0 && mobilePoints.length === 0 && coverage.data && (
         <p className="page-hint">No geotagged sightings yet for any BSSID in this group.</p>
       )}

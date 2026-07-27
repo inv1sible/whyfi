@@ -22,6 +22,82 @@ stale, and don't duplicate what's already obvious from code/tests.
   APK downloads) on one plain HTTP port. If you're tempted to add nginx
   "for production," don't — ask first, this was a deliberate simplification.
 
+- **WiFi security is parsed from the *key management* token, not the protocol
+  prefix.** Android builds `ScanResult.capabilities` as
+  `[<protocol>-<key mgmt>-<cipher>]` and calls the protocol `RSN` — never
+  `WPA3` — for everything SAE/OWE/Suite-B based. So a WPA3 network reads
+  `[RSN-SAE-CCMP][ESS][MFPR][MFPC]` and contains the string "WPA3" nowhere at
+  all. The original parser matched protocol names, which meant *every* WPA3,
+  WPA2/WPA3-transition and OWE network was stored as `UNKNOWN`: grey "Unknown"
+  badge in the PWA, and `?security=WPA3` matching nothing, ever. Same class of
+  bug had the OPEN check as an exact `== "[ESS]"`, so the very common
+  `[ESS][WPS]` was UNKNOWN too. Now keyed on SAE / PSK+SAE / EAP_SUITE_B_192 /
+  OWE / PSK, with `RSN` treated as a WPA2 spelling. `OWE` is its own
+  `SecurityType` value — Enhanced Open is encrypted but takes no credential,
+  so folding it into OPEN (flagged red as "unencrypted") or WPA2 (implies a
+  password) would both be wrong. `SecurityParsingTests` pins the exact strings;
+  don't "simplify" this back to substring-matching scheme names.
+
+- **Ingest atomicity is a decorator, and it's load-bearing.** `@transaction.atomic`
+  on `ScanSessionIngestSerializer.create` — there is no `ATOMIC_REQUESTS` and
+  the read endpoints don't need one. This was missing originally while three
+  places (the serializer comment, AGENT.md, docs/api.md) claimed the endpoint
+  was atomic. It matters *because* ingest is idempotent: a session committed
+  with only some of its observations makes the device's retry a no-op — it
+  matches on `client_scan_id`, gets a 201, deletes the payload from its outbox
+  — so the missing observations are never written by anyone, silently and
+  permanently. Tested by failing the satellite loop specifically (after WiFi,
+  cell and BLE have already inserted) and asserting nothing survives.
+
+- **`agent_online` is judged against the device's *actual* poll cadence.**
+  A device that's armed but not scanning backs off to
+  `min(heartbeat_interval * 4, 60s)` (`RemoteControlAgent.IDLE_BACKOFF` /
+  `IDLE_MAX_MS`) — there's nothing to be responsive to and it's a phone on
+  battery. The staleness window was originally `heartbeat_interval * 3 + 15`,
+  computed from the configured interval rather than the real one: at the
+  default 10s that's a 40s idle poll against a 45s window (5s of margin, so
+  ordinary jitter reads as offline), and at `heartbeat_interval_seconds=15` the
+  60s window and the capped 60s idle poll coincided *exactly*, so a healthy
+  armed device flapped online/offline indefinitely. Now
+  `expected_heartbeat_interval_seconds * 2 + 15`, where the expected interval
+  mirrors the client's backoff — and keys on desired **and** reported scanning
+  state agreeing, so enabling scanning doesn't tighten the window during the
+  one poll before the device can possibly have picked it up. The constants in
+  `sensors/models.py` and `RemoteControlAgent`'s companion object have to move
+  together.
+
+- **`/media/` (APK downloads) is login-gated, not a bare `static_serve`.**
+  It was wired directly to `django.views.static.serve` with no auth, which
+  contradicted the "only `/health/` and `/auth/*` are public" rule below — the
+  APK was fetchable by anyone with the URL, and the names are predictable
+  (`whyfi-<version_name>.apk`, version_name defaulting to a timestamp). Now
+  `config/views.protected_media`, which takes either a logged-in session or a
+  short-lived signed `?t=` token naming that one path
+  (`distribution/download_tokens.py`).
+  **The token is not optional convenience** — without it this change silently
+  breaks the Download page's QR code, which exists precisely so you scan it
+  with the phone you're about to sideload, and that browser has no whyfi
+  session. That's also why the token can't be dropped in favour of "just log
+  in on the phone too": the QR is the flow. `download_url` in `/app/latest/`
+  therefore always carries a token; it's only ever minted into a response that
+  required auth to fetch, it names a single path, and it expires (30 min,
+  checked at request start so a slow mobile download isn't cut off).
+  Returns JSON 403 rather than redirecting, because there is no Django login
+  *view* here — a redirect would land on the SPA catch-all and return HTML to
+  something that asked for a binary.
+
+- **Coverage/heatmap responses are `{results, truncated, observation_limit}`
+  envelopes.** They group raw observations in Python rather than paginating, so
+  they're bounded (20 000 coverage / 5 000 heatmap). They used to be bare
+  arrays with the cap applied as a silent slice, which made an incomplete
+  answer indistinguishable from a complete one — on a map page, missing APs
+  look exactly like a quiet neighborhood, and there's prior form for that
+  confusion here (see "the heatmap showing nothing" below, where the data was
+  fine and the *display* was the problem). `truncated` is computed by fetching
+  one row past the cap rather than a second `COUNT(*)`. The PWA shows a
+  `.warning-text` line above the map; keep new consumers doing the same
+  instead of reading `results` and dropping the flag.
+
 - **Anti-stalking tracker detection was designed, then explicitly cut.** An
   earlier plan draft included a `trackers` app with `SuspectedTracker`
   correlation/alerting ("this device has followed you across N locations").

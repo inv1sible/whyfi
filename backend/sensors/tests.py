@@ -387,8 +387,23 @@ class PolicyPendingTests(TestCase):
 
 
 class AgentOnlineTests(TestCase):
+    """Staleness is judged against the cadence the device *actually* polls at,
+    which is not `heartbeat_interval_seconds` unless it's scanning: while
+    armed-but-idle RemoteControlAgent backs off to min(interval * 4, 60s).
+
+    The original formula (`interval * 3 + 15`) was computed from the
+    configured interval instead, which left only 5s of margin at the default
+    10s (a 40s idle poll against a 45s window) and coincided *exactly* with
+    the device's capped 60s idle poll at interval=15 — so a perfectly healthy
+    armed device flapped between online and offline indefinitely.
+    """
+
     def setUp(self):
         self.sensor = Sensor.objects.create(name="Phone A")
+
+    def _at(self, policy, seconds_later, base):
+        with mock.patch("sensors.models.timezone.now", return_value=base + datetime.timedelta(seconds=seconds_later)):
+            return policy.agent_online
 
     def test_offline_when_never_heard_from(self):
         policy = SensorScanPolicy.objects.create(sensor=self.sensor)
@@ -398,26 +413,71 @@ class AgentOnlineTests(TestCase):
         policy = SensorScanPolicy.objects.create(sensor=self.sensor, last_heartbeat_at=timezone.now())
         self.assertTrue(policy.agent_online)
 
-    def test_offline_once_three_intervals_have_passed(self):
-        now = timezone.now()
-        policy = SensorScanPolicy.objects.create(
-            sensor=self.sensor,
-            heartbeat_interval_seconds=15,
-            last_heartbeat_at=now,
-        )
-        # 15 * 3 + 15s grace = 60s; step just past it.
-        with mock.patch("sensors.models.timezone.now", return_value=now + datetime.timedelta(seconds=61)):
-            self.assertFalse(policy.agent_online)
+    def test_expected_interval_follows_the_devices_idle_backoff(self):
+        policy = SensorScanPolicy(sensor=self.sensor, heartbeat_interval_seconds=10)
+        self.assertEqual(policy.expected_heartbeat_interval_seconds, 40)
 
-    def test_still_online_within_the_grace_window(self):
+        # Capped at 60s, same as the agent's IDLE_MAX_MS.
+        policy.heartbeat_interval_seconds = 30
+        self.assertEqual(policy.expected_heartbeat_interval_seconds, 60)
+
+        # Actively scanning: no backoff, so the full-rate interval applies.
+        policy.heartbeat_interval_seconds = 10
+        policy.remote_scan_enabled = True
+        policy.reported_is_continuous = True
+        self.assertEqual(policy.expected_heartbeat_interval_seconds, 10)
+
+    def test_idle_device_survives_one_dropped_poll(self):
+        # The case that used to flap: default interval, device idling at 40s.
+        now = timezone.now()
+        policy = SensorScanPolicy.objects.create(
+            sensor=self.sensor, heartbeat_interval_seconds=10, last_heartbeat_at=now
+        )
+        self.assertTrue(self._at(policy, 45, now))  # old window ended here
+        self.assertTrue(self._at(policy, 80, now))  # one poll missed entirely
+        self.assertFalse(self._at(policy, 96, now))  # 40 * 2 + 15s grace
+
+    def test_idle_device_at_a_15s_interval_does_not_flap(self):
+        # interval 15 -> capped 60s idle poll, which exactly equalled the old
+        # 60s staleness window.
+        now = timezone.now()
+        policy = SensorScanPolicy.objects.create(
+            sensor=self.sensor, heartbeat_interval_seconds=15, last_heartbeat_at=now
+        )
+        self.assertTrue(self._at(policy, 61, now))
+        self.assertFalse(self._at(policy, 136, now))  # 60 * 2 + 15s grace
+
+    def test_scanning_device_is_judged_at_the_full_rate(self):
+        # No backoff while scanning, so going quiet is noticed quickly rather
+        # than after the idle device's much longer window.
         now = timezone.now()
         policy = SensorScanPolicy.objects.create(
             sensor=self.sensor,
-            heartbeat_interval_seconds=15,
+            heartbeat_interval_seconds=10,
+            remote_scan_enabled=True,
+            reported_is_continuous=True,
             last_heartbeat_at=now,
         )
-        with mock.patch("sensors.models.timezone.now", return_value=now + datetime.timedelta(seconds=45)):
-            self.assertTrue(policy.agent_online)
+        self.assertTrue(self._at(policy, 30, now))
+        self.assertFalse(self._at(policy, 36, now))  # 10 * 2 + 15s grace
+
+    def test_freshly_enabled_scanning_keeps_the_idle_window(self):
+        """Desired state alone must not tighten the window.
+
+        Between the operator enabling scanning and the device confirming it,
+        the phone is still on its idle cadence — judging it at the full rate
+        in that gap would show a healthy device as offline for one poll.
+        """
+        now = timezone.now()
+        policy = SensorScanPolicy.objects.create(
+            sensor=self.sensor,
+            heartbeat_interval_seconds=10,
+            remote_scan_enabled=True,
+            reported_is_continuous=False,
+            last_heartbeat_at=now,
+        )
+        self.assertEqual(policy.expected_heartbeat_interval_seconds, 40)
+        self.assertTrue(self._at(policy, 50, now))
 
 
 class ScanPolicyCsrfTests(TestCase):

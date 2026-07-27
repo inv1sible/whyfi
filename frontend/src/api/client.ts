@@ -5,6 +5,7 @@ import type {
   BLEDevice,
   BLEObservation,
   BuildStatusResponse,
+  CappedList,
   CellObservation,
   CellTower,
   ChannelCongestionPoint,
@@ -199,8 +200,10 @@ export const api = {
       `/access-points/${encodeURIComponent(bssid)}/wifi-observations/?limit=${opts.limit ?? 200}` +
         `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
     ),
+  // Coverage/heatmap responses are CappedList envelopes, not bare arrays —
+  // read `.results`, and show the user something when `.truncated` is set.
   accessPointsCoverage: (opts: { since?: string; sessionLimit?: number; ssidExact?: string } = {}) =>
-    get<AccessPointCoverage[]>(
+    get<CappedList<AccessPointCoverage>>(
       `/access-points/coverage/?${opts.sessionLimit ? `session_limit=${opts.sessionLimit}&` : opts.since ? `since=${opts.since}&` : ""}` +
         `${opts.ssidExact ? `ssid_exact=${encodeURIComponent(opts.ssidExact)}` : ""}`,
     ),
@@ -221,13 +224,13 @@ export const api = {
         `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
     ),
   cellTowersCoverage: (opts: { since?: string; sessionLimit?: number } = {}) =>
-    get<RadioCoverage[]>(
+    get<CappedList<RadioCoverage>>(
       `/cell-towers/coverage/?${opts.sessionLimit ? `session_limit=${opts.sessionLimit}` : opts.since ? `since=${opts.since}` : ""}`,
     ),
 
   bleObservations: (query = "") => get<Paginated<BLEObservation>>(`/ble-observations/${query}`),
   bleObservationsCoverage: (opts: { since?: string; sessionLimit?: number } = {}) =>
-    get<RadioCoverage[]>(
+    get<CappedList<RadioCoverage>>(
       `/ble-observations/coverage/?${opts.sessionLimit ? `session_limit=${opts.sessionLimit}` : opts.since ? `since=${opts.since}` : ""}`,
     ),
 
@@ -258,7 +261,7 @@ export const api = {
     post<{ resolved: number }>("/scan-sessions/resolve-addresses/", { limit }),
 
   heatmap: (source: HeatmapSource, opts: { bounds?: string; since?: string; sessionLimit?: number } = {}) =>
-    get<HeatmapPoint[]>(
+    get<CappedList<HeatmapPoint>>(
       `/heatmap/?source=${source}${opts.bounds ? `&bounds=${opts.bounds}` : ""}` +
         `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
     ),

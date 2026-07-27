@@ -193,7 +193,13 @@ function SensorCard({ sensor, onChanged }: { sensor: Sensor; onChanged: () => vo
           />
         </label>
         <label className="field remote-interval">
-          <span title="How often the phone checks in for instructions — this is the delay before Start/Stop takes effect">
+          <span
+            title={
+              "How often the phone checks in for instructions — this is the delay before Start/Stop takes effect. " +
+              "While armed but not scanning the phone backs off to 4× this (capped at 60s) to save battery, so " +
+              "starting a scan can take that much longer to take effect than stopping one."
+            }
+          >
             Check-in (s)
           </span>
           <input

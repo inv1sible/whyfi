@@ -1,3 +1,4 @@
+from django.db import transaction
 from rest_framework import serializers
 
 from .geocoding import GEOCODE_PRECISION
@@ -41,18 +42,52 @@ def channel_for_frequency(frequency_mhz: int) -> int:
 
 
 def security_type_from_capabilities(capabilities: str) -> str:
+    """Classifies one AP from Android's raw `ScanResult.capabilities` string.
+
+    Keyed on the *key management* token, not the protocol prefix. Android
+    builds these strings as `[<protocol>-<key mgmt>-<cipher>]` and calls the
+    protocol `RSN` — not `WPA3` — for everything SAE/OWE/Suite-B based, so a
+    WPA3 network reads `[RSN-SAE-CCMP][ESS][MFPR][MFPC]` and contains the
+    substring "WPA3" nowhere at all. Matching protocol names alone (what
+    this did originally) therefore classified *every* WPA3, WPA2/WPA3
+    transition and OWE network as UNKNOWN, which the PWA then rendered as a
+    grey "Unknown" badge and `?security=WPA3` could never match.
+
+    Key management is unambiguous by comparison: SAE means WPA3-Personal,
+    SAE alongside PSK means a transition-mode BSS advertising both, and
+    EAP_SUITE_B_192 means WPA3-Enterprise. SecurityParsingTests in
+    scans/tests.py pins the exact strings this is expected to handle.
+    """
     caps = capabilities.upper()
-    if "WPA3" in caps and "WPA2" in caps:
+
+    has_sae = "SAE" in caps  # WPA3-Personal (also covers FT/SAE)
+    has_psk = "PSK" in caps  # WPA/WPA2-Personal (also covers FT/PSK)
+    has_suite_b = "EAP_SUITE_B_192" in caps  # WPA3-Enterprise 192-bit
+    has_owe = "OWE" in caps  # Enhanced Open (also covers OWE_TRANSITION)
+
+    if has_sae and has_psk:
+        # One BSS advertising both so either generation of client can join.
         return SecurityType.WPA2_WPA3
-    if "WPA3" in caps:
+    if has_sae or has_suite_b:
         return SecurityType.WPA3
-    if "WPA2" in caps:
+    if has_owe:
+        # Encrypted, but joinable with no credential — deliberately its own
+        # value rather than folded into OPEN (which the UI flags red as
+        # "unencrypted") or WPA2 (which implies a password).
+        return SecurityType.OWE
+    # "WPA2" is the legacy protocol spelling; "RSN" is what newer Android
+    # builds emit for the same PSK/EAP networks. Both mean WPA2 here.
+    if "WPA2" in caps or "RSN" in caps:
         return SecurityType.WPA2
     if "WPA" in caps:
         return SecurityType.WPA
     if "WEP" in caps:
         return SecurityType.WEP
-    if not caps or caps == "[ESS]":
+    # Nothing above matched, so no security scheme was advertised. Any
+    # infrastructure/ad-hoc BSS at that point is genuinely open — matching
+    # the exact string "[ESS]" (as this used to) missed the very common
+    # "[ESS][WPS]" and "[ESS][MFPC]" variants and called them UNKNOWN.
+    if not caps or "ESS" in caps:
         return SecurityType.OPEN
     return SecurityType.UNKNOWN
 
@@ -372,7 +407,9 @@ class LANDeviceSerializer(serializers.ModelSerializer):
 
 # --- Ingest (write) serializers ---
 # One nested payload per scan pass, atomically, idempotent on client_scan_id.
-# See AGENT.md: don't split this into per-radio endpoints.
+# See AGENT.md: don't split this into per-radio endpoints. The atomicity is
+# enforced by @transaction.atomic on create() below — don't remove it; the
+# idempotency check makes a half-written session permanent (see there).
 
 class WiFiObservationInputSerializer(serializers.Serializer):
     bssid = serializers.CharField(max_length=17)
@@ -470,7 +507,23 @@ class ScanSessionIngestSerializer(serializers.Serializer):
     satellite_observations = SatelliteObservationInputSerializer(many=True, required=False, default=list)
     lan_observations = LANObservationInputSerializer(many=True, required=False, default=list)
 
+    @transaction.atomic
     def create(self, validated_data):
+        """All-or-nothing, because the idempotency check below is what makes a
+        partial write permanent rather than self-healing.
+
+        Without this, a failure part-way through the observation loops (an
+        over-long field, a lost connection, a constraint violation) left the
+        ScanSession row committed with only some of its observations. The
+        device's retry then hit the `if not created` branch, got a 201 back,
+        deleted the payload from its outbox — and the missing observations
+        were never inserted by anyone. A silently, permanently partial scan.
+
+        Scoped here rather than via ATOMIC_REQUESTS so only this endpoint pays
+        for it; the read endpoints don't need a transaction each. Note
+        get_or_create takes its own savepoint internally, so the concurrent
+        duplicate-POST recovery it does still works inside this block.
+        """
         sensor = self.context["sensor"]
         session, created = ScanSession.objects.get_or_create(
             client_scan_id=validated_data["client_scan_id"],
@@ -502,10 +555,14 @@ class ScanSessionIngestSerializer(serializers.Serializer):
         default_observed_at = validated_data["completed_at"]
 
         for item in validated_data.get("wifi_observations", []):
-            access_point, created = AccessPoint.objects.get_or_create(
+            # ap_created, not `created` — that name belongs to the session
+            # get_or_create above, and shadowing it here made the
+            # idempotency branch above much harder to follow than it needs
+            # to be. Matches tower_created/device_created below.
+            access_point, ap_created = AccessPoint.objects.get_or_create(
                 bssid=item["bssid"], defaults={"ssid": item.get("ssid", "")}
             )
-            if not created:
+            if not ap_created:
                 # Always save (not just on SSID change) so last_seen_at
                 # (auto_now) actually reflects this sighting — an AP seen
                 # again with an unchanged SSID otherwise never updates it.

@@ -48,7 +48,20 @@ local iteration, keep the production path as "build into the backend image."
   per-radio observation arrays in one payload, keyed by
   `client_scan_id` for idempotent retries. Don't add separate per-radio
   ingest endpoints — that breaks the atomicity/idempotency the single
-  endpoint gives you for free.
+  endpoint gives you for free. The atomicity is *not* free-standing though:
+  it's `@transaction.atomic` on `ScanSessionIngestSerializer.create` (there's
+  no `ATOMIC_REQUESTS`), and it has to stay, because idempotency is what makes
+  a partial write permanent rather than self-healing — the device's retry
+  matches the existing session, gets a 201 and drops the payload.
+- **Caller-supplied row counts go through `positive_int()`** (`scans/views.py`)
+  — `session_limit`, `limit`, `resolve-addresses`' limit. They all end up as
+  queryset slice bounds, and a negative slice is an unhandled `ValueError`
+  → 500. Don't reintroduce a bare `int(request.query_params.get(...))`.
+- **The coverage/heatmap endpoints return a `capped_response()` envelope**
+  (`{results, truncated, observation_limit}`), not a bare array, because they
+  group observations in Python under a fixed cap. Keep the flag and keep
+  surfacing it in the UI — silently truncating a map is indistinguishable
+  from an empty area. See MEMORY.md.
 - **Auth is two independent layers**: (1) the Android app authenticates
   ingest with a per-`Sensor` token, admin-managed; (2) every read endpoint
   (and the PWA itself) requires a logged-in Django session — the same
@@ -79,6 +92,13 @@ local iteration, keep the production path as "build into the backend image."
   `policy_revision`/`reported_policy_revision` pair is what lets the UI tell
   *pending* from *applied*; keep echoing it. Note the backend can never push
   to a phone — see MEMORY.md for why FCM isn't the fix.
+  **The device's poll cadence is part of that contract**: while armed but not
+  scanning it backs off to `min(heartbeat_interval * 4, 60s)`
+  (`RemoteControlAgent.IDLE_BACKOFF`/`IDLE_MAX_MS`), and
+  `SensorScanPolicy.agent_online` judges staleness against *that*, through the
+  mirrored constants in `sensors/models.py`. Change one side and you have to
+  change the other, or a perfectly healthy device reads as offline. See
+  MEMORY.md.
 - **Theme is System/Light/Dark on both clients, implemented independently
   per stack.** PWA: `frontend/src/theme.ts` + `data-theme` attribute + CSS
   variables in `index.css`. Android: `ui/theme/Theme.kt`'s `WhyfiTheme` +

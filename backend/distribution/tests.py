@@ -9,6 +9,7 @@ from rest_framework.test import APIClient
 
 from sensors.models import Sensor
 
+from .download_tokens import sign_media_path
 from .models import AppRelease
 from .services import sync_build_status, trigger_build
 
@@ -149,6 +150,77 @@ class TriggerBuildTests(TestCase):
         response = self.client.get("/api/v1/android-build/status/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["build_status"], "BUILDING")
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class MediaAccessTests(TestCase):
+    """MEDIA (the built APKs) is behind the same login as every read endpoint.
+
+    It was previously wired straight to django.views.static.serve with no auth
+    at all, so the APK was fetchable by anyone who knew the URL — and the
+    filenames are predictable (whyfi-<version_name>.apk, version_name
+    defaulting to a timestamp). That quietly contradicted the project-wide
+    "only /health/ and /auth/* are public" rule; see MEMORY.md.
+    """
+
+    def setUp(self):
+        get_user_model().objects.create_user(username="operator", password="test-pass-123")
+        release = AppRelease.objects.create(
+            version_code=1, version_name="0.1.0", apk_file=_fake_apk("v1.apk")
+        )
+        self.apk_name = release.apk_file.name
+        self.media_url = release.apk_file.url
+        self.assertTrue(self.media_url.startswith("/media/"))
+
+    def test_anonymous_download_is_rejected(self):
+        response = Client().get(self.media_url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_logged_in_download_succeeds(self):
+        client = Client()
+        client.login(username="operator", password="test-pass-123")
+        response = client.get(self.media_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(b"".join(response.streaming_content), b"fake-apk-bytes")
+
+    def test_traversal_outside_media_root_is_refused(self):
+        # static_serve's own safe_join still applies — this is here so that
+        # protection is asserted, not just assumed, now that the view is ours.
+        client = Client()
+        client.login(username="operator", password="test-pass-123")
+        self.assertIn(client.get("/media/../settings.py").status_code, (400, 404))
+
+    def test_signed_token_grants_access_without_a_session(self):
+        # This is the QR-code flow: the phone being sideloaded scans a URL and
+        # has no whyfi session at all.
+        url = f"{self.media_url}?t={sign_media_path(self.apk_name)}"
+        response = Client().get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(b"".join(response.streaming_content), b"fake-apk-bytes")
+
+    def test_download_url_from_the_api_works_anonymously(self):
+        # End-to-end: whatever /app/latest/ hands the page must be a URL that
+        # the phone can actually fetch.
+        session_client = APIClient()
+        session_client.force_authenticate(user=get_user_model().objects.get(username="operator"))
+        download_url = session_client.get("/api/v1/app/latest/").json()["download_url"]
+        self.assertIn("?t=", download_url)
+
+        path = download_url.split("testserver", 1)[1]
+        self.assertEqual(Client().get(path).status_code, 200)
+
+    def test_tampered_and_foreign_tokens_are_refused(self):
+        token = sign_media_path(self.apk_name)
+        self.assertEqual(Client().get(f"{self.media_url}?t={token}x").status_code, 403)
+        # Path-scoped: a token for one file must not fetch another.
+        self.assertEqual(
+            Client().get(f"{self.media_url}?t={sign_media_path('some/other.apk')}").status_code, 403
+        )
+
+    def test_expired_token_is_refused(self):
+        token = sign_media_path(self.apk_name)
+        with mock.patch("distribution.download_tokens.MEDIA_TOKEN_MAX_AGE_SECONDS", -1):
+            self.assertEqual(Client().get(f"{self.media_url}?t={token}").status_code, 403)
 
 
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
