@@ -462,6 +462,16 @@ button:disabled {
   border: 1px solid var(--border);
 }
 
+/* Applied briefly while preparing to print (see RadioMap.prepareForPrint):
+   the same mm box the print stylesheet gives the map, so bounds are fitted
+   against the shape the paper will actually have rather than the much wider
+   on-screen one. 186mm is A4 width less the @page margins. */
+.map-container.map-print-fit {
+  width: 186mm;
+  height: 118mm;
+  max-width: 100%;
+}
+
 .build-log {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -691,4 +701,317 @@ button:disabled {
 .table-search:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* Report header — print-only, so it carries no screen styling weight. The
+   live controls already say all of this on screen; on paper nothing else
+   does. */
+.report-header h1 {
+  margin: 0;
+}
+
+.report-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 2px solid var(--border);
+  padding-bottom: 0.4rem;
+}
+
+.report-generated {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.report-fields {
+  display: flex;
+  gap: 2.5rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.report-fields section {
+  flex: 1;
+}
+
+.report-fields h2 {
+  margin: 0 0 0.3rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.report-fields dl {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.report-fields dl > div {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.1rem 0;
+}
+
+.report-fields dt {
+  color: var(--text-dim);
+  min-width: 7.5rem;
+  flex-shrink: 0;
+}
+
+.report-fields dd {
+  margin: 0;
+  font-weight: 500;
+}
+
+.date-range {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  align-items: center;
+}
+
+.date-range label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+/* Focus-circle controls, floated over the map's bottom-left so they sit next
+   to the thing they manipulate rather than in the page chrome. */
+.map-area-controls {
+  position: absolute;
+  left: 0.6rem;
+  bottom: 0.6rem;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 0.4rem 0.5rem;
+}
+
+.map-area-controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.map-area-controls input {
+  width: 5rem;
+}
+
+/* While arming the focus circle the whole map is a target, so say so. */
+.map-placing {
+  cursor: crosshair;
+}
+
+.map-placing .leaflet-grab,
+.map-placing .leaflet-interactive {
+  cursor: crosshair;
+}
+
+/* Let the click reach the map instead of the shape under the cursor.
+   Leaflet does not bubble a click on an interactive layer up to the map's own
+   click handler, so without this, arming the focus circle and then clicking
+   anywhere a coverage shape sits — most of an interesting map — silently does
+   nothing and opens that shape's popup instead.
+
+   It has to be done here rather than by setting pointer-events on the pane:
+   Leaflet puts `pointer-events: auto` on each interactive element, and a
+   child's own value wins over an inherited `none` from its parent.
+
+   The selectors mirror leaflet.css's own (`.leaflet-pane > svg
+   path.leaflet-interactive`, specificity 0,2,2) with one extra class, so they
+   win on specificity rather than by !important. If a Leaflet upgrade ever
+   changes those selectors, placing the circle over a shape silently stops
+   working again — that's the symptom to look for. */
+.map-placing .leaflet-pane > svg path.leaflet-interactive,
+.map-placing .leaflet-marker-icon.leaflet-interactive,
+.map-placing .leaflet-marker-icon {
+  pointer-events: none;
+}
+
+/* The number on a map callout badge, matched by the table's # column. */
+.callout-ref {
+  display: inline-block;
+  min-width: 1.4rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* Screen counterpart of .print-only. Kept out of the print block so the
+   rule applies at all times except printing. */
+.print-only {
+  display: none;
+}
+
+@media print {
+  /* The app defaults to dark; printing a navy page wastes ink and reads
+     badly. Re-point the same custom properties at the light palette rather
+     than overriding every rule that consumes them. Values mirror the
+     [data-theme="light"] block at the top of this file. */
+  :root,
+  [data-theme="dark"],
+  [data-theme="light"] {
+    --bg: #ffffff;
+    --bg-elevated: #ffffff;
+    --bg-card: #ffffff;
+    --text: #0f172a;
+    --text-dim: #475569;
+    --accent: #0d9488;
+    --accent-hover: #0f766e;
+    --accent-contrast: #ecfdf9;
+    --border: #cbd5e1;
+    --danger: #b91c1c;
+    --warning: #a16207;
+    --ok: #15803d;
+    --shadow: none;
+
+    color-scheme: light;
+  }
+
+  @page {
+    margin: 14mm;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  /* Interactive chrome that means nothing on paper. */
+  .nav-bar,
+  .global-filter-bar,
+  .back-button,
+  .app-footer,
+  .band-selector,
+  .map-display-controls,
+  .table-controls,
+  .table-search,
+  .floating-action-bar,
+  .leaflet-control-zoom,
+  .print-hide {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block;
+  }
+
+  /* Attribution stays: using OSM tiles obliges us to credit them, and that
+     obligation doesn't lapse because the map went on paper. The credit lives
+     inside the <a>, so hiding the link would leave a meaningless "©
+     contributors" — it's styled as plain text instead of removed. */
+  .leaflet-control-attribution {
+    display: block !important;
+    background: transparent !important;
+    box-shadow: none;
+    font-size: 7pt;
+    color: #475569;
+  }
+
+  .leaflet-control-attribution a {
+    color: #475569;
+    text-decoration: none;
+  }
+
+  .app-shell {
+    display: block;
+  }
+
+  .app-main {
+    padding: 0;
+    max-width: none;
+    overflow: visible;
+  }
+
+  /* Height in mm so the map is sized against the sheet rather than the
+     screen, leaving room for the header above and the legend below on the
+     same page. RadioMap re-fits to this box before printing — see
+     prepareForPrint — so the coverage lands centred and whole. */
+  .map-container {
+    height: 118mm;
+    border: 1px solid #cbd5e1;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Repeat headers on every page a long table spills onto, and never split
+     a row across the fold. */
+  .data-table {
+    font-size: 8.5pt;
+    break-inside: auto;
+  }
+
+  .data-table thead {
+    display: table-header-group;
+  }
+
+  .data-table tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .data-table th,
+  .data-table td {
+    white-space: normal;
+    padding: 0.22rem 0.35rem;
+  }
+
+  /* The "zoom out to show all columns" toggle is a screen affordance; at
+     print width every column fits anyway, and the zoom would shrink text
+     below legibility. */
+  .compact-tables .data-table {
+    zoom: 1;
+  }
+
+  /* Both of these are hidden on narrow *screens* only. Paper is wide. */
+  .hide-mobile {
+    display: table-cell;
+  }
+
+  h1,
+  h2 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  h2 {
+    margin-top: 1rem;
+    font-size: 1.05rem;
+  }
+
+  a {
+    color: #0f172a;
+    text-decoration: underline;
+  }
+
+  /* Coverage shapes are blurred on screen to signal that a radio boundary is
+     an estimate, not a survey line. Print drivers rasterise filters
+     unpredictably (and some drop them entirely), so soften the edge with
+     opacity instead — same intent, reliable output. */
+  .coverage-soft {
+    filter: none;
+  }
+
+  /* A truncated result set has to survive onto paper. A report that
+     silently omits devices is worse than no report at all. */
+  .warning-text {
+    color: #a16207 !important;
+    border: 1px solid #a16207;
+    padding: 0.4rem 0.6rem;
+    border-radius: 4px;
+    break-inside: avoid;
+  }
 }

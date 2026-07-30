@@ -1,4 +1,4 @@
-const BLE_LABELS: Record<string, string> = {
+export const BLE_LABELS: Record<string, string> = {
   AIRTAG: "Possible AirTag",
   TILE: "Possible Tile",
   SMARTTAG: "Possible Samsung SmartTag",

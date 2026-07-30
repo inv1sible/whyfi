@@ -1,15 +1,20 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import { BLE_LABELS } from "../components/DeviceTypeBadge";
 import { MapDisplayModeControls } from "../components/MapDisplayModeControls";
+import { PrintReportButton } from "../components/PrintReportButton";
 import { RadioMap } from "../components/RadioMap";
-import type { CoveragePolygon, MapPoint } from "../components/RadioMap";
+import type { CoveragePolygon, MapPoint, RadioMapHandle } from "../components/RadioMap";
+import { ReportHeader, describeDisplayMode, describeFilterWindow } from "../components/ReportHeader";
+import type { ReportField } from "../components/ReportHeader";
 import { SimpleLineChart } from "../components/SimpleLineChart";
 import { ALWAYS_MOBILE_BLE_TYPES, COVERAGE_STROKE_COLOR, classifyDeviceCoverage, soloShapes } from "../coverageConfig";
 import { useFilter } from "../context/FilterContext";
 import { resolveCurrentScanMultiDevice } from "../currentScan";
 import { weightedCentroid } from "../geo";
 import { usePolling } from "../hooks/usePolling";
+import { formatCoords, osmLink } from "../reportLinks";
 import { signalStrengthColor, signalStrengthLabel } from "../signalColor";
 import type { AccessPointCoverage, CappedList, HeatmapSource, RadioCoverage } from "../api/types";
 
@@ -18,6 +23,52 @@ const SOURCES: { value: HeatmapSource; label: string }[] = [
   { value: "cellular", label: "Cellular signal" },
   { value: "ble", label: "BLE devices" },
 ];
+
+// Short forms for the report's Type column, where the full "WiFi signal"
+// phrasing of the toggle buttons would just pad the table.
+const SOURCE_SHORT: Record<HeatmapSource, string> = {
+  wifi: "WiFi",
+  cellular: "Cellular",
+  ble: "BLE",
+};
+
+function describeType(source: HeatmapSource, deviceTypeGuess?: string): string {
+  if (source === "ble" && deviceTypeGuess) {
+    return `BLE — ${BLE_LABELS[deviceTypeGuess] ?? deviceTypeGuess}`;
+  }
+  return SOURCE_SHORT[source];
+}
+
+/**
+ * Number every device that drew a coverage shape, so a badge on the map can be
+ * looked up in the table below. Printed reports have no hover, so this is the
+ * only way to tell which shape is which.
+ *
+ * Keyed on detail_path rather than label because two access points can share
+ * an SSID — keying on the label would merge them under one number. Ordered by
+ * label so scanning the table for a number is quick, and only the first shape
+ * per device gets a badge (Solo mode emits one shape per reading, and stamping
+ * the same number across all of them would just clutter the map).
+ */
+function assignCallouts(polygons: CoveragePolygon[]): Map<string, number> {
+  const labelByPath = new Map<string, string>();
+  polygons.forEach((p) => {
+    if (p.detailPath && !labelByPath.has(p.detailPath)) labelByPath.set(p.detailPath, p.label ?? p.detailPath);
+  });
+
+  const numbers = new Map<string, number>();
+  [...labelByPath.entries()]
+    .sort((a, b) => a[1].localeCompare(b[1]))
+    .forEach(([path], index) => numbers.set(path, index + 1));
+
+  const badged = new Set<string>();
+  polygons.forEach((p) => {
+    if (!p.detailPath || badged.has(p.detailPath)) return;
+    badged.add(p.detailPath);
+    p.calloutNumber = numbers.get(p.detailPath);
+  });
+  return numbers;
+}
 
 // Fixed hue per radio type, used for the fallback "mobile device" points
 // whenever more than one source is active at once — the coverage shapes
@@ -55,6 +106,16 @@ export function HeatmapPage() {
     ble: false,
   });
   const filter = useFilter();
+  // Held across the whole print interaction so a 20s poll can't swap the data
+  // out between clicking Print and the dialog opening — the report has to be
+  // the view that was on screen.
+  const [printing, setPrinting] = useState(false);
+  const mapHandleRef = useRef<RadioMapHandle | null>(null);
+  // Stable identity: RadioMap re-invokes this whenever it changes, and it only
+  // writes a ref, so there's no render loop.
+  const handleMapReady = useCallback((handle: RadioMapHandle) => {
+    mapHandleRef.current = handle;
+  }, []);
 
   const activeSources = SOURCES.map((s) => s.value).filter((s) => enabled[s]);
 
@@ -62,15 +123,24 @@ export function HeatmapPage() {
     setEnabled((prev) => ({ ...prev, [source]: !prev[source] }));
   }
 
+  // Named rather than inlined three times, and deliberately not `window` —
+  // that shadows the global one every print/DOM call in this file relies on.
+  const coverageWindow = {
+    since: filter.since,
+    until: filter.until,
+    sessionLimit: filter.sessionLimit,
+    area: filter.area,
+  };
+
   const { data, error, loading } = usePolling<CoverageData>(
     async () => {
       const fetchers: Record<
         HeatmapSource,
         () => Promise<CappedList<AccessPointCoverage> | CappedList<RadioCoverage>>
       > = {
-        wifi: () => api.accessPointsCoverage({ since: filter.since, sessionLimit: filter.sessionLimit }),
-        cellular: () => api.cellTowersCoverage({ since: filter.since, sessionLimit: filter.sessionLimit }),
-        ble: () => api.bleObservationsCoverage({ since: filter.since, sessionLimit: filter.sessionLimit }),
+        wifi: () => api.accessPointsCoverage(coverageWindow),
+        cellular: () => api.cellTowersCoverage(coverageWindow),
+        ble: () => api.bleObservationsCoverage(coverageWindow),
       };
       const responses = await Promise.all(activeSources.map((source) => fetchers[source]()));
       const bySource = { wifi: [], cellular: [], ble: [] } as Record<HeatmapSource, RadioCoverage[]>;
@@ -83,12 +153,43 @@ export function HeatmapPage() {
       return { bySource, truncatedSources, observationLimit: responses[0]?.observation_limit ?? null };
     },
     20000,
-    [activeSources.join(","), filter.since, filter.sessionLimit],
+    // The area is spread into primitives rather than passed as an object:
+    // usePolling compares deps by identity, and a fresh {lat,lng,radiusM}
+    // object every render would refetch on every render.
+    [
+      activeSources.join(","),
+      filter.since,
+      filter.until,
+      filter.sessionLimit,
+      filter.area?.lat,
+      filter.area?.lng,
+      filter.area?.radiusM,
+    ],
+    { paused: printing },
   );
 
-  const { coveragePolygons, mobilePoints, devicePoints, deviceCount, currentScanLabel, visibleReadings } = useMemo(() => {
-    const allDevices: RadioCoverage[] = [];
-    activeSources.forEach((source) => (data?.bySource[source] ?? []).forEach((device) => allDevices.push(device)));
+  const {
+    coveragePolygons,
+    mobilePoints,
+    devicePoints,
+    deviceCount,
+    currentScanLabel,
+    visibleReadings,
+    calloutByPath,
+    countsBySource,
+  } = useMemo(() => {
+    // Source is tracked alongside each device so the report's Type column can
+    // say which radio a reading came from — the flattened device list alone
+    // has no way back to it.
+    const deviceEntries: { device: RadioCoverage; source: HeatmapSource }[] = [];
+    activeSources.forEach((source) =>
+      (data?.bySource[source] ?? []).forEach((device) => deviceEntries.push({ device, source })),
+    );
+    const allDevices: RadioCoverage[] = deviceEntries.map((entry) => entry.device);
+    const countsBySource = activeSources.map((source) => ({
+      source,
+      count: (data?.bySource[source] ?? []).length,
+    }));
 
     // ONE shared chronological timeline across every active device (a
     // single scan pass observes several APs/towers/BLE devices at once) —
@@ -101,10 +202,17 @@ export function HeatmapPage() {
       filter.mapDisplayMode === "solo"
         ? timeline.scanSessionId === null || p.scan_session_id === timeline.scanSessionId
         : timeline.cutoffObservedAt === null || !p.observed_at || p.observed_at <= timeline.cutoffObservedAt;
-    const readings = allDevices.flatMap((device) =>
-      device.points
-        .filter(isPointVisible)
-        .map((p) => ({ label: device.label, detailPath: device.detail_path, weight: p.weight, observedAt: p.observed_at })),
+    const readings = deviceEntries.flatMap(({ device, source }) =>
+      device.points.filter(isPointVisible).map((p) => ({
+        label: device.label,
+        detailPath: device.detail_path,
+        source,
+        deviceTypeGuess: device.device_type_guess,
+        lat: p.lat,
+        lng: p.lng,
+        weight: p.weight,
+        observedAt: p.observed_at,
+      })),
     );
 
     if (filter.mapDisplayMode === "solo") {
@@ -146,6 +254,8 @@ export function HeatmapPage() {
         deviceCount: allDevices.length,
         currentScanLabel: timeline.label,
         visibleReadings: readings,
+        calloutByPath: assignCallouts(soloPolygons),
+        countsBySource,
       };
     }
 
@@ -197,6 +307,8 @@ export function HeatmapPage() {
       deviceCount: allDevices.length,
       currentScanLabel: timeline.label,
       visibleReadings: readings,
+      calloutByPath: assignCallouts(polygons),
+      countsBySource,
     };
   }, [data, activeSources, filter.mapDisplayMode, filter.scanIndexPercent]);
 
@@ -207,10 +319,60 @@ export function HeatmapPage() {
   // survey doesn't render thousands of rows.
   const tableReadings = [...chronologicalReadings].reverse().slice(0, 200);
 
+  const reportSummary: ReportField[] = useMemo(() => {
+    const breakdown = countsBySource
+      .map(({ source, count }) => `${count} ${SOURCE_SHORT[source]}`)
+      .join(", ");
+    const mapped = calloutByPath.size;
+    const weights = visibleReadings.map((r) => r.weight);
+    const first = chronologicalReadings[0]?.observedAt;
+    const last = chronologicalReadings[chronologicalReadings.length - 1]?.observedAt;
+
+    const fields: ReportField[] = [
+      { label: "Devices", value: `${deviceCount}${breakdown ? ` (${breakdown})` : ""}` },
+      {
+        label: "Coverage",
+        value: `${mapped} mapped as coverage, ${Math.max(0, deviceCount - mapped)} shown as points`,
+      },
+      { label: "Readings", value: `${visibleReadings.length}${tableReadings.length < visibleReadings.length ? ` (newest ${tableReadings.length} listed)` : ""}` },
+    ];
+    if (first && last) {
+      fields.push({
+        label: "Observed",
+        value: `${new Date(first).toLocaleString()} — ${new Date(last).toLocaleString()}`,
+      });
+    }
+    if (weights.length > 0) {
+      fields.push({
+        label: "Signal range",
+        value: `${Math.round(Math.max(...weights))} to ${Math.round(Math.min(...weights))} dBm`,
+      });
+    }
+    return fields;
+  }, [countsBySource, calloutByPath, deviceCount, visibleReadings, chronologicalReadings, tableReadings.length]);
+
+  // The provenance half — everything needed to reproduce this exact map.
+  // The area line is not optional: a report filtered to a circle without
+  // saying so is a report that lies by omission about what it left out.
+  const reportViewSettings: ReportField[] = [
+    { label: "Sources", value: activeSources.map((s) => SOURCE_SHORT[s]).join(", ") || "none" },
+    { label: "Range", value: describeFilterWindow(filter) },
+    {
+      label: "Focus area",
+      value: filter.area
+        ? `${Math.round(filter.area.radiusM)} m around ${formatCoords(filter.area.lat, filter.area.lng)}`
+        : "Whole survey",
+    },
+    { label: "Display mode", value: describeDisplayMode(filter.mapDisplayMode) },
+    { label: "Selected scan", value: currentScanLabel ?? "—" },
+  ];
+
   return (
     <section>
-      <h1>Heatmap</h1>
-      <p className="page-hint">
+      <ReportHeader title="Coverage report — Heatmap" summary={reportSummary} viewSettings={reportViewSettings} />
+
+      <h1 className="print-hide">Heatmap</h1>
+      <p className="page-hint print-hide">
         Map tiles are fetched from public OpenStreetMap servers when this device has internet access — see
         docs/architecture.md for why v1 doesn't bundle a self-hosted tile server. Each shape is one AP/tower/device's
         estimated coverage — solid green marks its estimated location, fading to orange at the edge of where it was
@@ -241,6 +403,16 @@ export function HeatmapPage() {
 
       {activeSources.length === 0 && <p className="empty-state">Toggle at least one source above to see the map.</p>}
 
+      {filter.area && (
+        <p className="page-hint">
+          Focus area active: {Math.round(filter.area.radiusM)} m around {formatCoords(filter.area.lat, filter.area.lng)}.
+          Every page is narrowed to devices whose <em>estimated</em> position falls inside it — that estimate is the
+          signal-weighted centre of everywhere the device was heard, so a device only ever picked up from one side
+          sits off to that side of where it really is. Devices heard just once are placed at the phone's own position.
+          Narrowing the date range, not the circle, is what reduces how much data has to be read.
+        </p>
+      )}
+
       {filter.isAllTime && (
         <p className="page-hint">
           "All time" can span very different locations if you've traveled with the phone — the map zooms out to fit
@@ -260,11 +432,36 @@ export function HeatmapPage() {
       {loading && !data && <p>Loading…</p>}
       {error && <p className="error-text">Could not reach the backend: {error.message}</p>}
       {data && activeSources.length > 0 && deviceCount === 0 && (
-        <p className="empty-state">No geotagged observations yet for the active source(s) in this time range.</p>
+        <p className="empty-state">
+          {filter.area
+            ? "No devices are estimated to be inside the focus area for this time range. Widen the radius, drag the circle, or clear it using the controls on the map."
+            : "No geotagged observations yet for the active source(s) in this time range."}
+        </p>
       )}
-      {data && (coveragePolygons.length > 0 || mobilePoints.length > 0) && (
+      {/* The focus area keeps the map mounted even when it matches nothing.
+          Otherwise drawing a circle over an empty patch unmounts the map and
+          takes the radius/clear controls with it, stranding you with a filter
+          you can no longer see or undo. */}
+      {data && (coveragePolygons.length > 0 || mobilePoints.length > 0 || filter.area) && (
         <>
-          <RadioMap points={[...mobilePoints, ...devicePoints]} mode="heat" polygons={coveragePolygons} />
+          <RadioMap
+            points={[...mobilePoints, ...devicePoints]}
+            mode="heat"
+            polygons={coveragePolygons}
+            onReady={handleMapReady}
+            area={filter.area}
+            onAreaChange={filter.setArea}
+          />
+
+          {/* Paper has no hover and no legend control, so both have to be
+              printed alongside the map. */}
+          <p className="page-hint print-only">
+            Shapes are estimated coverage per device: solid green at the estimated device location, fading to orange at
+            the edge of where it was still detected. Numbered badges match the <strong>#</strong> column in the sighting
+            history below. Devices that moved too much for coverage to mean anything are drawn as plain points and carry
+            no number.
+          </p>
+
           <MapDisplayModeControls
             mode={filter.mapDisplayMode}
             onModeChange={filter.setMapDisplayMode}
@@ -273,38 +470,67 @@ export function HeatmapPage() {
             label={currentScanLabel}
           />
 
-          <h2>Signal history</h2>
-          {activeSources.length > 1 && (
-            <p className="page-hint">
-              Mixes readings from all active sources on one dBm scale — toggle down to a single source above for a
-              cleaner picture.
-            </p>
+          <div className="print-hide" style={{ margin: "0.75rem 0" }}>
+            <PrintReportButton
+              onPrepare={() => mapHandleRef.current?.prepareForPrint() ?? Promise.resolve()}
+              onPrintingChange={setPrinting}
+            />
+          </div>
+
+          {/* Both sections describe the readings behind the map, so neither
+              means anything when the current filter matches none — which the
+              focus area can now legitimately produce. */}
+          {chronologicalReadings.length > 0 && (
+            <>
+              <h2>Signal history</h2>
+              {activeSources.length > 1 && (
+                <p className="page-hint">
+                  Mixes readings from all active sources on one dBm scale — toggle down to a single source above for a
+                  cleaner picture.
+                </p>
+              )}
+              <SimpleLineChart
+                unit=" dBm"
+                points={chronologicalReadings.map((r) => ({ label: r.observedAt as string, value: r.weight }))}
+                valueColor={signalStrengthColor}
+                valueLabel={signalStrengthLabel}
+              />
+            </>
           )}
-          <SimpleLineChart
-            unit=" dBm"
-            points={chronologicalReadings.map((r) => ({ label: r.observedAt as string, value: r.weight }))}
-            valueColor={signalStrengthColor}
-            valueLabel={signalStrengthLabel}
-          />
 
           <h2>Sighting history</h2>
-          <p className="page-hint">Follows the slider above — chart and table show the same readings the map does.</p>
+          <p className="page-hint print-hide">
+            Follows the slider above — chart and table show the same readings the map does.
+          </p>
           {tableReadings.length > 0 && (
             <table className="data-table">
               <thead>
                 <tr>
+                  <th title="Matches the numbered badge on the map">#</th>
                   <th>Device</th>
+                  <th>Type</th>
                   <th>Signal</th>
+                  <th>Coordinates</th>
                   <th>Observed</th>
                 </tr>
               </thead>
               <tbody>
                 {tableReadings.map((r, index) => (
                   <tr key={`${r.detailPath}-${r.observedAt}-${index}`}>
+                    <td className="callout-ref">{calloutByPath.get(r.detailPath) ?? "—"}</td>
                     <td>
                       <Link to={r.detailPath}>{r.label}</Link>
                     </td>
+                    <td>{describeType(r.source, r.deviceTypeGuess)}</td>
                     <td style={{ color: signalStrengthColor(r.weight) }}>{Math.round(r.weight)} dBm</td>
+                    <td className="mono">
+                      {/* Opens a marker at the exact point. Survives into a
+                          saved PDF as a real link annotation, which is the
+                          one piece of interactivity printing does preserve. */}
+                      <a href={osmLink(r.lat, r.lng)} target="_blank" rel="noreferrer">
+                        {formatCoords(r.lat, r.lng)}
+                      </a>
+                    </td>
                     <td>{r.observedAt ? new Date(r.observedAt).toLocaleString() : "—"}</td>
                   </tr>
                 ))}

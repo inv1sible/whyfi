@@ -38,6 +38,10 @@ export function GlobalFilterBar() {
         minutes={filter.minutes}
         scanCount={filter.scanCount}
         onScanCountChange={filter.setScanCount}
+        rangeFrom={filter.rangeFrom}
+        onRangeFromChange={filter.setRangeFrom}
+        rangeTo={filter.rangeTo}
+        onRangeToChange={filter.setRangeTo}
       />
     </div>
   );

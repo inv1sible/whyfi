@@ -1,8 +1,9 @@
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { FocusArea } from "../api/client";
 import type { HeatmapPoint } from "../api/types";
-import { radioMarkerIcon, scanPointPinIcon } from "../mapIcons";
+import { areaCenterIcon, calloutBadgeIcon, radioMarkerIcon, scanPointPinIcon } from "../mapIcons";
 import type { MapIconType } from "../mapIcons";
 
 // Public OSM tiles, fetched by the viewing browser when it has internet.
@@ -59,6 +60,10 @@ export interface CoveragePolygon {
   // gradientCenter's actual fractional position within the polygon's own
   // bounding box, instead of the fixed 3-stop hull gradient at a flat 50%.
   gradientEdgeColor?: string;
+  // Draws a small numbered badge on the shape, keyed to a matching `#`
+  // column in the page's table. This is what replaces hover in a printed
+  // report — on paper there's no tooltip to identify which shape is which.
+  calloutNumber?: number;
 }
 
 export interface MapPointSource {
@@ -259,11 +264,45 @@ interface RadioMapProps {
   // are responsible for actually calling the delete API and refetching;
   // this only reports which scan_session_id was picked.
   onDeleteScanSession?: (scanSessionId: string) => void;
+  // Hands the parent an imperative handle once the map exists. Only used for
+  // printing, which needs to reach past React into Leaflet — see
+  // prepareForPrint below.
+  onReady?: (handle: RadioMapHandle) => void;
+  // The focus circle. Drawn when set; when onAreaChange is also provided the
+  // map grows a "Focus area" control for placing and resizing it.
+  area?: FocusArea | null;
+  onAreaChange?: (area: FocusArea | null) => void;
 }
 
-export function RadioMap({ points, mode = "heat", polygons = [], onDeleteScanSession }: RadioMapProps) {
+export interface RadioMapHandle {
+  /** Re-measure, re-frame to fit all data, and resolve once tiles have
+   * settled. Print-only; see the comment on the implementation. */
+  prepareForPrint: () => Promise<void>;
+}
+
+/** Plain average of a ring's vertices. Only used to place a callout badge on
+ * a shape that has no gradientCenter, where "roughly the middle" is all
+ * that's wanted — not a true area centroid. */
+function ringCenter(ring: { lat: number; lng: number }[]): { lat: number; lng: number } {
+  const lat = ring.reduce((sum, p) => sum + p.lat, 0) / ring.length;
+  const lng = ring.reduce((sum, p) => sum + p.lng, 0) / ring.length;
+  return { lat, lng };
+}
+
+const DEFAULT_AREA_RADIUS_M = 250;
+
+export function RadioMap({
+  points,
+  mode = "heat",
+  polygons = [],
+  onDeleteScanSession,
+  onReady,
+  area = null,
+  onAreaChange,
+}: RadioMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
   const layersRef = useRef<L.Layer[]>([]);
   // Only auto-fit/zoom once, the first time data arrives — HeatmapPage
   // polls every 20s, and re-fitting bounds on every poll yanked the view
@@ -272,12 +311,25 @@ export function RadioMap({ points, mode = "heat", polygons = [], onDeleteScanSes
   // it on demand.
   const hasFitOnceRef = useRef(false);
   const lastBoundsRef = useRef<[number, number][] | null>(null);
+  // Coverage shapes only, tracked separately from lastBoundsRef for printing
+  // — see prepareForPrint for why the report frames on these rather than on
+  // everything.
+  const polygonBoundsRef = useRef<[number, number][] | null>(null);
+  const areaLayersRef = useRef<L.Layer[]>([]);
+  // Kept in a ref as well as state: the map's click handler is registered
+  // once, so a captured `placing` value would be stale forever after.
+  const placingRef = useRef(false);
+  const [placing, setPlacing] = useState(false);
+  const onAreaChangeRef = useRef(onAreaChange);
+  onAreaChangeRef.current = onAreaChange;
+  const areaRef = useRef(area);
+  areaRef.current = area;
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
     const map = L.map(containerRef.current).setView(DEFAULT_CENTER, 15);
-    L.tileLayer(TILE_URL, {
+    tileLayerRef.current = L.tileLayer(TILE_URL, {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       maxZoom: 19,
     }).addTo(map);
@@ -294,6 +346,20 @@ export function RadioMap({ points, mode = "heat", polygons = [], onDeleteScanSes
     // change (e.g. the page's content width changing, a sidebar toggling,
     // or the container being 0-sized for a tick during initial mount).
     // invalidateSize() forces Leaflet to re-measure.
+    // Registered once for the map's lifetime, so it reads placingRef rather
+    // than a captured value. Placing is one-shot: click, circle appears,
+    // arming turns itself off.
+    map.on("click", (event: L.LeafletMouseEvent) => {
+      if (!placingRef.current) return;
+      placingRef.current = false;
+      setPlacing(false);
+      onAreaChangeRef.current?.({
+        lat: Number(event.latlng.lat.toFixed(6)),
+        lng: Number(event.latlng.lng.toFixed(6)),
+        radiusM: areaRef.current?.radiusM ?? DEFAULT_AREA_RADIUS_M,
+      });
+    });
+
     const resizeObserver = new ResizeObserver(() => map.invalidateSize());
     resizeObserver.observe(containerRef.current);
 
@@ -362,6 +428,18 @@ export function RadioMap({ points, mode = "heat", polygons = [], onDeleteScanSes
         }
         marker.addTo(map);
         layersRef.current.push(marker);
+      }
+
+      if (polygon.calloutNumber != null) {
+        const at = polygon.gradientCenter ?? ringCenter(polygon.points);
+        const badge = L.marker([at.lat, at.lng], {
+          icon: calloutBadgeIcon(polygon.calloutNumber),
+          // Above the coverage fills and the centre icon, so the number
+          // stays readable where shapes overlap.
+          zIndexOffset: 1000,
+          interactive: false,
+        }).addTo(map);
+        layersRef.current.push(badge);
       }
     });
 
@@ -477,7 +555,9 @@ export function RadioMap({ points, mode = "heat", polygons = [], onDeleteScanSes
       });
     }
 
-    const allLatLngs = latlngs.concat(polygons.flatMap((p) => p.points.map((pt) => [pt.lat, pt.lng] as [number, number])));
+    const polygonLatLngs = polygons.flatMap((p) => p.points.map((pt) => [pt.lat, pt.lng] as [number, number]));
+    const allLatLngs = latlngs.concat(polygonLatLngs);
+    polygonBoundsRef.current = polygonLatLngs.length > 0 ? polygonLatLngs : null;
     lastBoundsRef.current = allLatLngs.length > 0 ? allLatLngs : null;
     if (!hasFitOnceRef.current && allLatLngs.length > 0) {
       hasFitOnceRef.current = true;
@@ -493,17 +573,193 @@ export function RadioMap({ points, mode = "heat", polygons = [], onDeleteScanSes
     map.fitBounds(lastBoundsRef.current, { maxZoom: 17 });
   }
 
+  /** Resolves once the tile layer has finished fetching whatever the current
+   * view needs. isLoading() is false when re-framing needed no new tiles, in
+   * which case 'load' never fires and waiting for it would hang until the
+   * caller's timeout — so that case just gives layout a frame to settle. */
+  const waitForTiles = useCallback(
+    () =>
+      new Promise<void>((resolve) => {
+        const tiles = tileLayerRef.current;
+        if (!tiles || !tiles.isLoading()) {
+          setTimeout(resolve, 150);
+          return;
+        }
+        const finish = () => {
+          tiles.off("load", finish);
+          resolve();
+        };
+        tiles.on("load", finish);
+      }),
+    [],
+  );
+
+  /**
+   * Get the map ready to be captured by the browser's print renderer.
+   *
+   * Three separate things make this impossible to do in CSS alone:
+   *  - hasFitOnceRef means the view is wherever the user last panned it, so
+   *    without re-fitting the print would crop the coverage.
+   *  - Leaflet caches its container's pixel size, so the print stylesheet's
+   *    mm-based height leaves it addressing tiles for the old screen size
+   *    until invalidateSize() forces a re-measure.
+   *  - Tiles load asynchronously, and onbeforeprint is synchronous — there is
+   *    nowhere in the native print flow to wait for them.
+   *
+   * Note this deliberately changes *framing only*. It never refetches and
+   * never touches the filter or slider, so the printed map shows exactly the
+   * data that was on screen — just fitted to the page.
+   */
+  const prepareForPrint = useCallback(async () => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    // Fit against the *printed* geometry, not the on-screen one. The map is
+    // far wider on screen (full page width) than on paper (an A4 column), and
+    // Leaflet keeps centre+zoom when its container resizes — so fitting at
+    // screen width and then printing crops ~40% off the sides, which is
+    // exactly how the focus circle ended up running off the edge of the page.
+    // .map-print-fit pins the container to the same mm box the print
+    // stylesheet uses; the afterprint listener below takes it off again.
+    containerRef.current?.classList.add("map-print-fit");
+    map.invalidateSize();
+    // A focus circle outranks everything: it's the declared subject of the
+    // report, so the page should show that area rather than wherever the
+    // surviving devices happen to sprawl.
+    if (area) {
+      // LatLng.toBounds, not L.circle(...).getBounds(): a Circle only knows
+      // its bounds once it's been added to a map and projected, so calling
+      // getBounds() on a detached one throws — which silently aborted the
+      // whole prepare step and printed the un-reframed map.
+      map.fitBounds(L.latLng(area.lat, area.lng).toBounds(area.radiusM * 2), { padding: [24, 24] });
+      await waitForTiles();
+      return;
+    }
+
+    // Otherwise frame on the coverage shapes, not on every point. A survey
+    // walked between towns leaves mobile-device points strung out over tens of
+    // kilometres; fitting all of them shrinks the coverage to an unreadable
+    // speck in one corner, which was exactly what the first test render
+    // produced. The shapes are the substance of the report, so they set the
+    // frame; stray points outside it are already listed in the table with
+    // their coordinates. Falls back to everything when there are no shapes.
+    const bounds = polygonBoundsRef.current ?? lastBoundsRef.current;
+    if (bounds) {
+      // Padding keeps the outermost shapes off the page edge — "centred, not
+      // cut off" is the whole point of the report map.
+      map.fitBounds(bounds, { padding: [24, 24], maxZoom: 17 });
+    }
+    await waitForTiles();
+  }, [area, waitForTiles]);
+
+  useEffect(() => {
+    onReady?.({ prepareForPrint });
+  }, [onReady, prepareForPrint]);
+
+  // Undo the print-geometry pin once the dialog closes, and put the map back
+  // to the size it actually occupies on screen.
+  useEffect(() => {
+    const restore = () => {
+      containerRef.current?.classList.remove("map-print-fit");
+      mapRef.current?.invalidateSize();
+    };
+    window.addEventListener("afterprint", restore);
+    return () => {
+      window.removeEventListener("afterprint", restore);
+      restore();
+    };
+  }, []);
+
+  // (Clicks fall through coverage shapes while placing the focus circle —
+  // handled in CSS via .map-placing, see index.css for why it can't be done
+  // by setting pointer-events on the pane.)
+
+  // The focus circle, drawn in its own effect so redrawing it doesn't tear
+  // down and rebuild every coverage layer on each radius nudge.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    areaLayersRef.current.forEach((layer) => map.removeLayer(layer));
+    areaLayersRef.current = [];
+    if (!area) return;
+
+    const circle = L.circle([area.lat, area.lng], {
+      radius: area.radiusM,
+      color: "#2563eb",
+      weight: 2,
+      dashArray: "6 5",
+      fillColor: "#2563eb",
+      fillOpacity: 0.05,
+      // Non-interactive so it never swallows a click meant for the coverage
+      // shape underneath it.
+      interactive: false,
+    }).addTo(map);
+    areaLayersRef.current.push(circle);
+
+    if (onAreaChange) {
+      // Dragging the centre is the fast way to nudge the circle onto a
+      // building; the radius field handles size.
+      const handle = L.marker([area.lat, area.lng], { draggable: true, icon: areaCenterIcon() })
+        .on("dragend", (event) => {
+          const { lat, lng } = (event.target as L.Marker).getLatLng();
+          onAreaChangeRef.current?.({
+            lat: Number(lat.toFixed(6)),
+            lng: Number(lng.toFixed(6)),
+            radiusM: areaRef.current?.radiusM ?? DEFAULT_AREA_RADIUS_M,
+          });
+        })
+        .addTo(map);
+      areaLayersRef.current.push(handle);
+    }
+  }, [area, onAreaChange]);
+
   return (
     <div style={{ position: "relative" }}>
-      <div ref={containerRef} className="map-container" />
+      <div ref={containerRef} className={`map-container${placing ? " map-placing" : ""}`} />
       {(points.length > 0 || polygons.length > 0) && (
         <button
           onClick={handleFitToData}
           title="Fit map to all points"
+          className="print-hide"
           style={{ position: "absolute", top: "0.6rem", right: "0.6rem", zIndex: 1000 }}
         >
           ⤢ Fit to data
         </button>
+      )}
+
+      {onAreaChange && (
+        <div className="map-area-controls print-hide">
+          <button
+            className={placing ? "active" : ""}
+            onClick={() => {
+              const next = !placing;
+              placingRef.current = next;
+              setPlacing(next);
+            }}
+            title="Restrict every page to devices estimated to be inside a circle"
+          >
+            {placing ? "Click the map…" : area ? "Move focus area" : "◎ Focus area"}
+          </button>
+          {area && (
+            <>
+              <label>
+                <span>Radius (m)</span>
+                <input
+                  type="number"
+                  min={10}
+                  step={50}
+                  value={Math.round(area.radiusM)}
+                  onChange={(e) => {
+                    const radiusM = Number(e.target.value);
+                    if (Number.isFinite(radiusM) && radiusM > 0) onAreaChange({ ...area, radiusM });
+                  }}
+                />
+              </label>
+              <button onClick={() => onAreaChange(null)}>Clear</button>
+            </>
+          )}
+        </div>
       )}
     </div>
   );

@@ -9,6 +9,10 @@ interface TimeScanFilterControlsProps {
   minutes: number;
   scanCount: number;
   onScanCountChange: (count: number) => void;
+  rangeFrom: string;
+  onRangeFromChange: (value: string) => void;
+  rangeTo: string;
+  onRangeToChange: (value: string) => void;
 }
 
 export function TimeScanFilterControls({
@@ -19,6 +23,10 @@ export function TimeScanFilterControls({
   minutes,
   scanCount,
   onScanCountChange,
+  rangeFrom,
+  onRangeFromChange,
+  rangeTo,
+  onRangeToChange,
 }: TimeScanFilterControlsProps) {
   return (
     <>
@@ -29,7 +37,25 @@ export function TimeScanFilterControls({
         <button className={mode === "time" ? "active" : ""} onClick={() => onModeChange("time")}>
           Time window
         </button>
+        <button className={mode === "range" ? "active" : ""} onClick={() => onModeChange("range")}>
+          Date range
+        </button>
       </div>
+
+      {/* The sliders all mean "up to now", so they slide out from under a
+          report. This is the mode that pins both ends. */}
+      {mode === "range" && (
+        <div className="date-range">
+          <label>
+            <span>From</span>
+            <input type="datetime-local" value={rangeFrom} onChange={(e) => onRangeFromChange(e.target.value)} />
+          </label>
+          <label>
+            <span>To</span>
+            <input type="datetime-local" value={rangeTo} onChange={(e) => onRangeToChange(e.target.value)} />
+          </label>
+        </div>
+      )}
 
       {mode === "time" && (
         <div className="time-slider">

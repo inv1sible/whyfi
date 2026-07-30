@@ -1,3 +1,4 @@
+import math
 from datetime import timedelta
 from urllib.parse import quote
 
@@ -102,6 +103,168 @@ def positive_int(raw, default=None, maximum=None):
     return min(value, maximum) if maximum is not None else value
 
 
+def parse_float(raw, default=None):
+    """Same tolerant posture as positive_int, for coordinates and radii —
+    these are view hints from the map UI, not load-bearing input. Rejects
+    NaN/inf, which parse fine as floats and would poison every comparison
+    they touch."""
+    if raw is None or raw == "":
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    if value != value or value in (float("inf"), float("-inf")):
+        return default
+    return value
+
+
+def parse_area(request):
+    """The map's focus circle, as (lat, lng, radius_m), or None.
+
+    All three parameters must be present and usable, and the radius positive —
+    a half-specified circle means the caller's intent is unknown, and silently
+    filtering by a partial one is worse than not filtering at all.
+    """
+    lat = parse_float(request.query_params.get("area_lat"))
+    lng = parse_float(request.query_params.get("area_lng"))
+    radius = parse_float(request.query_params.get("area_radius_m"))
+    if lat is None or lng is None or radius is None or radius <= 0:
+        return None
+    if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+        return None
+    return (lat, lng, radius)
+
+
+def weighted_centroid(points):
+    """A device's estimated position: the signal-weighted centre of everywhere
+    it was heard from.
+
+    MUST stay identical to weightedCentroid() in frontend/src/geo.ts, which
+    computes the `gradientCenter` dot drawn at the middle of every coverage
+    shape. If these two drift, the map shows a device inside the focus circle
+    while this filter excludes it — the filter looks broken, and the cause is
+    invisible. There is a parity test in tests.py pinning them together.
+
+    Note the 0.1 floor: the weakest reading still counts for something, so a
+    few strong readings can't collapse the centre onto themselves.
+    """
+    weights = [p["weight"] for p in points]
+    min_w, max_w = min(weights), max(weights)
+    spread = (max_w - min_w) or 1
+    w = [0.1 + 0.9 * ((weight - min_w) / spread) for weight in weights]
+    total = sum(w)
+    return (
+        sum(wi * p["lat"] for wi, p in zip(w, points)) / total,
+        sum(wi * p["lng"] for wi, p in zip(w, points)) / total,
+    )
+
+
+def haversine_m(lat1, lng1, lat2, lng2):
+    """Great-circle distance in metres. Real spherical maths rather than the
+    flat-plane approximation used for coverage shapes: a shape spans tens of
+    metres, but a focus circle can legitimately be kilometres across, where
+    treating degrees as square starts to matter at these latitudes."""
+    radius = 6371008.8  # mean Earth radius (IUGG), metres
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = p2 - p1
+    dl = math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * radius * math.asin(math.sqrt(a))
+
+
+def within_area(points, area):
+    """Whether a device's estimated position falls inside the focus circle.
+
+    Deliberately judged on the *centroid*, not on whether any single reading
+    lands inside: the circle asks "which devices are in this area", and a
+    device heard once from across the street belongs to where it actually is,
+    not to wherever the phone happened to be standing.
+
+    An empty point list is unplaceable, so it's excluded. In practice this
+    can't happen from the coverage endpoints — they drop observations without
+    a scan-session position long before grouping — but the guard keeps
+    weighted_centroid from dividing by an empty set if a future caller is
+    less careful.
+    """
+    if not points:
+        return False
+    lat, lng = weighted_centroid(points)
+    center_lat, center_lng, radius_m = area
+    return haversine_m(center_lat, center_lng, lat, lng) <= radius_m
+
+
+def apply_area_filter(results, area):
+    """Narrows grouped per-device coverage results to the focus circle.
+
+    Runs after grouping and after the time filter, never before:
+    weighted_centroid normalises against the device's own min/max signal, so
+    computing it from a spatially pre-filtered subset would shift the centre
+    and admit devices that don't belong. That also means the circle narrows
+    *devices*, not the underlying observation scan — it doesn't relieve
+    COVERAGE_OBSERVATION_CAP. Narrowing the time window is what does that.
+
+    A kept device keeps *all* its points, including ones outside the circle:
+    the filter selects which devices to report on, and a device's coverage is
+    its coverage.
+    """
+    if area is None:
+        return results
+    return [entry for entry in results if within_area(entry["points"], area)]
+
+
+def area_device_ids(request, obs_model, id_field, weight_field, area, session_limit=None):
+    """Ids of the devices whose estimated position falls inside the focus
+    circle — the device *list* endpoints' equivalent of apply_area_filter.
+
+    Deliberately reuses within_area/weighted_centroid rather than
+    approximating, so a list page and the map agree about which devices are in
+    the circle. Scoped to the same time window the list itself uses, because
+    the centroid depends on which readings are in the set (see
+    weighted_centroid) — computing it over all time while the page shows an
+    hour would place devices somewhere the map never draws them.
+
+    weight_field=None means "unweighted": every reading counts the same, which
+    collapses weighted_centroid to a plain mean. That's the honest treatment
+    for LAN devices, which carry no signal strength at all.
+    """
+    if area is None:
+        return None
+    since, until = parse_window(request)
+    obs_qs = obs_model.objects.select_related("scan_session")
+    if since:
+        obs_qs = obs_qs.filter(observed_at__gte=since)
+    if until:
+        obs_qs = obs_qs.filter(observed_at__lte=until)
+    if session_limit:
+        obs_qs = obs_qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+    obs_qs = obs_qs.exclude(scan_session__latitude__isnull=True).exclude(scan_session__longitude__isnull=True)
+
+    groups = {}
+    for obs in obs_qs.iterator():
+        weight = 0 if weight_field is None else getattr(obs, weight_field)
+        if weight is None:
+            # A reading with no signal strength can't be weighted; dropping it
+            # beats guessing a value that would drag the centroid.
+            continue
+        groups.setdefault(getattr(obs, id_field), []).append(
+            {"lat": obs.scan_session.latitude, "lng": obs.scan_session.longitude, "weight": weight}
+        )
+    return {key for key, points in groups.items() if within_area(points, area)}
+
+
+def parse_window(request):
+    """The observation time window as raw (since, until) strings, either of
+    which may be None. Django parses the ISO strings itself at filter time.
+
+    `until` exists so a report can cover an exact interval — "Tuesday 14:00 to
+    16:00" — rather than only ever "the last N minutes up to now", which is all
+    the sliders can express and which makes a report impossible to reproduce
+    tomorrow.
+    """
+    return request.query_params.get("since"), request.query_params.get("until")
+
+
 def parse_session_limit(request):
     return positive_int(request.query_params.get("session_limit"))
 
@@ -130,6 +293,12 @@ def capped_response(results, truncated, cap):
     was there. `truncated` is what lets the PWA say so (see HeatmapPage /
     SSIDGroupPage) instead of the operator finding out by noticing something
     missing. Don't flatten this back to a bare list.
+
+    Deliberately carries no "devices the area filter couldn't place" count:
+    every coverage query already excludes observations whose scan session has
+    no latitude/longitude, so such a device never reaches the area filter and
+    the number would be structurally zero. Reporting a field that can only
+    ever say 0 is worse than omitting it — it reads as a guarantee.
     """
     return {"results": results, "truncated": truncated, "observation_limit": cap}
 
@@ -163,15 +332,21 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
         security = self.request.query_params.get("security")
         if security:
             qs = qs.filter(observations__security_type=security).distinct()
+        area = parse_area(self.request)
+        if area:
+            ids = area_device_ids(self.request, WiFiObservation, "access_point_id", "rssi", area, session_limit)
+            qs = qs.filter(pk__in=ids)
         return qs
 
     @action(detail=True, methods=["get"], url_path="wifi-observations")
     def wifi_observations(self, request, bssid=None):
         access_point = self.get_object()
         obs = access_point.observations.select_related("scan_session").order_by("-observed_at")
-        since = request.query_params.get("since")
+        since, until = parse_window(request)
         if since:
             obs = obs.filter(observed_at__gte=since)
+        if until:
+            obs = obs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(request)
         if session_limit:
             obs = obs.filter(scan_session_id__in=recent_session_ids(session_limit))
@@ -188,7 +363,7 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
         for a shape" and falls back to plain points) rather than filtered
         out here — the frontend also needs the sub-3-point case to decide
         that, not just silence."""
-        since = request.query_params.get("since")
+        since, until = parse_window(request)
         ssid_exact = request.query_params.get("ssid_exact")
         qs = (
             WiFiObservation.objects.select_related("access_point", "scan_session")
@@ -197,6 +372,8 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
         )
         if since:
             qs = qs.filter(observed_at__gte=since)
+        if until:
+            qs = qs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(request)
         if session_limit:
             qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
@@ -252,6 +429,7 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
             }
             for v in by_ap.values()
         ]
+        results = apply_area_filter(results, parse_area(request))
         return Response(capped_response(results, truncated, COVERAGE_OBSERVATION_CAP))
 
 
@@ -405,15 +583,21 @@ class CellTowerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         session_limit = parse_session_limit(self.request)
         if session_limit:
             qs = qs.filter(observations__scan_session_id__in=recent_session_ids(session_limit)).distinct()
+        area = parse_area(self.request)
+        if area:
+            ids = area_device_ids(self.request, CellObservation, "cell_tower_id", "signal_dbm", area, session_limit)
+            qs = qs.filter(pk__in=ids)
         return qs
 
     @action(detail=True, methods=["get"], url_path="cell-observations")
     def cell_observations(self, request, tower_key=None):
         tower = self.get_object()
         obs = tower.observations.select_related("scan_session").order_by("-observed_at")
-        since = request.query_params.get("since")
+        since, until = parse_window(request)
         if since:
             obs = obs.filter(observed_at__gte=since)
+        if until:
+            obs = obs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(request)
         if session_limit:
             obs = obs.filter(scan_session_id__in=recent_session_ids(session_limit))
@@ -427,7 +611,7 @@ class CellTowerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         coverage action. Cell towers have no distance cap on the frontend
         (a sector legitimately covers km-scale areas), so every tower with
         >=3 points ends up drawn as a shape regardless of spread."""
-        since = request.query_params.get("since")
+        since, until = parse_window(request)
         qs = (
             CellObservation.objects.select_related("cell_tower", "scan_session")
             .exclude(scan_session__latitude__isnull=True)
@@ -436,6 +620,8 @@ class CellTowerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         )
         if since:
             qs = qs.filter(observed_at__gte=since)
+        if until:
+            qs = qs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(request)
         if session_limit:
             qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
@@ -481,6 +667,7 @@ class CellTowerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
             }
             for v in by_tower.values()
         ]
+        results = apply_area_filter(results, parse_area(request))
         return Response(capped_response(results, truncated, COVERAGE_OBSERVATION_CAP))
 
 
@@ -491,7 +678,7 @@ class CellObservationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         qs = CellObservation.objects.all().order_by("-observed_at")
         mcc = self.request.query_params.get("mcc")
         mnc = self.request.query_params.get("mnc")
-        since = self.request.query_params.get("since")
+        since, until = parse_window(self.request)
         # Neighbor-cell readings vastly outnumber serving-cell ones and
         # rarely carry useful signal — filtered server-side (not just
         # client-side) so a fixed page size isn't mostly wasted on rows the
@@ -504,6 +691,8 @@ class CellObservationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
             qs = qs.filter(mnc=mnc)
         if since:
             qs = qs.filter(observed_at__gte=since)
+        if until:
+            qs = qs.filter(observed_at__lte=until)
         return qs
 
 
@@ -513,12 +702,14 @@ class BLEObservationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     def get_queryset(self):
         qs = BLEObservation.objects.all().order_by("-observed_at")
         device_type = self.request.query_params.get("device_type")
-        since = self.request.query_params.get("since")
+        since, until = parse_window(self.request)
         identifier = self.request.query_params.get("identifier")
         if device_type:
             qs = qs.filter(device_type_guess=device_type)
         if since:
             qs = qs.filter(observed_at__gte=since)
+        if until:
+            qs = qs.filter(observed_at__lte=until)
         if identifier:
             qs = qs.filter(Q(ble_mac=identifier) | Q(stable_identifier=identifier))
         session_limit = parse_session_limit(self.request)
@@ -540,12 +731,14 @@ class BLEObservationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         mobile (worn on a person) regardless of measured sighting spread,
         so it needs this to make that call before even looking at the
         points."""
-        since = request.query_params.get("since")
+        since, until = parse_window(request)
         qs = BLEObservation.objects.select_related("scan_session").exclude(
             scan_session__latitude__isnull=True
         ).exclude(scan_session__longitude__isnull=True).order_by("-observed_at")
         if since:
             qs = qs.filter(observed_at__gte=since)
+        if until:
+            qs = qs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(request)
         if session_limit:
             qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
@@ -598,6 +791,7 @@ class BLEObservationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
             }
             for v in by_device.values()
         ]
+        results = apply_area_filter(results, parse_area(request))
         return Response(capped_response(results, truncated, COVERAGE_OBSERVATION_CAP))
 
 
@@ -617,15 +811,21 @@ class BLEDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         session_limit = parse_session_limit(self.request)
         if session_limit:
             qs = qs.filter(observations__scan_session_id__in=recent_session_ids(session_limit)).distinct()
+        area = parse_area(self.request)
+        if area:
+            ids = area_device_ids(self.request, BLEObservation, "ble_device_id", "rssi", area, session_limit)
+            qs = qs.filter(pk__in=ids)
         return qs
 
     @action(detail=True, methods=["get"], url_path="ble-observations")
     def ble_observations(self, request, device_key=None):
         device = self.get_object()
         obs = device.observations.select_related("scan_session").order_by("-observed_at")
-        since = request.query_params.get("since")
+        since, until = parse_window(request)
         if since:
             obs = obs.filter(observed_at__gte=since)
+        if until:
+            obs = obs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(request)
         if session_limit:
             obs = obs.filter(scan_session_id__in=recent_session_ids(session_limit))
@@ -643,9 +843,11 @@ class LANObservationViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, vi
 
     def get_queryset(self):
         qs = LANObservation.objects.all().order_by("-observed_at")
-        since = self.request.query_params.get("since")
+        since, until = parse_window(self.request)
         if since:
             qs = qs.filter(observed_at__gte=since)
+        if until:
+            qs = qs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(self.request)
         if session_limit:
             qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit, radio_related_name="lan_observations"))
@@ -667,6 +869,14 @@ class LANDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
             qs = qs.filter(
                 observations__scan_session_id__in=recent_session_ids(session_limit, radio_related_name="lan_observations")
             ).distinct()
+        area = parse_area(self.request)
+        if area:
+            # weight_field=None: a LAN observation carries no signal strength
+            # (it's a subnet sweep, not a radio reading), so every sighting
+            # counts equally and the estimate is a plain mean of where the
+            # phone stood when it saw the device.
+            ids = area_device_ids(self.request, LANObservation, "lan_device_id", None, area, session_limit)
+            qs = qs.filter(pk__in=ids)
         return qs
 
     def list(self, request, *args, **kwargs):
@@ -720,9 +930,11 @@ class LANDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
     def lan_observations(self, request, ip_address=None):
         device = self.get_object()
         obs = device.observations.select_related("scan_session").order_by("-observed_at")
-        since = request.query_params.get("since")
+        since, until = parse_window(request)
         if since:
             obs = obs.filter(observed_at__gte=since)
+        if until:
+            obs = obs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(request)
         if session_limit:
             # LAN scans are sparser than WiFi/cell/BLE — a plain
@@ -738,14 +950,17 @@ class LANDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
 @api_view(["GET"])
 def channel_congestion(request):
     band = request.query_params.get("band", "2.4GHz")
-    since = request.query_params.get("since")
+    since, until = parse_window(request)
     session_limit = parse_session_limit(request)
 
     qs = WiFiObservation.objects.filter(band=band)
     if session_limit:
         qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
-    elif since:
-        qs = qs.filter(observed_at__gte=since)
+    elif since or until:
+        if since:
+            qs = qs.filter(observed_at__gte=since)
+        if until:
+            qs = qs.filter(observed_at__lte=until)
     else:
         # A single scan session only sees whatever's nearby at that one
         # moment, which under-represents "what channels are actually in
@@ -763,7 +978,7 @@ def channel_congestion(request):
 @api_view(["GET"])
 def heatmap(request):
     source = request.query_params.get("source", "wifi")
-    since = request.query_params.get("since")
+    since, until = parse_window(request)
     session_limit = parse_session_limit(request)
     bounds = request.query_params.get("bounds")
 
@@ -785,8 +1000,11 @@ def heatmap(request):
     # hoping it lines up with how often you actually scanned.
     if session_limit:
         qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
-    elif since:
-        qs = qs.filter(observed_at__gte=since)
+    else:
+        if since:
+            qs = qs.filter(observed_at__gte=since)
+        if until:
+            qs = qs.filter(observed_at__lte=until)
 
     if bounds:
         try:

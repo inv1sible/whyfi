@@ -56,6 +56,49 @@ export function radioMarkerIcon(radioType: MapIconType): L.DivIcon {
   });
 }
 
+const CALLOUT_SIZE = 20;
+
+/** A numbered badge pinning one coverage shape to its row in the report's
+ * table. Printed reports have no hover, so the number is what lets a reader
+ * connect a shape on the map to the device that made it — see the `#` column
+ * on the sighting table.
+ *
+ * Offset up and to the right of the shape's centre so it doesn't sit on top
+ * of radioMarkerIcon, which occupies that exact point. */
+export function calloutBadgeIcon(n: number): L.DivIcon {
+  const html = `
+    <div style="
+      min-width: ${CALLOUT_SIZE}px; height: ${CALLOUT_SIZE}px; padding: 0 3px;
+      box-sizing: border-box; border-radius: ${CALLOUT_SIZE / 2}px;
+      background: #fff; border: 2px solid #1a2540; color: #1a2540;
+      font: 600 11px/1 system-ui, sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+    ">${n}</div>
+  `;
+  return L.divIcon({
+    html,
+    className: "",
+    iconSize: [CALLOUT_SIZE, CALLOUT_SIZE],
+    iconAnchor: [-6, CALLOUT_SIZE + 2],
+  });
+}
+
+/** Drag handle at the centre of the focus circle. Deliberately small and
+ * hollow — it marks a chosen point, not a measurement, and shouldn't be
+ * mistaken for a device or a scan location. */
+export function areaCenterIcon(): L.DivIcon {
+  const size = 14;
+  const html = `
+    <div style="
+      width: ${size}px; height: ${size}px; border-radius: 50%;
+      background: #fff; border: 3px solid #2563eb; cursor: move;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+    "></div>
+  `;
+  return L.divIcon({ html, className: "", iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
+}
+
 const PIN_WIDTH = 22;
 const PIN_HEIGHT = 28;
 

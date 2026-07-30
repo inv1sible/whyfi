@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import type { FocusArea } from "../api/client";
 import { useTimeScanFilter } from "../hooks/useTimeScanFilter";
 
 export type MapDisplayMode = "accumulate" | "solo";
@@ -22,6 +23,14 @@ interface FilterContextValue extends ReturnType<typeof useTimeScanFilter> {
   // across pages, the same way timePercent works in useTimeScanFilter.
   scanIndexPercent: number;
   setScanIndexPercent: (value: number) => void;
+  // The map's focus circle, or null for "the whole survey". Lives here rather
+  // than on the Heatmap page so the same circle narrows the WiFi/Cellular/BLE/
+  // LAN lists too, and so a per-device report can inherit it later.
+  //
+  // Selects devices by *estimated position*, not by which readings fall
+  // inside — see FocusArea and the backend's within_area().
+  area: FocusArea | null;
+  setArea: (area: FocusArea | null) => void;
 }
 
 const FilterContext = createContext<FilterContextValue | null>(null);
@@ -36,6 +45,7 @@ export function FilterProvider({ children }: { children: ReactNode }) {
   const [compactTables, setCompactTables] = useState(false);
   const [mapDisplayMode, setMapDisplayMode] = useState<MapDisplayMode>("accumulate");
   const [scanIndexPercent, setScanIndexPercent] = useState(100);
+  const [area, setArea] = useState<FocusArea | null>(null);
 
   // A body-level class (rather than something scoped to GlobalFilterBar's
   // own subtree) so it reaches every <table> on the page regardless of
@@ -57,6 +67,8 @@ export function FilterProvider({ children }: { children: ReactNode }) {
         setMapDisplayMode,
         scanIndexPercent,
         setScanIndexPercent,
+        area,
+        setArea,
       }}
     >
       {children}

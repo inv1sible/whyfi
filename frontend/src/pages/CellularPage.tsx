@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { api } from "../api/client";
+import { api, areaQuery } from "../api/client";
 import { SortableTh } from "../components/SortableTh";
 import { TableControls } from "../components/TableControls";
 import { useFilter } from "../context/FilterContext";
@@ -13,10 +13,10 @@ export function CellularPage() {
   const { data, error, loading } = usePolling(
     () =>
       api.cellTowers(
-        `?limit=200${filter.sessionLimit ? `&session_limit=${filter.sessionLimit}` : filter.since ? `&active_since=${filter.since}` : ""}`,
+        `?limit=200${filter.sessionLimit ? `&session_limit=${filter.sessionLimit}` : filter.since ? `&active_since=${filter.since}` : ""}${areaQuery(filter.area)}`,
       ),
     15000,
-    [filter.since, filter.sessionLimit],
+    [filter.since, filter.sessionLimit, filter.area?.lat, filter.area?.lng, filter.area?.radiusM],
   );
   const filtered = filterBySearch<CellTower>(data?.results ?? [], filter.searchQuery);
   const { sorted, sortKey, direction, requestSort } = useSortableData<CellTower>(

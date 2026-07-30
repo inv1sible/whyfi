@@ -442,3 +442,271 @@ class CoverageTruncationTests(TestCase):
             body = self.client.get("/api/v1/heatmap/?source=wifi").json()
         self.assertTrue(body["truncated"])
         self.assertEqual(len(body["results"]), 1)
+
+
+class TimeWindowFilterTests(TestCase):
+    """`until` closes the far end of the observation window.
+
+    Without it the only expressible window is "the last N minutes up to now",
+    which slides every time you look at it — so a report can't cover a fixed
+    interval, and can't be reproduced tomorrow. See parse_window().
+    """
+
+    def setUp(self):
+        self.sensor = Sensor.objects.create(name="Test Phone")
+        ingest = APIClient()
+        ingest.credentials(HTTP_AUTHORIZATION=f"Token {self.sensor.token}")
+        # Three passes an hour apart, each seeing its own AP.
+        for index, hour in enumerate((10, 11, 12)):
+            ingest.post(
+                "/api/v1/scan-sessions/",
+                {
+                    "client_scan_id": f"scan-window-{index}",
+                    "started_at": f"2026-07-16T{hour:02d}:00:00Z",
+                    "completed_at": f"2026-07-16T{hour:02d}:00:03Z",
+                    "latitude": 48.1351,
+                    "longitude": 11.582,
+                    "wifi_observations": [
+                        {"bssid": f"aa:bb:cc:dd:ee:0{index}", "ssid": f"Net{index}", "rssi": -55,
+                         "frequency_mhz": 2437, "capabilities": "[RSN-PSK-CCMP][ESS]"},
+                    ],
+                },
+                format="json",
+            )
+        self.user = get_user_model().objects.create_user(username="operator", password="test-pass-123")
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def coverage_ssids(self, query=""):
+        body = self.client.get(f"/api/v1/access-points/coverage/{query}").json()
+        return sorted(entry["ssid"] for entry in body["results"])
+
+    def test_no_window_returns_everything(self):
+        self.assertEqual(self.coverage_ssids(), ["Net0", "Net1", "Net2"])
+
+    def test_until_excludes_later_observations(self):
+        self.assertEqual(self.coverage_ssids("?until=2026-07-16T11:30:00Z"), ["Net0", "Net1"])
+
+    def test_since_and_until_bound_both_ends(self):
+        self.assertEqual(
+            self.coverage_ssids("?since=2026-07-16T10:30:00Z&until=2026-07-16T11:30:00Z"),
+            ["Net1"],
+        )
+
+    def test_until_before_since_returns_nothing(self):
+        # Not an error: an empty window is a coherent question with an empty
+        # answer, and the UI can express it while someone is mid-edit.
+        self.assertEqual(self.coverage_ssids("?since=2026-07-16T12:00:00Z&until=2026-07-16T10:00:00Z"), [])
+
+    def test_until_applies_to_cell_and_ble_coverage_too(self):
+        for path in ("/api/v1/cell-towers/coverage/", "/api/v1/ble-observations/coverage/"):
+            with self.subTest(path=path):
+                response = self.client.get(f"{path}?until=2026-07-16T11:30:00Z")
+                self.assertEqual(response.status_code, 200)
+
+    def test_until_applies_to_per_entity_observations(self):
+        body = self.client.get(
+            "/api/v1/access-points/aa:bb:cc:dd:ee:02/wifi-observations/?until=2026-07-16T11:30:00Z"
+        ).json()
+        self.assertEqual(body, [])
+
+
+class AreaFilterTests(TestCase):
+    """The map's focus circle keeps devices whose *estimated position* falls
+    inside it — see within_area()/weighted_centroid()."""
+
+    # ~48.1351 N: 0.01 degrees of latitude is roughly 1.1 km.
+    CENTER = (48.1351, 11.582)
+
+    def ingest_ap(self, bssid, ssid, points):
+        """One AP observed from each of `points` (lat, lng, rssi)."""
+        ingest = APIClient()
+        ingest.credentials(HTTP_AUTHORIZATION=f"Token {self.sensor.token}")
+        for index, (lat, lng, rssi) in enumerate(points):
+            ingest.post(
+                "/api/v1/scan-sessions/",
+                {
+                    "client_scan_id": f"{bssid}-{index}",
+                    "started_at": "2026-07-16T10:00:00Z",
+                    "completed_at": "2026-07-16T10:00:03Z",
+                    "latitude": lat,
+                    "longitude": lng,
+                    "wifi_observations": [
+                        {"bssid": bssid, "ssid": ssid, "rssi": rssi,
+                         "frequency_mhz": 2437, "capabilities": "[RSN-PSK-CCMP][ESS]"},
+                    ],
+                },
+                format="json",
+            )
+
+    def setUp(self):
+        self.sensor = Sensor.objects.create(name="Test Phone")
+        # Tight cluster at the centre.
+        self.ingest_ap("aa:bb:cc:dd:ee:01", "Inside", [
+            (48.1351, 11.5820, -50),
+            (48.1352, 11.5821, -55),
+            (48.1350, 11.5819, -60),
+        ])
+        # ~2.2 km north — well outside any circle used below.
+        self.ingest_ap("aa:bb:cc:dd:ee:02", "Outside", [
+            (48.1551, 11.5820, -50),
+            (48.1552, 11.5821, -55),
+            (48.1550, 11.5819, -60),
+        ])
+        # One reading at the centre and one 2.2 km away, at equal signal, so
+        # its centroid lands midway — about 1.1 km out.
+        self.ingest_ap("aa:bb:cc:dd:ee:03", "Straddler", [
+            (48.1351, 11.5820, -55),
+            (48.1551, 11.5820, -55),
+        ])
+        self.user = get_user_model().objects.create_user(username="operator", password="test-pass-123")
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def coverage_ssids(self, query=""):
+        body = self.client.get(f"/api/v1/access-points/coverage/{query}").json()
+        return sorted(entry["ssid"] for entry in body["results"])
+
+    def area_query(self, radius_m, lat=None, lng=None):
+        lat = self.CENTER[0] if lat is None else lat
+        lng = self.CENTER[1] if lng is None else lng
+        return f"?area_lat={lat}&area_lng={lng}&area_radius_m={radius_m}"
+
+    def test_without_an_area_every_device_is_returned(self):
+        self.assertEqual(self.coverage_ssids(), ["Inside", "Outside", "Straddler"])
+
+    def test_area_keeps_only_devices_centred_inside(self):
+        self.assertEqual(self.coverage_ssids(self.area_query(200)), ["Inside"])
+
+    def test_straddling_device_is_judged_on_its_centroid_not_its_nearest_reading(self):
+        # It has a reading exactly at the centre, so a "any reading inside"
+        # rule would keep it. Its estimated position is ~1.1 km away, so the
+        # centroid rule doesn't — that distinction is the whole design.
+        self.assertNotIn("Straddler", self.coverage_ssids(self.area_query(200)))
+        # Widen past the midpoint and it comes back.
+        self.assertIn("Straddler", self.coverage_ssids(self.area_query(1500)))
+
+    def test_a_large_enough_circle_keeps_everything(self):
+        self.assertEqual(self.coverage_ssids(self.area_query(5000)), ["Inside", "Outside", "Straddler"])
+
+    def test_kept_device_keeps_all_its_points(self):
+        # Selecting a device shouldn't clip its coverage to the circle — the
+        # filter picks which devices to report on, not which of their
+        # readings count.
+        body = self.client.get(f"/api/v1/access-points/coverage/{self.area_query(1500)}").json()
+        straddler = next(e for e in body["results"] if e["ssid"] == "Straddler")
+        self.assertEqual(len(straddler["points"]), 2)
+
+    def test_partial_area_parameters_are_ignored(self):
+        # A half-specified circle means the intent is unknown; filtering by a
+        # guess would silently drop data.
+        for query in (
+            "?area_lat=48.1351",
+            "?area_lat=48.1351&area_lng=11.582",
+            "?area_lng=11.582&area_radius_m=200",
+        ):
+            with self.subTest(query=query):
+                self.assertEqual(len(self.coverage_ssids(query)), 3)
+
+    def test_unusable_area_parameters_fall_back_to_no_filter(self):
+        for query in (
+            "?area_lat=abc&area_lng=11.582&area_radius_m=200",
+            "?area_lat=48.1351&area_lng=11.582&area_radius_m=-1",
+            "?area_lat=48.1351&area_lng=11.582&area_radius_m=0",
+            "?area_lat=48.1351&area_lng=11.582&area_radius_m=nan",
+            "?area_lat=999&area_lng=11.582&area_radius_m=200",
+        ):
+            with self.subTest(query=query):
+                response = self.client.get(f"/api/v1/access-points/coverage/{query}")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(len(response.json()["results"]), 3)
+
+    def test_area_filters_the_device_list_endpoint_too(self):
+        body = self.client.get(f"/api/v1/access-points/{self.area_query(200)}").json()
+        self.assertEqual([ap["ssid"] for ap in body["results"]], ["Inside"])
+
+    def test_area_and_time_window_compose(self):
+        query = self.area_query(5000) + "&until=2026-07-16T09:00:00Z"
+        self.assertEqual(self.coverage_ssids(query), [])
+
+
+class CentroidParityTests(TestCase):
+    """weighted_centroid() must match weightedCentroid() in
+    frontend/src/geo.ts exactly.
+
+    The frontend draws each device's estimated position from that function;
+    the backend filters on this one. Any drift and the map shows a device
+    inside the focus circle that the filter excluded, with nothing on screen
+    to explain why. The reference implementation below is transcribed
+    straight from geo.ts — if someone "simplifies" the view helper, this
+    fails.
+    """
+
+    @staticmethod
+    def geo_ts_reference(points):
+        weights = [p["weight"] for p in points]
+        min_w, max_w = min(weights), max(weights)
+        spread = (max_w - min_w) or 1
+        w = [0.1 + 0.9 * ((weight - min_w) / spread) for weight in weights]
+        total = sum(w)
+        return (
+            sum(wi * p["lat"] for wi, p in zip(w, points)) / total,
+            sum(wi * p["lng"] for wi, p in zip(w, points)) / total,
+        )
+
+    def test_matches_the_frontend_formula(self):
+        from .views import weighted_centroid
+
+        cases = [
+            [{"lat": 48.1351, "lng": 11.582, "weight": -50}],
+            [
+                {"lat": 48.1351, "lng": 11.5820, "weight": -50},
+                {"lat": 48.1361, "lng": 11.5830, "weight": -80},
+            ],
+            [
+                {"lat": 48.1351, "lng": 11.5820, "weight": -55},
+                {"lat": 48.1361, "lng": 11.5830, "weight": -55},
+                {"lat": 48.1371, "lng": 11.5840, "weight": -55},
+            ],
+        ]
+        for points in cases:
+            with self.subTest(n=len(points)):
+                self.assertEqual(weighted_centroid(points), self.geo_ts_reference(points))
+
+    def test_equal_weights_collapse_to_a_plain_mean(self):
+        from .views import weighted_centroid
+
+        # Every weight identical => spread falls back to 1 => every point gets
+        # 0.1 => a plain average. This is what makes weight_field=None a valid
+        # way to place LAN devices, which carry no signal strength.
+        points = [
+            {"lat": 0.0, "lng": 0.0, "weight": -60},
+            {"lat": 2.0, "lng": 4.0, "weight": -60},
+        ]
+        self.assertEqual(weighted_centroid(points), (1.0, 2.0))
+
+    def test_weakest_reading_still_contributes(self):
+        from .views import weighted_centroid
+
+        # The 0.1 floor: without it the weakest point's weight would be 0 and
+        # the centroid would sit exactly on the strongest reading.
+        points = [
+            {"lat": 0.0, "lng": 0.0, "weight": -90},
+            {"lat": 1.0, "lng": 0.0, "weight": -30},
+        ]
+        lat, _ = weighted_centroid(points)
+        self.assertLess(lat, 1.0)
+        self.assertGreater(lat, 0.5)
+
+
+class HaversineTests(TestCase):
+    def test_known_distance(self):
+        from .views import haversine_m
+
+        # One degree of latitude is ~111.2 km anywhere on the sphere.
+        self.assertAlmostEqual(haversine_m(48.0, 11.0, 49.0, 11.0), 111195, delta=200)
+
+    def test_zero_distance(self):
+        from .views import haversine_m
+
+        self.assertEqual(haversine_m(48.1351, 11.582, 48.1351, 11.582), 0.0)

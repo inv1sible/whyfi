@@ -1,6 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
 
-export type FilterMode = "time" | "last-n-scans";
+export type FilterMode = "time" | "last-n-scans" | "range";
+
+/** `datetime-local` gives and takes "YYYY-MM-DDTHH:mm" in the *browser's* zone
+ * with no offset, so it can't be handed to the API as-is. `new Date(local)`
+ * interprets exactly that way, which is what's wanted: the operator types wall
+ * time and gets wall time. Returns undefined for a half-typed value rather
+ * than an Invalid Date, which would serialise to null and silently widen the
+ * window to everything. */
+function localInputToIso(value: string): string | undefined {
+  if (!value) return undefined;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+}
+
+/** Now, as a `datetime-local` value in the browser's zone. */
+function isoToLocalInput(date: Date): string {
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
 
 // Log-scaled so the slider gives fine control over the last hour (where
 // most of the interesting variation actually is) while still reaching all
@@ -50,20 +68,46 @@ export function useTimeScanFilter(defaultScanCount = 5) {
   const [timePercent, setTimePercent] = useState(DEFAULT_PERCENT);
   const [committedPercent, setCommittedPercent] = useState(DEFAULT_PERCENT);
   const [scanCount, setScanCount] = useState(defaultScanCount);
+  // Explicit from/to, for reporting on a fixed interval rather than a window
+  // that slides every time you look at it. Defaults to the last hour so the
+  // fields are never empty when the mode is first opened.
+  const [rangeFrom, setRangeFrom] = useState(() => isoToLocalInput(new Date(Date.now() - 60 * 60_000)));
+  const [rangeTo, setRangeTo] = useState(() => isoToLocalInput(new Date()));
 
   useEffect(() => {
     const timer = setTimeout(() => setCommittedPercent(timePercent), 400);
     return () => clearTimeout(timer);
   }, [timePercent]);
 
+  // Same debounce discipline as the slider: a datetime-local fires on every
+  // keystroke while a year is being typed, and each one would refetch.
+  const [committedFrom, setCommittedFrom] = useState(rangeFrom);
+  const [committedTo, setCommittedTo] = useState(rangeTo);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setCommittedFrom(rangeFrom);
+      setCommittedTo(rangeTo);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [rangeFrom, rangeTo]);
+
   const minutes = sliderToMinutes(timePercent);
 
   const since = useMemo(() => {
+    if (mode === "range") return localInputToIso(committedFrom);
     const fetchMinutes = sliderToMinutes(committedPercent);
     return mode === "time" && fetchMinutes < MAX_MINUTES
       ? new Date(Date.now() - fetchMinutes * 60_000).toISOString()
       : undefined;
-  }, [mode, committedPercent]);
+  }, [mode, committedPercent, committedFrom]);
+
+  // Only the explicit range closes the far end; the sliders all mean "up to
+  // now", and sending an `until` for them would freeze the view at whatever
+  // moment the page happened to render.
+  const until = useMemo(
+    () => (mode === "range" ? localInputToIso(committedTo) : undefined),
+    [mode, committedTo],
+  );
 
   const isAllScans = mode === "last-n-scans" && scanCount >= MAX_SCAN_COUNT;
   const sessionLimit = mode === "last-n-scans" && !isAllScans ? scanCount : undefined;
@@ -75,7 +119,12 @@ export function useTimeScanFilter(defaultScanCount = 5) {
     setTimePercent,
     scanCount,
     setScanCount,
+    rangeFrom,
+    setRangeFrom,
+    rangeTo,
+    setRangeTo,
     since,
+    until,
     sessionLimit,
     minutes,
     isAllTime: mode === "time" && minutes >= MAX_MINUTES,

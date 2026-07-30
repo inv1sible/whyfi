@@ -6,12 +6,26 @@ interface PollingState<T> {
   loading: boolean;
 }
 
-export function usePolling<T>(fetcher: () => Promise<T>, intervalMs = 15000, deps: unknown[] = []): PollingState<T> {
+interface PollingOptions {
+  /** Freeze on the data currently held instead of refreshing. Used while a
+   * report is being printed: a refresh landing between the click and the
+   * print dialog would silently swap in data the user never saw, and the
+   * whole point of a report is that it shows what was on screen. */
+  paused?: boolean;
+}
+
+export function usePolling<T>(
+  fetcher: () => Promise<T>,
+  intervalMs = 15000,
+  deps: unknown[] = [],
+  { paused = false }: PollingOptions = {},
+): PollingState<T> {
   const [state, setState] = useState<PollingState<T>>({ data: null, error: null, loading: true });
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
 
   useEffect(() => {
+    if (paused) return;
     let cancelled = false;
 
     const tick = async () => {
@@ -31,7 +45,7 @@ export function usePolling<T>(fetcher: () => Promise<T>, intervalMs = 15000, dep
       clearInterval(id);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [intervalMs, ...deps]);
+  }, [intervalMs, paused, ...deps]);
 
   return state;
 }

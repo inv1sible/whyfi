@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api/client";
+import { api, areaQuery } from "../api/client";
 import { SecurityBadge } from "../components/SecurityBadge";
 import { SimpleBarChart } from "../components/SimpleBarChart";
 import { SortableTh } from "../components/SortableTh";
@@ -28,10 +28,11 @@ export function ChannelCongestionPage() {
     () =>
       api.accessPoints(
         `?band=${encodeURIComponent(band)}` +
-          `${filter.sessionLimit ? `&session_limit=${filter.sessionLimit}` : filter.since ? `&active_since=${filter.since}` : ""}`,
+          `${filter.sessionLimit ? `&session_limit=${filter.sessionLimit}` : filter.since ? `&active_since=${filter.since}` : ""}` +
+          areaQuery(filter.area),
       ),
     15000,
-    [band, filter.since, filter.sessionLimit],
+    [band, filter.since, filter.sessionLimit, filter.area?.lat, filter.area?.lng, filter.area?.radiusM],
   );
 
   const filtered = filterBySearch<AccessPoint>(accessPoints.data?.results ?? [], filter.searchQuery);

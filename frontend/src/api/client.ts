@@ -176,6 +176,53 @@ export async function downloadWithProgress(
   return new Blob(chunks as BlobPart[], { type: "application/vnd.android.package-archive" });
 }
 
+/** The map's focus circle. Devices are kept when their *estimated* position
+ * (the signal-weighted centre of everywhere they were heard — see
+ * weightedCentroid in geo.ts) falls inside it, not when a single reading
+ * happens to. */
+export interface FocusArea {
+  lat: number;
+  lng: number;
+  radiusM: number;
+}
+
+/** Query fragment for the focus circle, or "" when none is set.
+ *
+ * Always emitted as a suffix with a leading "&" so it can be appended to any
+ * of the hand-built query strings across the pages without each of them
+ * having to reason about whether it's the first parameter. Callers that start
+ * a query with it are responsible for the "?".
+ */
+export function areaQuery(area: FocusArea | null | undefined): string {
+  if (!area) return "";
+  return `&area_lat=${area.lat}&area_lng=${area.lng}&area_radius_m=${Math.round(area.radiusM)}`;
+}
+
+/** The shared time window + focus area, as query parameters.
+ *
+ * `session_limit` and an explicit time window are mutually exclusive here (as
+ * they are in several of the backend views), so only one is sent — but the
+ * area is orthogonal to both and always goes along.
+ */
+function windowQuery(opts: {
+  since?: string;
+  until?: string;
+  sessionLimit?: number;
+  area?: FocusArea | null;
+}): string {
+  const parts: string[] = [];
+  if (opts.sessionLimit) {
+    parts.push(`session_limit=${opts.sessionLimit}`);
+  } else {
+    if (opts.since) parts.push(`since=${encodeURIComponent(opts.since)}`);
+    if (opts.until) parts.push(`until=${encodeURIComponent(opts.until)}`);
+  }
+  if (opts.area) {
+    parts.push(`area_lat=${opts.area.lat}`, `area_lng=${opts.area.lng}`, `area_radius_m=${Math.round(opts.area.radiusM)}`);
+  }
+  return parts.join("&");
+}
+
 export const api = {
   health: () => get<{ status: string }>("/health/"),
 
@@ -202,10 +249,12 @@ export const api = {
     ),
   // Coverage/heatmap responses are CappedList envelopes, not bare arrays —
   // read `.results`, and show the user something when `.truncated` is set.
-  accessPointsCoverage: (opts: { since?: string; sessionLimit?: number; ssidExact?: string } = {}) =>
+  accessPointsCoverage: (
+    opts: { since?: string; until?: string; sessionLimit?: number; area?: FocusArea | null; ssidExact?: string } = {},
+  ) =>
     get<CappedList<AccessPointCoverage>>(
-      `/access-points/coverage/?${opts.sessionLimit ? `session_limit=${opts.sessionLimit}&` : opts.since ? `since=${opts.since}&` : ""}` +
-        `${opts.ssidExact ? `ssid_exact=${encodeURIComponent(opts.ssidExact)}` : ""}`,
+      `/access-points/coverage/?${windowQuery(opts)}` +
+        `${opts.ssidExact ? `&ssid_exact=${encodeURIComponent(opts.ssidExact)}` : ""}`,
     ),
 
   channelCongestion: (band: string, opts: { since?: string; sessionLimit?: number } = {}) =>
@@ -223,16 +272,13 @@ export const api = {
       `/cell-towers/${encodeURIComponent(towerKey)}/cell-observations/?limit=${opts.limit ?? 200}` +
         `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
     ),
-  cellTowersCoverage: (opts: { since?: string; sessionLimit?: number } = {}) =>
-    get<CappedList<RadioCoverage>>(
-      `/cell-towers/coverage/?${opts.sessionLimit ? `session_limit=${opts.sessionLimit}` : opts.since ? `since=${opts.since}` : ""}`,
-    ),
+  cellTowersCoverage: (opts: { since?: string; until?: string; sessionLimit?: number; area?: FocusArea | null } = {}) =>
+    get<CappedList<RadioCoverage>>(`/cell-towers/coverage/?${windowQuery(opts)}`),
 
   bleObservations: (query = "") => get<Paginated<BLEObservation>>(`/ble-observations/${query}`),
-  bleObservationsCoverage: (opts: { since?: string; sessionLimit?: number } = {}) =>
-    get<CappedList<RadioCoverage>>(
-      `/ble-observations/coverage/?${opts.sessionLimit ? `session_limit=${opts.sessionLimit}` : opts.since ? `since=${opts.since}` : ""}`,
-    ),
+  bleObservationsCoverage: (
+    opts: { since?: string; until?: string; sessionLimit?: number; area?: FocusArea | null } = {},
+  ) => get<CappedList<RadioCoverage>>(`/ble-observations/coverage/?${windowQuery(opts)}`),
 
   bleDevices: (query = "") => get<Paginated<BLEDevice>>(`/ble-devices/${query}`),
   bleDevice: (deviceKey: string) => get<BLEDevice>(`/ble-devices/${encodeURIComponent(deviceKey)}/`),

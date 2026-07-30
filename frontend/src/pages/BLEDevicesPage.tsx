@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { api } from "../api/client";
+import { api, areaQuery } from "../api/client";
 import { DeviceTypeBadge } from "../components/DeviceTypeBadge";
 import { SortableTh } from "../components/SortableTh";
 import { TableControls } from "../components/TableControls";
@@ -14,10 +14,10 @@ export function BLEDevicesPage() {
   const { data, error, loading } = usePolling(
     () =>
       api.bleDevices(
-        `?limit=200${filter.sessionLimit ? `&session_limit=${filter.sessionLimit}` : filter.since ? `&active_since=${filter.since}` : ""}`,
+        `?limit=200${filter.sessionLimit ? `&session_limit=${filter.sessionLimit}` : filter.since ? `&active_since=${filter.since}` : ""}${areaQuery(filter.area)}`,
       ),
     15000,
-    [filter.since, filter.sessionLimit],
+    [filter.since, filter.sessionLimit, filter.area?.lat, filter.area?.lng, filter.area?.radiusM],
   );
   const filtered = filterBySearch<BLEDevice>(data?.results ?? [], filter.searchQuery);
   const { sorted, sortKey, direction, requestSort } = useSortableData<BLEDevice>(

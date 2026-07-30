@@ -22,7 +22,7 @@ interface MapDisplayModeControlsProps {
 // signal chart and sighting-history table on the same page.
 export function MapDisplayModeControls({ mode, onModeChange, percent, onPercentChange, label }: MapDisplayModeControlsProps) {
   return (
-    <div style={{ margin: "0.75rem 0" }}>
+    <div className="map-display-controls" style={{ margin: "0.75rem 0" }}>
       <div className="band-selector">
         <button className={mode === "accumulate" ? "active" : ""} onClick={() => onModeChange("accumulate")}>
           Accumulate

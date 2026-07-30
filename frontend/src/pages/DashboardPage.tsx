@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api/client";
+import { api, areaQuery } from "../api/client";
 import { SortableTh } from "../components/SortableTh";
 import { TableControls } from "../components/TableControls";
 import { useFilter } from "../context/FilterContext";
@@ -21,17 +21,23 @@ interface ActivityRow {
 
 export function DashboardPage() {
   const filter = useFilter();
-  const rangeQuery = (activeSinceParam: "active_since" | "since") =>
-    filter.sessionLimit
-      ? `?session_limit=${filter.sessionLimit}`
-      : filter.since
-        ? `?${activeSinceParam}=${filter.since}`
-        : "";
+  // Built from parts rather than nested ternaries now that the focus area is
+  // orthogonal to the time window: the area can be set while neither
+  // session_limit nor since is, so where the "?" goes can't be assumed.
+  const rangeQuery = (activeSinceParam: "active_since" | "since") => {
+    const parts: string[] = [];
+    if (filter.sessionLimit) parts.push(`session_limit=${filter.sessionLimit}`);
+    else if (filter.since) parts.push(`${activeSinceParam}=${filter.since}`);
+    const area = areaQuery(filter.area).replace(/^&/, "");
+    if (area) parts.push(area);
+    return parts.length > 0 ? `?${parts.join("&")}` : "";
+  };
 
-  const wifi = usePolling(() => api.accessPoints(rangeQuery("active_since")), 15000, [filter.since, filter.sessionLimit]);
-  const ble = usePolling(() => api.bleDevices(rangeQuery("active_since")), 15000, [filter.since, filter.sessionLimit]);
-  const cell = usePolling(() => api.cellTowers(rangeQuery("active_since")), 15000, [filter.since, filter.sessionLimit]);
-  const lan = usePolling(() => api.lanDevices(rangeQuery("active_since")), 15000, [filter.since, filter.sessionLimit]);
+  const rangeDeps = [filter.since, filter.sessionLimit, filter.area?.lat, filter.area?.lng, filter.area?.radiusM];
+  const wifi = usePolling(() => api.accessPoints(rangeQuery("active_since")), 15000, rangeDeps);
+  const ble = usePolling(() => api.bleDevices(rangeQuery("active_since")), 15000, rangeDeps);
+  const cell = usePolling(() => api.cellTowers(rangeQuery("active_since")), 15000, rangeDeps);
+  const lan = usePolling(() => api.lanDevices(rangeQuery("active_since")), 15000, rangeDeps);
 
   const loading = wifi.loading && ble.loading && cell.loading && lan.loading;
   const anyError = wifi.error || ble.error || cell.error || lan.error;
