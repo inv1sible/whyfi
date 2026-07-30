@@ -10,7 +10,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["icons/*.png"],
+      includeAssets: ["icons/*.png", "favicon.ico", "favicon-*.png", "apple-touch-icon.png"],
       manifest: {
         name: "whyfi",
         short_name: "whyfi",

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Sampled from icons/03_Android.png's own backdrop, so the adaptive
+         background layer and the inset foreground artwork are the same navy
+         and the seam between them is invisible. -->
+    <color name="ic_launcher_background">#03102e</color>
+</resources>
