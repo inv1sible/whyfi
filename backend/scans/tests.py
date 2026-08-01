@@ -298,6 +298,179 @@ class ReadEndpointTests(TestCase):
         self.assertEqual(response.json()["results"][0]["hostname"], "router.local")
 
 
+class LimitablePaginationTests(TestCase):
+    """`?limit=` actually changes the page size — see pagination.py.
+
+    Before LimitablePageNumberPagination existed, every overview list page
+    sent `?limit=200` and it was silently ignored: plain PageNumberPagination
+    only understands `page`, so anything past the 50 most-recently-seen
+    matches was invisible with no indication a wider window would have shown
+    more. This is what made "I know this device was seen in that window, but
+    it's not in the list" look like a data bug when it was a pagination bug.
+    """
+
+    def setUp(self):
+        # 60 distinct APs — comfortably past the default PAGE_SIZE of 50, so
+        # the un-widened case is provably truncated, not just "happens to fit".
+        self.sensor = Sensor.objects.create(name="Test Phone")
+        ingest = APIClient()
+        ingest.credentials(HTTP_AUTHORIZATION=f"Token {self.sensor.token}")
+        for i in range(60):
+            ingest.post(
+                "/api/v1/scan-sessions/",
+                {
+                    "client_scan_id": f"scan-pagination-{i}",
+                    "started_at": "2026-07-16T10:00:00Z",
+                    "completed_at": "2026-07-16T10:00:03Z",
+                    "latitude": 48.1351,
+                    "longitude": 11.582,
+                    "wifi_observations": [
+                        {"bssid": f"aa:bb:cc:dd:{i:02x}:00", "ssid": f"Net{i}", "rssi": -55,
+                         "frequency_mhz": 2437, "capabilities": "[RSN-PSK-CCMP][ESS]"},
+                    ],
+                },
+                format="json",
+            )
+        self.user = get_user_model().objects.create_user(username="operator", password="test-pass-123")
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def test_default_page_size_is_unchanged(self):
+        # No behaviour change for a caller that never passes `limit` — this
+        # class is additive, not a silent widening of every response.
+        body = self.client.get("/api/v1/access-points/").json()
+        self.assertEqual(body["count"], 60)
+        self.assertEqual(len(body["results"]), 50)
+        self.assertIsNotNone(body["next"])
+
+    def test_limit_raises_the_page_size(self):
+        body = self.client.get("/api/v1/access-points/?limit=200").json()
+        self.assertEqual(body["count"], 60)
+        self.assertEqual(len(body["results"]), 60)
+        self.assertIsNone(body["next"])
+
+    def test_limit_is_capped_at_the_maximum(self):
+        # A hand-edited URL asking for far more than the ceiling gets the
+        # ceiling, not an unbounded read — same reasoning as
+        # scans.views.positive_int's maximum.
+        from scans.pagination import MAX_PAGE_SIZE
+
+        body = self.client.get(f"/api/v1/access-points/?limit={MAX_PAGE_SIZE * 10}").json()
+        self.assertLessEqual(len(body["results"]), MAX_PAGE_SIZE)
+
+    def test_limit_applies_to_other_device_list_endpoints_too(self):
+        for path in ("/api/v1/cell-towers/", "/api/v1/ble-devices/", "/api/v1/lan-devices/", "/api/v1/scan-sessions/"):
+            with self.subTest(path=path):
+                response = self.client.get(f"{path}?limit=200")
+                self.assertEqual(response.status_code, 200)
+
+
+class SearchFilterTests(TestCase):
+    """`?q=` — the server-side counterpart to searchFilter.ts's
+    filterBySearch, added so a search box backed by real pagination can find
+    a match anywhere in the table, not just on whichever page is loaded (the
+    reported "Venus" scan really did have a device_name of
+    "Venus_98CDAC4C678A" ranked past page 1 by recency — this pins that
+    exact shape of bug at the API layer).
+    """
+
+    def setUp(self):
+        self.sensor = Sensor.objects.create(name="Test Phone")
+        ingest = APIClient()
+        ingest.credentials(HTTP_AUTHORIZATION=f"Token {self.sensor.token}")
+        ingest.post(
+            "/api/v1/scan-sessions/",
+            {
+                "client_scan_id": "scan-search-1",
+                "started_at": "2026-07-16T10:00:00Z",
+                "completed_at": "2026-07-16T10:00:03Z",
+                "latitude": 48.1351,
+                "longitude": 11.582,
+                "wifi_observations": [
+                    {"bssid": "aa:bb:cc:dd:ee:ff", "ssid": "HomeNetwork", "rssi": -55,
+                     "frequency_mhz": 2437, "capabilities": "[RSN-PSK-CCMP][ESS]"},
+                    {"bssid": "11:22:33:44:55:66", "ssid": "CoffeeShopWiFi", "rssi": -70,
+                     "frequency_mhz": 5180, "capabilities": "[ESS]"},
+                ],
+                "cell_observations": [
+                    {"mcc": "262", "mnc": "01", "carrier_name": "Deutsche Telekom", "radio_type": "LTE",
+                     "is_serving_cell": True, "cell_id": "12345", "tac_or_lac": "678", "signal_dbm": -85},
+                ],
+                "ble_observations": [
+                    {"ble_mac": "98:cd:ac:4c:67:8a", "device_name": "Venus_98CDAC4C678A", "rssi": -60},
+                    {"ble_mac": "aa:aa:aa:aa:aa:aa", "device_name": "Mars_headset", "rssi": -80},
+                ],
+                "lan_observations": [
+                    {"ip_address": "192.168.1.42", "hostname": "printer-office", "open_ports": [631]},
+                ],
+            },
+            format="json",
+        )
+        self.user = get_user_model().objects.create_user(username="operator", password="test-pass-123")
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def test_free_text_finds_ble_device_by_name(self):
+        # The literal reported bug: searching by (partial) device name.
+        body = self.client.get("/api/v1/ble-devices/?q=venus").json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["results"][0]["device_key"], "98:cd:ac:4c:67:8a")
+
+    def test_free_text_is_case_insensitive_substring(self):
+        body = self.client.get("/api/v1/access-points/?q=coffee").json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["results"][0]["bssid"], "11:22:33:44:55:66")
+
+    def test_free_text_matches_across_multiple_fields(self):
+        # "network" appears in HomeNetwork's ssid only, not CoffeeShopWiFi's.
+        body = self.client.get("/api/v1/access-points/?q=network").json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["results"][0]["ssid"], "HomeNetwork")
+
+    def test_column_filter_is_exact_not_substring(self):
+        # ssid=HomeNetwork must not also match a hypothetical "HomeNetwork2".
+        exact = self.client.get("/api/v1/access-points/?q=ssid=HomeNetwork").json()
+        self.assertEqual(exact["count"], 1)
+        prefix_only = self.client.get("/api/v1/access-points/?q=ssid=HomeNetwor").json()
+        self.assertEqual(prefix_only["count"], 0)
+
+    def test_column_filter_key_matches_by_containment(self):
+        # "carrier" should find the field named "carrier_name", same
+        # contract as the frontend's filterBySearch.
+        body = self.client.get("/api/v1/cell-towers/?q=carrier%3DDeutsche%20Telekom").json()
+        self.assertEqual(body["count"], 1)
+
+    def test_unknown_column_key_returns_no_matches_not_an_error(self):
+        response = self.client.get("/api/v1/access-points/?q=nonexistentfield=x")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 0)
+
+    def test_lan_device_search_by_hostname(self):
+        body = self.client.get("/api/v1/lan-devices/?q=printer").json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["results"][0]["ip_address"], "192.168.1.42")
+
+    def test_no_query_returns_everything(self):
+        body = self.client.get("/api/v1/ble-devices/").json()
+        self.assertEqual(body["count"], 2)
+
+    def test_scan_session_search_finds_session_via_related_ble_device(self):
+        # Cross-relation search — must not corrupt the per-radio counts the
+        # same queryset annotates (see the get_queryset() comment about why
+        # this runs as a separate id-subquery rather than filtering in place).
+        body = self.client.get("/api/v1/scan-sessions/?q=venus").json()
+        self.assertEqual(body["count"], 1)
+        session = body["results"][0]
+        self.assertEqual(session["wifi_count"], 2)
+        self.assertEqual(session["cell_count"], 1)
+        self.assertEqual(session["ble_count"], 2)
+        self.assertEqual(session["lan_count"], 1)
+
+    def test_scan_session_search_no_match_returns_empty_not_everything(self):
+        body = self.client.get("/api/v1/scan-sessions/?q=no-such-thing-anywhere").json()
+        self.assertEqual(body["count"], 0)
+
+
 class QueryParamRobustnessTests(TestCase):
     """`session_limit`/`limit` both end up as queryset slice bounds, and
     Django raises ValueError("Negative indexing is not supported.") on a
@@ -509,6 +682,79 @@ class TimeWindowFilterTests(TestCase):
             "/api/v1/access-points/aa:bb:cc:dd:ee:02/wifi-observations/?until=2026-07-16T11:30:00Z"
         ).json()
         self.assertEqual(body, [])
+
+
+class ActiveWindowFilterTests(TestCase):
+    """`active_since`/`active_until` bound the four device-list endpoints
+    (AccessPoint/CellTower/BLEDevice/LANDevice) by `last_seen_at`.
+
+    These are a distinct pair from `since`/`until`: a device list has no
+    single `observed_at` of its own, only the aggregate's `last_seen_at` —
+    see apply_active_window(). Without `active_until`, "Date range" mode
+    could only ever close the *start* of a device list's window, and a
+    device last seen after the requested range would still appear in a list
+    that's supposed to stop at the end of it.
+    """
+
+    def setUp(self):
+        self.sensor = Sensor.objects.create(name="Test Phone")
+        ingest = APIClient()
+        ingest.credentials(HTTP_AUTHORIZATION=f"Token {self.sensor.token}")
+        for index, hour in enumerate((10, 11, 12)):
+            ingest.post(
+                "/api/v1/scan-sessions/",
+                {
+                    "client_scan_id": f"scan-active-window-{index}",
+                    "started_at": f"2026-07-16T{hour:02d}:00:00Z",
+                    "completed_at": f"2026-07-16T{hour:02d}:00:03Z",
+                    "latitude": 48.1351,
+                    "longitude": 11.582,
+                    "wifi_observations": [
+                        {"bssid": f"aa:bb:cc:dd:ee:1{index}", "ssid": f"ActiveNet{index}", "rssi": -55,
+                         "frequency_mhz": 2437, "capabilities": "[RSN-PSK-CCMP][ESS]"},
+                    ],
+                },
+                format="json",
+            )
+            # AccessPoint.last_seen_at is auto_now=True, so it was just
+            # stamped with the real wall-clock time regardless of the
+            # fictional started_at/completed_at above — .update() (unlike
+            # .save()) doesn't trigger auto_now, so this is the only way to
+            # give it the historical value apply_active_window is meant to
+            # filter on.
+            AccessPoint.objects.filter(bssid=f"aa:bb:cc:dd:ee:1{index}").update(
+                last_seen_at=f"2026-07-16T{hour:02d}:00:00Z"
+            )
+        self.user = get_user_model().objects.create_user(username="operator", password="test-pass-123")
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def ssids(self, query=""):
+        body = self.client.get(f"/api/v1/access-points/{query}").json()
+        return sorted(entry["ssid"] for entry in body["results"])
+
+    def test_no_window_returns_everything(self):
+        self.assertEqual(self.ssids(), ["ActiveNet0", "ActiveNet1", "ActiveNet2"])
+
+    def test_active_until_excludes_later_devices(self):
+        self.assertEqual(self.ssids("?active_until=2026-07-16T11:30:00Z"), ["ActiveNet0", "ActiveNet1"])
+
+    def test_active_since_and_until_bound_both_ends(self):
+        self.assertEqual(
+            self.ssids("?active_since=2026-07-16T10:30:00Z&active_until=2026-07-16T11:30:00Z"),
+            ["ActiveNet1"],
+        )
+
+    def test_active_until_before_since_returns_nothing(self):
+        self.assertEqual(
+            self.ssids("?active_since=2026-07-16T12:00:00Z&active_until=2026-07-16T10:00:00Z"), []
+        )
+
+    def test_active_until_applies_to_cell_ble_and_lan_device_lists_too(self):
+        for path in ("/api/v1/cell-towers/", "/api/v1/ble-devices/", "/api/v1/lan-devices/"):
+            with self.subTest(path=path):
+                response = self.client.get(f"{path}?active_until=2026-07-16T11:30:00Z")
+                self.assertEqual(response.status_code, 200)
 
 
 class AreaFilterTests(TestCase):

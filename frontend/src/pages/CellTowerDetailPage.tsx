@@ -27,6 +27,7 @@ export function CellTowerDetailPage() {
   const { refreshKey, deleteScanSession } = useDeleteScanSession();
   const {
     since,
+    until,
     sessionLimit,
     mapDisplayMode,
     setMapDisplayMode,
@@ -38,9 +39,9 @@ export function CellTowerDetailPage() {
 
   const tower = usePolling(() => api.cellTower(towerKey), 20000, [towerKey], { paused: printing });
   const observations = usePolling(
-    () => api.cellObservationsForTower(towerKey, { since, sessionLimit }),
+    () => api.cellObservationsForTower(towerKey, { since, until, sessionLimit }),
     20000,
-    [towerKey, refreshKey, since, sessionLimit],
+    [towerKey, refreshKey, since, until, sessionLimit],
     { paused: printing },
   );
 

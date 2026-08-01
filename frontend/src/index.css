@@ -679,6 +679,23 @@ button:disabled {
   white-space: nowrap;
 }
 
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  margin: 0.75rem 0;
+}
+
+.pager-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  white-space: nowrap;
+}
+
 .floating-action-bar {
   position: sticky;
   bottom: 1rem;
@@ -921,6 +938,7 @@ button:disabled {
   .map-display-controls,
   .table-controls,
   .table-search,
+  .pager,
   .floating-action-bar,
   .leaflet-control-zoom,
   .print-hide {

@@ -63,6 +63,7 @@ export function LANDeviceDetailPage() {
   const { refreshKey, deleteScanSession } = useDeleteScanSession();
   const {
     since,
+    until,
     sessionLimit,
     mapDisplayMode,
     setMapDisplayMode,
@@ -74,9 +75,9 @@ export function LANDeviceDetailPage() {
 
   const device = usePolling(() => api.lanDevice(ip), 20000, [ip], { paused: printing });
   const observations = usePolling(
-    () => api.lanObservationsForDevice(ip, { since, sessionLimit }),
+    () => api.lanObservationsForDevice(ip, { since, until, sessionLimit }),
     20000,
-    [ip, refreshKey, since, sessionLimit],
+    [ip, refreshKey, since, until, sessionLimit],
     { paused: printing },
   );
 

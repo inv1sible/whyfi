@@ -9,6 +9,8 @@ import { useFilter } from "../context/FilterContext";
 import { useSortableData } from "../hooks/useSortableData";
 import { usePolling } from "../hooks/usePolling";
 import { filterBySearch } from "../searchFilter";
+import { activeWindowQuery } from "../activeWindowQuery";
+import { TruncationNotice } from "../components/TruncationNotice";
 import { groupBySsid } from "../ssidGrouping";
 import type { SsidGroupRow } from "../ssidGrouping";
 import type { AccessPoint } from "../api/types";
@@ -20,23 +22,28 @@ export function ChannelCongestionPage() {
   const filter = useFilter();
 
   const congestion = usePolling(
-    () => api.channelCongestion(band, { since: filter.since, sessionLimit: filter.sessionLimit }),
+    () => api.channelCongestion(band, { since: filter.since, until: filter.until, sessionLimit: filter.sessionLimit }),
     15000,
-    [band, filter.since, filter.sessionLimit],
+    [band, filter.since, filter.until, filter.sessionLimit],
   );
   const accessPoints = usePolling(
     () =>
       api.accessPoints(
-        `?band=${encodeURIComponent(band)}` +
-          `${filter.sessionLimit ? `&session_limit=${filter.sessionLimit}` : filter.since ? `&active_since=${filter.since}` : ""}` +
-          areaQuery(filter.area),
+        `?band=${encodeURIComponent(band)}&limit=1000` + activeWindowQuery(filter) + areaQuery(filter.area),
       ),
     15000,
-    [band, filter.since, filter.sessionLimit, filter.area?.lat, filter.area?.lng, filter.area?.radiusM],
+    [band, filter.since, filter.until, filter.sessionLimit, filter.area?.lat, filter.area?.lng, filter.area?.radiusM],
   );
 
-  const filtered = filterBySearch<AccessPoint>(accessPoints.data?.results ?? [], filter.searchQuery);
+  const rawResults = accessPoints.data?.results ?? [];
+  const filtered = filterBySearch<AccessPoint>(rawResults, filter.searchQuery);
   const groupedRows = useMemo(() => groupBySsid(filtered), [filtered]);
+  // Grouping the unfiltered results too, purely to know whether there is
+  // anything to search *before* the search narrowed it to nothing — this is
+  // what the vanish bug actually hinged on: gating the table (and the only
+  // search box on the page) on the post-filter count meant a no-match query
+  // took the box down with the table, with no way left to clear it.
+  const rawGroupedRows = useMemo(() => groupBySsid(rawResults), [rawResults]);
   const { sorted: sortedGroups, sortKey, direction, requestSort } = useSortableData<SsidGroupRow>(
     groupedRows,
     "lastSeen",
@@ -73,10 +80,10 @@ export function ChannelCongestionPage() {
       <p className="page-hint">Grouped by SSID — a mesh network's individual BSSIDs are listed on its detail page.</p>
       {accessPoints.loading && !accessPoints.data && <p>Loading…</p>}
       {accessPoints.error && <p className="error-text">Could not reach the backend: {accessPoints.error.message}</p>}
-      {accessPoints.data && sortedGroups.length === 0 && (
+      {accessPoints.data && rawGroupedRows.length === 0 && (
         <p className="empty-state">No networks seen on {band} in this time range.</p>
       )}
-      {sortedGroups.length > 0 && (
+      {rawGroupedRows.length > 0 && (
         <>
           <TableControls />
           <table className="data-table">
@@ -91,6 +98,9 @@ export function ChannelCongestionPage() {
             </tr>
           </thead>
           <tbody>
+            {sortedGroups.length === 0 && (
+              <tr><td colSpan={6} className="empty-state">No networks match your search.</td></tr>
+            )}
             {sortedGroups.map((row) => (
               <tr key={row.key}>
                 <td>

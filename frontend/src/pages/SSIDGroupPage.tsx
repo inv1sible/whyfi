@@ -11,6 +11,7 @@ import { SortableTh } from "../components/SortableTh";
 import { SimpleLineChart } from "../components/SimpleLineChart";
 import { COVERAGE_STROKE_COLOR, classifyDeviceCoverage, soloShapes } from "../coverageConfig";
 import { useFilter } from "../context/FilterContext";
+import { filterBySearch } from "../searchFilter";
 import { resolveCurrentScanMultiDevice } from "../currentScan";
 import { weightedCentroid } from "../geo";
 import {
@@ -158,7 +159,7 @@ export function SSIDGroupPage() {
     sortKey: apSortKey,
     direction: apDirection,
     requestSort: requestApSort,
-  } = useSortableData(results, "last_seen_at", "desc");
+  } = useSortableData(filterBySearch(results, filter.searchQuery), "last_seen_at", "desc");
 
   const reportViewSettings = useReportViewSettings(currentScanLabel);
   const reportSummary = [
@@ -209,6 +210,9 @@ export function SSIDGroupPage() {
             </tr>
           </thead>
           <tbody>
+            {sortedAps.length === 0 && (
+              <tr><td colSpan={5} className="empty-state">No access points match your search.</td></tr>
+            )}
             {sortedAps.map((ap) => {
               const color = polygons.find((p) => p.label === ap.bssid)?.color;
               return (

@@ -1,4 +1,5 @@
 import math
+import re
 from datetime import timedelta
 from urllib.parse import quote
 
@@ -265,6 +266,74 @@ def parse_window(request):
     return request.query_params.get("since"), request.query_params.get("until")
 
 
+def apply_active_window(qs, request):
+    """Narrows a device-list queryset (AccessPoint/CellTower/BLEDevice/
+    LANDevice) to those last seen within [active_since, active_until].
+
+    A device list has no `observed_at` of its own to filter on — only the
+    aggregate's `last_seen_at` — hence the separate `active_*` param names
+    from `parse_window`'s `since`/`until`, which bound individual
+    observations. `active_until` exists for the same reason `until` does:
+    without it, "Date range" mode only ever closes the *start* of the
+    window, and a device last seen after the requested range still shows up
+    in a list that's supposed to be capped at `active_until`.
+    """
+    active_since = request.query_params.get("active_since")
+    if active_since:
+        qs = qs.filter(last_seen_at__gte=active_since)
+    active_until = request.query_params.get("active_until")
+    if active_until:
+        qs = qs.filter(last_seen_at__lte=active_until)
+    return qs
+
+
+COLUMN_SEARCH = re.compile(r"^([a-zA-Z0-9_]+)\s*=\s*(.+)$")
+
+
+def apply_search(qs, request, fields, distinct=False):
+    """Server-side counterpart to the frontend's searchFilter.ts::filterBySearch,
+    so a search box backed by real pagination can find a match anywhere in the
+    table, not just on whichever page happens to be loaded — the exact shape of
+    the "missing Venus" bug (see LimitablePageNumberPagination), just one layer
+    up: raising the page-size cap doesn't help if the match is on page 23 of a
+    search that only ever looks at page 1.
+
+    `fields` maps a display-ish key to the ORM lookup path used to search it.
+    The key doesn't need to match the path exactly (mirrors the frontend's
+    "any property whose name *contains* the typed key" contract) — e.g.
+    {"channel": "latest_channel"} lets `channel=6` find `latest_channel`.
+
+    Free text (no "="): OR-icontains across every field. "key=value": only
+    fields whose key contains "key" are searched, and matched with `iexact`
+    (exact, not substring) — same fuzzy-vs-precise split as the frontend.
+
+    `distinct=True` for field sets that traverse a to-many relation (e.g.
+    ScanSession's search reaches into related observations) — a plain
+    per-model field set never needs it.
+    """
+    raw = request.query_params.get("q", "").strip()
+    if not raw:
+        return qs
+    match = COLUMN_SEARCH.match(raw)
+    if match:
+        key, value = match.groups()
+        key = key.strip().lower()
+        value = value.strip()
+        paths = [path for name, path in fields.items() if key in name.lower()]
+        if not paths:
+            return qs.none()
+        q = Q()
+        for path in paths:
+            q |= Q(**{f"{path}__iexact": value})
+        qs = qs.filter(q)
+    else:
+        q = Q()
+        for path in fields.values():
+            q |= Q(**{f"{path}__icontains": raw})
+        qs = qs.filter(q)
+    return qs.distinct() if distinct else qs
+
+
 def parse_session_limit(request):
     return positive_int(request.query_params.get("session_limit"))
 
@@ -320,9 +389,7 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
             # for search-like use, which would also pull in similarly-named
             # unrelated networks.
             qs = qs.filter(ssid=ssid_exact)
-        active_since = self.request.query_params.get("active_since")
-        if active_since:
-            qs = qs.filter(last_seen_at__gte=active_since)
+        qs = apply_active_window(qs, self.request)
         session_limit = parse_session_limit(self.request)
         if session_limit:
             qs = qs.filter(observations__scan_session_id__in=recent_session_ids(session_limit)).distinct()
@@ -336,6 +403,7 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
         if area:
             ids = area_device_ids(self.request, WiFiObservation, "access_point_id", "rssi", area, session_limit)
             qs = qs.filter(pk__in=ids)
+        qs = apply_search(qs, self.request, {"bssid": "bssid", "ssid": "ssid", "vendor_oui": "vendor_oui"})
         return qs
 
     @action(detail=True, methods=["get"], url_path="wifi-observations")
@@ -493,6 +561,36 @@ class ScanSessionViewSet(
             "ble_observations",
             "lan_observations",
         )
+        # Reaches into the same related fields ScanSessionSerializer.
+        # get_identifiers_summary() reads (plus sensor name and the carrier
+        # seen on this session) — so the box that shows "SSID, device name,
+        # hostname…" per row can actually find a match by one, not just
+        # sensor_name/address.
+        #
+        # Run against a fresh, unannotated queryset and narrow by id rather
+        # than filtering `qs` directly: `qs` already carries Count(...)
+        # annotations + an implicit GROUP BY, and every search path here
+        # crosses a *different* to-many relation than the one each Count
+        # aggregates — filtering it in place would restrict the joined rows
+        # each Count sees too, silently undercounting wifi_count/ble_count/
+        # etc. for a session that only matched via one radio type.
+        if self.request.query_params.get("q", "").strip():
+            match_ids = apply_search(
+                ScanSession.objects.only("pk"),
+                self.request,
+                {
+                    "sensor_name": "sensor__name",
+                    "ssid": "wifi_observations__access_point__ssid",
+                    "bssid": "wifi_observations__access_point__bssid",
+                    "device_name": "ble_observations__device_name",
+                    "ble_mac": "ble_observations__ble_mac",
+                    "hostname": "lan_observations__hostname",
+                    "ip_address": "lan_observations__ip_address",
+                    "carrier_name": "cell_observations__carrier_name",
+                },
+                distinct=True,
+            ).values_list("pk", flat=True)
+            qs = qs.filter(pk__in=list(match_ids))
         return qs
 
     def get_serializer_context(self):
@@ -577,9 +675,7 @@ class CellTowerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
 
     def get_queryset(self):
         qs = CellTower.objects.all().order_by("-last_seen_at")
-        active_since = self.request.query_params.get("active_since")
-        if active_since:
-            qs = qs.filter(last_seen_at__gte=active_since)
+        qs = apply_active_window(qs, self.request)
         session_limit = parse_session_limit(self.request)
         if session_limit:
             qs = qs.filter(observations__scan_session_id__in=recent_session_ids(session_limit)).distinct()
@@ -587,6 +683,19 @@ class CellTowerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         if area:
             ids = area_device_ids(self.request, CellObservation, "cell_tower_id", "signal_dbm", area, session_limit)
             qs = qs.filter(pk__in=ids)
+        qs = apply_search(
+            qs,
+            self.request,
+            {
+                "tower_key": "tower_key",
+                "mcc": "mcc",
+                "mnc": "mnc",
+                "tac_or_lac": "tac_or_lac",
+                "cell_id": "cell_id",
+                "carrier_name": "carrier_name",
+                "radio_type": "radio_type",
+            },
+        )
         return qs
 
     @action(detail=True, methods=["get"], url_path="cell-observations")
@@ -805,9 +914,7 @@ class BLEDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         device_type = self.request.query_params.get("device_type")
         if device_type:
             qs = qs.filter(device_type_guess=device_type)
-        active_since = self.request.query_params.get("active_since")
-        if active_since:
-            qs = qs.filter(last_seen_at__gte=active_since)
+        qs = apply_active_window(qs, self.request)
         session_limit = parse_session_limit(self.request)
         if session_limit:
             qs = qs.filter(observations__scan_session_id__in=recent_session_ids(session_limit)).distinct()
@@ -815,6 +922,11 @@ class BLEDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         if area:
             ids = area_device_ids(self.request, BLEObservation, "ble_device_id", "rssi", area, session_limit)
             qs = qs.filter(pk__in=ids)
+        qs = apply_search(
+            qs,
+            self.request,
+            {"device_key": "device_key", "device_name": "device_name", "device_type": "device_type_guess"},
+        )
         return qs
 
     @action(detail=True, methods=["get"], url_path="ble-observations")
@@ -861,9 +973,7 @@ class LANDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
 
     def get_queryset(self):
         qs = LANDevice.objects.all().order_by("-last_seen_at")
-        active_since = self.request.query_params.get("active_since")
-        if active_since:
-            qs = qs.filter(last_seen_at__gte=active_since)
+        qs = apply_active_window(qs, self.request)
         session_limit = parse_session_limit(self.request)
         if session_limit:
             qs = qs.filter(
@@ -877,6 +987,17 @@ class LANDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
             # phone stood when it saw the device.
             ids = area_device_ids(self.request, LANObservation, "lan_device_id", None, area, session_limit)
             qs = qs.filter(pk__in=ids)
+        qs = apply_search(
+            qs,
+            self.request,
+            {
+                "ip_address": "ip_address",
+                "mac_address": "mac_address",
+                "hostname": "hostname",
+                "vendor_oui": "vendor_oui",
+                "device_type": "device_type_guess",
+            },
+        )
         return qs
 
     def list(self, request, *args, **kwargs):

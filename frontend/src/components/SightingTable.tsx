@@ -1,9 +1,7 @@
 import type { ReactNode } from "react";
-import { useFilter } from "../context/FilterContext";
 import { useSortableData } from "../hooks/useSortableData";
 import type { SortDirection } from "../hooks/useSortableData";
 import { formatCoords, osmLink } from "../reportLinks";
-import { filterBySearch } from "../searchFilter";
 import { SortableTh } from "./SortableTh";
 import { TableControls } from "./TableControls";
 
@@ -46,8 +44,11 @@ interface SightingTableProps<T extends SightingBase> {
  * Observed here rather than at each call site is what makes that consistency
  * structural instead of a convention someone has to remember.
  *
- * Sorting and the search box are wired here too. The box was already rendered
- * above these tables but filtered nothing, which is worse than not having one.
+ * Sorting is wired here too. The global search box (see TableControls) isn't:
+ * a sighting is a timestamp+coordinates+radio-reading row, not a device
+ * identifier, so a query meant for a BSSID/MAC/IP list on some other page
+ * has no business narrowing (or emptying) this one just because it's still
+ * sitting in the shared search state from before you navigated here.
  */
 export function SightingTable<T extends SightingBase>({
   rows,
@@ -55,10 +56,8 @@ export function SightingTable<T extends SightingBase>({
   initialSortKey = "observedAt" as keyof T,
   initialDirection = "desc",
 }: SightingTableProps<T>) {
-  const { searchQuery } = useFilter();
-  const filtered = filterBySearch(rows, searchQuery);
   const { sorted, sortKey, direction, requestSort } = useSortableData<T>(
-    filtered,
+    rows,
     initialSortKey,
     initialDirection,
   );
@@ -70,7 +69,7 @@ export function SightingTable<T extends SightingBase>({
 
   return (
     <>
-      <TableControls />
+      <TableControls showSearch={false} />
       <table className="data-table">
         <thead>
           <tr>

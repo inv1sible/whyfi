@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { SortableTh } from "../components/SortableTh";
 import { TableControls } from "../components/TableControls";
+import { TruncationNotice } from "../components/TruncationNotice";
 import { useSortableData } from "../hooks/useSortableData";
 import { usePolling } from "../hooks/usePolling";
 import { filterBySearch } from "../searchFilter";
@@ -20,7 +21,7 @@ export function ManageScansPage() {
   // has no public refetch(), but changing a dep re-fires its effect right
   // away.
   const [refreshKey, setRefreshKey] = useState(0);
-  const { data, error, loading } = usePolling(() => api.scanSessions("?limit=200"), 15000, [refreshKey]);
+  const { data, error, loading } = usePolling(() => api.scanSessions("?limit=1000"), 15000, [refreshKey]);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [armed, setArmed] = useState(false);
@@ -139,9 +140,10 @@ export function ManageScansPage() {
 
       {loading && !data && <p>Loading…</p>}
       {error && <p className="error-text">Could not reach the backend: {error.message}</p>}
-      {data && sorted.length === 0 && <p className="empty-state">No scan sessions recorded yet.</p>}
+      {data && <TruncationNotice shown={data.results.length} total={data.count} noun="scans" />}
+      {data && rows.length === 0 && <p className="empty-state">No scan sessions recorded yet.</p>}
 
-      {sorted.length > 0 && (
+      {rows.length > 0 && (
         <>
           <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", margin: "0.75rem 0", flexWrap: "wrap" }}>
             <button onClick={selectAllExceptFiltered} disabled={!hasActiveFilter}>
@@ -150,7 +152,6 @@ export function ManageScansPage() {
             {selected.size > 0 && <button onClick={clearSelection}>Clear selection</button>}
           </div>
 
-          <TableControls searchValue={query} onSearchChange={setQuery} searchPlaceholder="Search sensor, address, device, timestamp…" />
           <table className="data-table">
             <thead>
               <tr>
@@ -174,6 +175,11 @@ export function ManageScansPage() {
               </tr>
             </thead>
             <tbody>
+              {sorted.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="empty-state">No scans match your search.</td>
+                </tr>
+              )}
               {sorted.map((s) => (
                 <tr key={s.id}>
                   <td>

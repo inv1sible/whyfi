@@ -24,24 +24,44 @@ export function DashboardPage() {
   // Built from parts rather than nested ternaries now that the focus area is
   // orthogonal to the time window: the area can be set while neither
   // session_limit nor since is, so where the "?" goes can't be assumed.
-  const rangeQuery = (activeSinceParam: "active_since" | "since") => {
-    const parts: string[] = [];
-    if (filter.sessionLimit) parts.push(`session_limit=${filter.sessionLimit}`);
-    else if (filter.since) parts.push(`${activeSinceParam}=${filter.since}`);
+  const rangeQuery = () => {
+    // Requested explicitly (rather than trusting the default PAGE_SIZE of
+    // 50) because this page merges four sources and keeps only the newest
+    // 100 rows overall — a source capped at 50 could be starved out of that
+    // merge entirely by a busier source, hiding a device that really is more
+    // recent than what made the cut. See TruncationNotice below for the
+    // rarer remaining case where even this isn't enough.
+    const parts: string[] = ["limit=200"];
+    if (filter.sessionLimit) {
+      parts.push(`session_limit=${filter.sessionLimit}`);
+    } else {
+      if (filter.since) parts.push(`active_since=${filter.since}`);
+      if (filter.until) parts.push(`active_until=${filter.until}`);
+    }
     const area = areaQuery(filter.area).replace(/^&/, "");
     if (area) parts.push(area);
-    return parts.length > 0 ? `?${parts.join("&")}` : "";
+    return `?${parts.join("&")}`;
   };
 
-  const rangeDeps = [filter.since, filter.sessionLimit, filter.area?.lat, filter.area?.lng, filter.area?.radiusM];
-  const wifi = usePolling(() => api.accessPoints(rangeQuery("active_since")), 15000, rangeDeps);
-  const ble = usePolling(() => api.bleDevices(rangeQuery("active_since")), 15000, rangeDeps);
-  const cell = usePolling(() => api.cellTowers(rangeQuery("active_since")), 15000, rangeDeps);
-  const lan = usePolling(() => api.lanDevices(rangeQuery("active_since")), 15000, rangeDeps);
+  const rangeDeps = [
+    filter.since,
+    filter.until,
+    filter.sessionLimit,
+    filter.area?.lat,
+    filter.area?.lng,
+    filter.area?.radiusM,
+  ];
+  const wifi = usePolling(() => api.accessPoints(rangeQuery()), 15000, rangeDeps);
+  const ble = usePolling(() => api.bleDevices(rangeQuery()), 15000, rangeDeps);
+  const cell = usePolling(() => api.cellTowers(rangeQuery()), 15000, rangeDeps);
+  const lan = usePolling(() => api.lanDevices(rangeQuery()), 15000, rangeDeps);
 
   const loading = wifi.loading && ble.loading && cell.loading && lan.loading;
   const anyError = wifi.error || ble.error || cell.error || lan.error;
   const anyData = wifi.data || ble.data || cell.data || lan.data;
+  const truncatedSourceCount = [wifi.data, ble.data, cell.data, lan.data].filter(
+    (d) => d && d.count > d.results.length,
+  ).length;
 
   const rows = useMemo<ActivityRow[]>(() => {
     const result: ActivityRow[] = [];
@@ -113,11 +133,17 @@ export function DashboardPage() {
 
       {loading && !anyData && <p>Loading…</p>}
       {anyError && <p className="error-text">Could not reach the backend: {anyError.message}</p>}
-      {anyData && sorted.length === 0 && (
+      {truncatedSourceCount > 0 && (
+        <p className="warning-text">
+          {truncatedSourceCount} source{truncatedSourceCount === 1 ? "" : "s"} returned more matches than fit here —
+          narrow the time range above, or visit that radio's own page, for the rest.
+        </p>
+      )}
+      {anyData && rows.length === 0 && (
         <p className="empty-state">No scans yet. Run a scan from the Android app.</p>
       )}
 
-      {sorted.length > 0 && (
+      {rows.length > 0 && (
         <>
           <TableControls />
           <table className="data-table">
@@ -131,6 +157,9 @@ export function DashboardPage() {
             </tr>
           </thead>
           <tbody>
+            {sorted.length === 0 && (
+              <tr><td colSpan={5} className="empty-state">No rows match your search.</td></tr>
+            )}
             {sorted.map((row) => (
               <tr key={row.key}>
                 <td>

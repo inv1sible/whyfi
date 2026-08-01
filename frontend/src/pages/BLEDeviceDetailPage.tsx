@@ -30,6 +30,7 @@ export function BLEDeviceDetailPage() {
   const { refreshKey, deleteScanSession } = useDeleteScanSession();
   const {
     since,
+    until,
     sessionLimit,
     mapDisplayMode,
     setMapDisplayMode,
@@ -41,9 +42,9 @@ export function BLEDeviceDetailPage() {
 
   const device = usePolling(() => api.bleDevice(identifier), 20000, [identifier], { paused: printing });
   const observations = usePolling(
-    () => api.bleObservationsForDevice(identifier, { since, sessionLimit }),
+    () => api.bleObservationsForDevice(identifier, { since, until, sessionLimit }),
     20000,
-    [identifier, refreshKey, since, sessionLimit],
+    [identifier, refreshKey, since, until, sessionLimit],
     { paused: printing },
   );
 

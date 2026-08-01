@@ -124,6 +124,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework.authentication.SessionAuthentication"],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
-    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    # Lets every list endpoint's page size be raised via `?limit=` — the
+    # param every overview page already sends. Plain PageNumberPagination
+    # doesn't recognise `limit` at all, so it was silently ignored: any
+    # window with more than PAGE_SIZE matches hid everything past the 50
+    # most-recently-seen with no indication. See scans/pagination.py.
+    "DEFAULT_PAGINATION_CLASS": "scans.pagination.LimitablePageNumberPagination",
     "PAGE_SIZE": 50,
 }

@@ -28,6 +28,7 @@ export function NetworkDetailPage() {
   const { refreshKey, deleteScanSession } = useDeleteScanSession();
   const {
     since,
+    until,
     sessionLimit,
     mapDisplayMode,
     setMapDisplayMode,
@@ -39,9 +40,9 @@ export function NetworkDetailPage() {
 
   const ap = usePolling(() => api.accessPoint(bssid), 20000, [bssid], { paused: printing });
   const observations = usePolling(
-    () => api.wifiObservationsForAp(bssid, { since, sessionLimit }),
+    () => api.wifiObservationsForAp(bssid, { since, until, sessionLimit }),
     20000,
-    [bssid, refreshKey, since, sessionLimit],
+    [bssid, refreshKey, since, until, sessionLimit],
     { paused: printing },
   );
   const siblingAps = usePolling(

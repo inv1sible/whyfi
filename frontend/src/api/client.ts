@@ -198,6 +198,33 @@ export function areaQuery(area: FocusArea | null | undefined): string {
   return `&area_lat=${area.lat}&area_lng=${area.lng}&area_radius_m=${Math.round(area.radiusM)}`;
 }
 
+/** Query fragment for the server-side search box (see apply_search() in
+ * scans/views.py) — `&`-prefixed, or "" for an empty query, same contract
+ * as areaQuery. */
+export function searchQueryPart(query: string): string {
+  const trimmed = query.trim();
+  return trimmed ? `&q=${encodeURIComponent(trimmed)}` : "";
+}
+
+/** `session_limit` and an explicit time window are mutually exclusive (as
+ * they are in every backend view that accepts both) — only one is ever sent. */
+function sinceUntilParts(opts: { since?: string; until?: string; sessionLimit?: number }): string[] {
+  if (opts.sessionLimit) return [`session_limit=${opts.sessionLimit}`];
+  const parts: string[] = [];
+  if (opts.since) parts.push(`since=${encodeURIComponent(opts.since)}`);
+  if (opts.until) parts.push(`until=${encodeURIComponent(opts.until)}`);
+  return parts;
+}
+
+/** The since/until/session_limit trio as a query-string suffix, `&`-prefixed
+ * (or empty) so it can be appended directly after an existing `?...`. Used by
+ * the per-entity observation-history endpoints, which — unlike the
+ * coverage/list endpoints `windowQuery` serves — take no `area`. */
+function sinceUntilQuery(opts: { since?: string; until?: string; sessionLimit?: number }): string {
+  const parts = sinceUntilParts(opts);
+  return parts.length > 0 ? `&${parts.join("&")}` : "";
+}
+
 /** The shared time window + focus area, as query parameters.
  *
  * `session_limit` and an explicit time window are mutually exclusive here (as
@@ -210,13 +237,7 @@ function windowQuery(opts: {
   sessionLimit?: number;
   area?: FocusArea | null;
 }): string {
-  const parts: string[] = [];
-  if (opts.sessionLimit) {
-    parts.push(`session_limit=${opts.sessionLimit}`);
-  } else {
-    if (opts.since) parts.push(`since=${encodeURIComponent(opts.since)}`);
-    if (opts.until) parts.push(`until=${encodeURIComponent(opts.until)}`);
-  }
+  const parts = sinceUntilParts(opts);
   if (opts.area) {
     parts.push(`area_lat=${opts.area.lat}`, `area_lng=${opts.area.lng}`, `area_radius_m=${Math.round(opts.area.radiusM)}`);
   }
@@ -242,10 +263,13 @@ export const api = {
 
   accessPoints: (query = "") => get<Paginated<AccessPoint>>(`/access-points/${query}`),
   accessPoint: (bssid: string) => get<AccessPoint>(`/access-points/${encodeURIComponent(bssid)}/`),
-  wifiObservationsForAp: (bssid: string, opts: { since?: string; sessionLimit?: number; limit?: number } = {}) =>
+  wifiObservationsForAp: (
+    bssid: string,
+    opts: { since?: string; until?: string; sessionLimit?: number; limit?: number } = {},
+  ) =>
     get<WiFiObservation[]>(
       `/access-points/${encodeURIComponent(bssid)}/wifi-observations/?limit=${opts.limit ?? 200}` +
-        `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
+        sinceUntilQuery(opts),
     ),
   // Coverage/heatmap responses are CappedList envelopes, not bare arrays —
   // read `.results`, and show the user something when `.truncated` is set.
@@ -257,20 +281,22 @@ export const api = {
         `${opts.ssidExact ? `&ssid_exact=${encodeURIComponent(opts.ssidExact)}` : ""}`,
     ),
 
-  channelCongestion: (band: string, opts: { since?: string; sessionLimit?: number } = {}) =>
+  channelCongestion: (band: string, opts: { since?: string; until?: string; sessionLimit?: number } = {}) =>
     get<ChannelCongestionPoint[]>(
-      `/channel-congestion/?band=${encodeURIComponent(band)}` +
-        `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
+      `/channel-congestion/?band=${encodeURIComponent(band)}` + sinceUntilQuery(opts),
     ),
 
   cellObservations: (query = "") => get<Paginated<CellObservation>>(`/cell-observations/${query}`),
 
   cellTowers: (query = "") => get<Paginated<CellTower>>(`/cell-towers/${query}`),
   cellTower: (towerKey: string) => get<CellTower>(`/cell-towers/${encodeURIComponent(towerKey)}/`),
-  cellObservationsForTower: (towerKey: string, opts: { since?: string; sessionLimit?: number; limit?: number } = {}) =>
+  cellObservationsForTower: (
+    towerKey: string,
+    opts: { since?: string; until?: string; sessionLimit?: number; limit?: number } = {},
+  ) =>
     get<CellObservation[]>(
       `/cell-towers/${encodeURIComponent(towerKey)}/cell-observations/?limit=${opts.limit ?? 200}` +
-        `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
+        sinceUntilQuery(opts),
     ),
   cellTowersCoverage: (opts: { since?: string; until?: string; sessionLimit?: number; area?: FocusArea | null } = {}) =>
     get<CappedList<RadioCoverage>>(`/cell-towers/coverage/?${windowQuery(opts)}`),
@@ -282,10 +308,13 @@ export const api = {
 
   bleDevices: (query = "") => get<Paginated<BLEDevice>>(`/ble-devices/${query}`),
   bleDevice: (deviceKey: string) => get<BLEDevice>(`/ble-devices/${encodeURIComponent(deviceKey)}/`),
-  bleObservationsForDevice: (deviceKey: string, opts: { since?: string; sessionLimit?: number; limit?: number } = {}) =>
+  bleObservationsForDevice: (
+    deviceKey: string,
+    opts: { since?: string; until?: string; sessionLimit?: number; limit?: number } = {},
+  ) =>
     get<BLEObservation[]>(
       `/ble-devices/${encodeURIComponent(deviceKey)}/ble-observations/?limit=${opts.limit ?? 200}` +
-        `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
+        sinceUntilQuery(opts),
     ),
 
   satelliteObservations: (query = "") => get<Paginated<SatelliteObservation>>(`/satellite-observations/${query}`),
@@ -295,10 +324,13 @@ export const api = {
 
   lanDevices: (query = "") => get<Paginated<LANDevice>>(`/lan-devices/${query}`),
   lanDevice: (ipAddress: string) => get<LANDevice>(`/lan-devices/${encodeURIComponent(ipAddress)}/`),
-  lanObservationsForDevice: (ipAddress: string, opts: { since?: string; sessionLimit?: number; limit?: number } = {}) =>
+  lanObservationsForDevice: (
+    ipAddress: string,
+    opts: { since?: string; until?: string; sessionLimit?: number; limit?: number } = {},
+  ) =>
     get<LANObservation[]>(
       `/lan-devices/${encodeURIComponent(ipAddress)}/lan-observations/?limit=${opts.limit ?? 200}` +
-        `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
+        sinceUntilQuery(opts),
     ),
 
   scanSessions: (query = "") => get<Paginated<ScanSession>>(`/scan-sessions/${query}`),
