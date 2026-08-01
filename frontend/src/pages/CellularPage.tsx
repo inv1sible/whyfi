@@ -37,14 +37,14 @@ export function CellularPage() {
       {loading && !data && <p>Loading…</p>}
       {error && <p className="error-text">Could not reach the backend: {error.message}</p>}
 
-      <TableControls />
-
       {data && data.results.length === 0 && (
         <p className="empty-state">No cellular observations yet. Run a scan from the Android app.</p>
       )}
 
       {sorted.length > 0 && (
-        <table className="data-table">
+        <>
+          <TableControls />
+          <table className="data-table">
           <thead>
             <tr>
               <SortableTh label="Cell ID" sortKey="cell_id" currentKey={sortKey} direction={direction} onSort={requestSort} />
@@ -73,6 +73,7 @@ export function CellularPage() {
             ))}
           </tbody>
         </table>
+        </>
       )}
     </section>
   );

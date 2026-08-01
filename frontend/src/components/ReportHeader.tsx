@@ -28,14 +28,17 @@ interface ReportHeaderProps {
  * pages can reuse it with their own fields.
  */
 export function ReportHeader({ title, summary, viewSettings }: ReportHeaderProps) {
+  // Two sibling blocks rather than one wrapper, so the print stylesheet can
+  // slot the coverage map between them: title, map, then the detail. A single
+  // <header> would force the map below all of it.
   return (
-    <header className="report-header print-only">
-      <div className="report-title-row">
+    <>
+      <div className="report-title-row print-only">
         <h1>{title}</h1>
         <span className="report-generated">Generated {new Date().toLocaleString()}</span>
       </div>
 
-      <div className="report-fields">
+      <div className="report-fields print-only">
         <section>
           <h2>Summary</h2>
           <dl>
@@ -60,7 +63,7 @@ export function ReportHeader({ title, summary, viewSettings }: ReportHeaderProps
           </dl>
         </section>
       </div>
-    </header>
+    </>
   );
 }
 

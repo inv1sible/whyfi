@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { SortableTh } from "../components/SortableTh";
-import { TableSearchBox } from "../components/TableSearchBox";
+import { TableControls } from "../components/TableControls";
 import { useSortableData } from "../hooks/useSortableData";
 import { usePolling } from "../hooks/usePolling";
 import { filterBySearch } from "../searchFilter";
@@ -120,10 +120,10 @@ export function ManageScansPage() {
         towers, LAN devices) are left in place even if this was their only sighting.
       </p>
 
-      <TableSearchBox
-        value={query}
-        onChange={setQuery}
-        placeholder="Search sensor, address, device, timestamp…"
+      <TableControls
+        searchValue={query}
+        onSearchChange={setQuery}
+        searchPlaceholder="Search sensor, address, device, timestamp…"
       />
 
       {missingAddressCount > 0 && (
@@ -150,6 +150,7 @@ export function ManageScansPage() {
             {selected.size > 0 && <button onClick={clearSelection}>Clear selection</button>}
           </div>
 
+          <TableControls searchValue={query} onSearchChange={setQuery} searchPlaceholder="Search sensor, address, device, timestamp…" />
           <table className="data-table">
             <thead>
               <tr>

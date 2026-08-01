@@ -1,15 +1,25 @@
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { MapDisplayModeControls } from "../components/MapDisplayModeControls";
+import { PrintReportButton } from "../components/PrintReportButton";
 import { RadioMap } from "../components/RadioMap";
 import type { CoveragePolygon, MapPoint } from "../components/RadioMap";
+import { ReportHeader } from "../components/ReportHeader";
+import { SightingTable } from "../components/SightingTable";
 import { SimpleLineChart } from "../components/SimpleLineChart";
 import { COVERAGE_STROKE_COLOR, classifyDeviceCoverage, soloShapes } from "../coverageConfig";
 import { useFilter } from "../context/FilterContext";
 import { resolveCurrentScan } from "../currentScan";
 import { weightedCentroid } from "../geo";
 import { useDeleteScanSession } from "../hooks/useDeleteScanSession";
+import {
+  describeObservedSpan,
+  describeSignalRange,
+  useReportPrinting,
+  useReportViewSettings,
+} from "../hooks/useDeviceReport";
 import { usePolling } from "../hooks/usePolling";
+import { formatCoords } from "../reportLinks";
 import { signalStrengthColor, signalStrengthLabel } from "../signalColor";
 
 export function CellTowerDetailPage() {
@@ -24,11 +34,14 @@ export function CellTowerDetailPage() {
     setScanIndexPercent,
   } = useFilter();
 
-  const tower = usePolling(() => api.cellTower(towerKey), 20000, [towerKey]);
+  const { printing, onMapReady, printButtonProps } = useReportPrinting();
+
+  const tower = usePolling(() => api.cellTower(towerKey), 20000, [towerKey], { paused: printing });
   const observations = usePolling(
     () => api.cellObservationsForTower(towerKey, { since, sessionLimit }),
     20000,
     [towerKey, refreshKey, since, sessionLimit],
+    { paused: printing },
   );
 
   const chronological = observations.data ? [...observations.data].reverse() : [];
@@ -109,10 +122,36 @@ export function CellTowerDetailPage() {
   const displayPoints: MapPoint[] =
     mapDisplayMode === "solo" ? (soloPolygons.length > 0 ? [] : currentScan.points) : heatPoints;
 
+  const reportViewSettings = useReportViewSettings(currentScan.label);
+  const reportSummary = [
+    { label: "Carrier", value: tower.data?.carrier_name || "Cell tower" },
+    { label: "Tower key", value: towerKey },
+    { label: "Radio type", value: tower.data?.radio_type ?? "—" },
+    { label: "Readings", value: `${visibleChronological.length} of ${chronological.length} in range` },
+    {
+      label: "Signal range",
+      // signal_dbm is nullable on cell observations, unlike RSSI elsewhere.
+      value: describeSignalRange(
+        visibleChronological.map((o) => o.signal_dbm).filter((v): v is number => v != null),
+      ),
+    },
+    { label: "Observed", value: describeObservedSpan(visibleChronological.map((o) => o.observed_at)) },
+    {
+      label: "Estimated position",
+      value: apEstimatedLocation ? formatCoords(apEstimatedLocation.lat, apEstimatedLocation.lng) : "—",
+    },
+  ];
+
   return (
     <section>
-      <h1>{tower.data?.carrier_name || "Cell tower"}</h1>
-      <p className="mono page-hint">{towerKey}</p>
+      <ReportHeader
+        title={`Coverage report — ${tower.data?.carrier_name || towerKey}`}
+        summary={reportSummary}
+        viewSettings={reportViewSettings}
+      />
+
+      <h1 className="print-hide">{tower.data?.carrier_name || "Cell tower"}</h1>
+      <p className="mono page-hint print-hide">{towerKey}</p>
 
       {tower.error && <p className="error-text">Could not reach the backend: {tower.error.message}</p>}
 
@@ -160,7 +199,13 @@ export function CellTowerDetailPage() {
       {geotagged.length === 0 && <p className="empty-state">No geotagged sightings yet.</p>}
       {geotagged.length > 0 && (
         <>
-          <RadioMap points={displayPoints} mode="heat" polygons={displayPolygons} onDeleteScanSession={deleteScanSession} />
+          <RadioMap
+            points={displayPoints}
+            mode="heat"
+            polygons={displayPolygons}
+            onDeleteScanSession={deleteScanSession}
+            onReady={onMapReady}
+          />
           <MapDisplayModeControls
             mode={mapDisplayMode}
             onModeChange={setMapDisplayMode}
@@ -168,6 +213,9 @@ export function CellTowerDetailPage() {
             onPercentChange={setScanIndexPercent}
             label={currentScan.label}
           />
+          <div style={{ margin: "0.75rem 0" }}>
+            <PrintReportButton {...printButtonProps} />
+          </div>
         </>
       )}
 
@@ -186,30 +234,28 @@ export function CellTowerDetailPage() {
       <h2>Sighting history</h2>
       <p className="page-hint">Follows the slider above — chart and table show the same readings the map does.</p>
       {observations.data && observations.data.length > 0 && (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Signal</th>
-              <th>Serving?</th>
-              <th>RSRP/RSRQ/SINR</th>
-              <th>Observed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {observations.data
-              .filter((o) => isRowVisible(o.scan_session, o.observed_at))
-              .map((sighting) => (
-              <tr key={sighting.id}>
-                <td>{sighting.signal_dbm != null ? `${sighting.signal_dbm} dBm` : "—"}</td>
-                <td>{sighting.is_serving_cell ? "Serving" : "Neighbor"}</td>
-                <td>
-                  {sighting.rsrp ?? "—"} / {sighting.rsrq ?? "—"} / {sighting.sinr ?? "—"}
-                </td>
-                <td>{new Date(sighting.observed_at).toLocaleString()}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <SightingTable
+          rows={observations.data
+            .filter((o) => isRowVisible(o.scan_session, o.observed_at))
+            .map((o) => ({
+              id: o.id,
+              signal: o.signal_dbm,
+              serving: o.is_serving_cell ? "Serving" : "Neighbor",
+              quality: `${o.rsrp ?? "—"} / ${o.rsrq ?? "—"} / ${o.sinr ?? "—"}`,
+              latitude: o.latitude ?? null,
+              longitude: o.longitude ?? null,
+              observedAt: o.observed_at,
+            }))}
+          columns={[
+            {
+              key: "signal",
+              label: "Signal",
+              render: (row) => (row.signal != null ? `${row.signal} dBm` : "—"),
+            },
+            { key: "serving", label: "Serving?" },
+            { key: "quality", label: "RSRP/RSRQ/SINR", hideMobile: true },
+          ]}
+        />
       )}
     </section>
   );

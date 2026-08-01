@@ -2,23 +2,43 @@ import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { MapDisplayModeControls } from "../components/MapDisplayModeControls";
+import { PrintReportButton } from "../components/PrintReportButton";
 import { RadioMap } from "../components/RadioMap";
 import type { CoveragePolygon, MapPoint } from "../components/RadioMap";
+import { ReportHeader } from "../components/ReportHeader";
+import { SightingTable } from "../components/SightingTable";
+import { SortableTh } from "../components/SortableTh";
 import { SimpleLineChart } from "../components/SimpleLineChart";
 import { COVERAGE_STROKE_COLOR, classifyDeviceCoverage, soloShapes } from "../coverageConfig";
 import { useFilter } from "../context/FilterContext";
 import { resolveCurrentScanMultiDevice } from "../currentScan";
 import { weightedCentroid } from "../geo";
+import {
+  describeObservedSpan,
+  describeSignalRange,
+  useReportPrinting,
+  useReportViewSettings,
+} from "../hooks/useDeviceReport";
 import { usePolling } from "../hooks/usePolling";
+import { useSortableData } from "../hooks/useSortableData";
 import { signalStrengthColor, signalStrengthLabel } from "../signalColor";
+import { TableControls } from "../components/TableControls";
 
 const PALETTE = ["#2dd4bf", "#f87171", "#60a5fa", "#fbbf24", "#a78bfa", "#34d399", "#f472b6", "#38bdf8"];
 
 export function SSIDGroupPage() {
   const { ssid = "" } = useParams();
   const filter = useFilter();
-  const accessPoints = usePolling(() => api.accessPoints(`?ssid_exact=${encodeURIComponent(ssid)}`), 15000, [ssid]);
-  const coverage = usePolling(() => api.accessPointsCoverage({ ssidExact: ssid }), 30000, [ssid]);
+  const { printing, onMapReady, printButtonProps } = useReportPrinting();
+  const accessPoints = usePolling(
+    () => api.accessPoints(`?ssid_exact=${encodeURIComponent(ssid)}`),
+    15000,
+    [ssid],
+    { paused: printing },
+  );
+  const coverage = usePolling(() => api.accessPointsCoverage({ ssidExact: ssid }), 30000, [ssid], {
+    paused: printing,
+  });
 
   // Each BSSID's stroke color still marks "which one is this" (matching
   // the color dot in the table below) — the gradient fill itself is
@@ -29,7 +49,13 @@ export function SSIDGroupPage() {
         polygons: [] as CoveragePolygon[],
         mobilePoints: [] as MapPoint[],
         currentScanLabel: null,
-        visibleReadings: [] as { bssid: string; weight: number; observedAt?: string }[],
+        visibleReadings: [] as {
+          bssid: string;
+          weight: number;
+          observedAt?: string;
+          lat?: number;
+          lng?: number;
+        }[],
       };
     // .results, not the response itself — the coverage endpoints return a
     // CappedList envelope so a capped (incomplete) answer can be told apart
@@ -50,7 +76,13 @@ export function SSIDGroupPage() {
         ? timeline.scanSessionId === null || p.scan_session_id === timeline.scanSessionId
         : timeline.cutoffObservedAt === null || !p.observed_at || p.observed_at <= timeline.cutoffObservedAt;
     const readings = devices.flatMap((ap) =>
-      ap.points.filter(isPointVisible).map((p) => ({ bssid: ap.bssid, weight: p.weight, observedAt: p.observed_at })),
+      ap.points.filter(isPointVisible).map((p) => ({
+        bssid: ap.bssid,
+        weight: p.weight,
+        observedAt: p.observed_at,
+        lat: p.lat,
+        lng: p.lng,
+      })),
     );
 
     if (filter.mapDisplayMode === "solo") {
@@ -121,11 +153,36 @@ export function SSIDGroupPage() {
   const tableReadings = [...chronologicalReadings].reverse().slice(0, 200);
 
   const results = accessPoints.data?.results ?? [];
+  const {
+    sorted: sortedAps,
+    sortKey: apSortKey,
+    direction: apDirection,
+    requestSort: requestApSort,
+  } = useSortableData(results, "last_seen_at", "desc");
+
+  const reportViewSettings = useReportViewSettings(currentScanLabel);
+  const reportSummary = [
+    { label: "SSID", value: ssid || "(hidden network)" },
+    { label: "Access points", value: `${results.length} broadcasting this SSID` },
+    { label: "Coverage areas", value: `${polygons.length} mapped, ${mobilePoints.length} shown as points` },
+    { label: "Readings", value: `${chronologicalReadings.length} in range` },
+    { label: "Signal range", value: describeSignalRange(chronologicalReadings.map((r) => r.weight)) },
+    {
+      label: "Observed",
+      value: describeObservedSpan(chronologicalReadings.map((r) => r.observedAt as string)),
+    },
+  ];
 
   return (
     <section>
-      <h1>{ssid || "(hidden network)"}</h1>
-      <p className="page-hint">
+      <ReportHeader
+        title={`Coverage report — ${ssid || "(hidden network)"}`}
+        summary={reportSummary}
+        viewSettings={reportViewSettings}
+      />
+
+      <h1 className="print-hide">{ssid || "(hidden network)"}</h1>
+      <p className="page-hint print-hide">
         All access points broadcasting this SSID (e.g. a mesh network's individual radios), grouped together but
         kept separate below — each BSSID's own coverage area is outlined in a different color on the map (fill is
         always green→orange by signal strength). A BSSID that moved around too much for "coverage" to mean anything
@@ -139,18 +196,20 @@ export function SSIDGroupPage() {
       )}
 
       {results.length > 0 && (
-        <table className="data-table">
+        <>
+        <TableControls />
+          <table className="data-table">
           <thead>
             <tr>
-              <th>BSSID</th>
-              <th>Band</th>
-              <th>Channel</th>
-              <th>Signal</th>
-              <th>Last seen</th>
+              <SortableTh label="BSSID" sortKey="bssid" currentKey={apSortKey} direction={apDirection} onSort={requestApSort} />
+              <SortableTh label="Band" sortKey="latest_band" currentKey={apSortKey} direction={apDirection} onSort={requestApSort} hideMobile />
+              <SortableTh label="Channel" sortKey="latest_channel" currentKey={apSortKey} direction={apDirection} onSort={requestApSort} hideMobile />
+              <SortableTh label="Signal" sortKey="latest_rssi" currentKey={apSortKey} direction={apDirection} onSort={requestApSort} />
+              <SortableTh label="Last seen" sortKey="last_seen_at" currentKey={apSortKey} direction={apDirection} onSort={requestApSort} />
             </tr>
           </thead>
           <tbody>
-            {results.map((ap) => {
+            {sortedAps.map((ap) => {
               const color = polygons.find((p) => p.label === ap.bssid)?.color;
               return (
                 <tr key={ap.bssid}>
@@ -169,8 +228,8 @@ export function SSIDGroupPage() {
                     )}
                     <Link to={`/networks/${encodeURIComponent(ap.bssid)}`}>{ap.bssid}</Link>
                   </td>
-                  <td>{ap.latest_band ?? "—"}</td>
-                  <td>{ap.latest_channel ?? "—"}</td>
+                  <td className="hide-mobile">{ap.latest_band ?? "—"}</td>
+                  <td className="hide-mobile">{ap.latest_channel ?? "—"}</td>
                   <td>{ap.latest_rssi != null ? `${ap.latest_rssi} dBm` : "—"}</td>
                   <td>{new Date(ap.last_seen_at).toLocaleString()}</td>
                 </tr>
@@ -178,6 +237,7 @@ export function SSIDGroupPage() {
             })}
           </tbody>
         </table>
+        </>
       )}
 
       <h2>Coverage per access point</h2>
@@ -192,7 +252,7 @@ export function SSIDGroupPage() {
       )}
       {(polygons.length > 0 || mobilePoints.length > 0) && (
         <>
-          <RadioMap points={mobilePoints} mode="heat" polygons={polygons} />
+          <RadioMap points={mobilePoints} mode="heat" polygons={polygons} onReady={onMapReady} />
           <MapDisplayModeControls
             mode={filter.mapDisplayMode}
             onModeChange={filter.setMapDisplayMode}
@@ -200,6 +260,9 @@ export function SSIDGroupPage() {
             onPercentChange={filter.setScanIndexPercent}
             label={currentScanLabel}
           />
+          <div style={{ margin: "0.75rem 0" }}>
+            <PrintReportButton {...printButtonProps} />
+          </div>
 
           <h2>Signal history</h2>
           <SimpleLineChart
@@ -212,26 +275,36 @@ export function SSIDGroupPage() {
           <h2>Sighting history</h2>
           <p className="page-hint">Follows the slider above — chart and table show the same readings the map does.</p>
           {tableReadings.length > 0 && (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>BSSID</th>
-                  <th>Signal</th>
-                  <th>Observed</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tableReadings.map((r, index) => (
-                  <tr key={`${r.bssid}-${r.observedAt}-${index}`}>
-                    <td className="mono">
-                      <Link to={`/networks/${encodeURIComponent(r.bssid)}`}>{r.bssid}</Link>
-                    </td>
-                    <td style={{ color: signalStrengthColor(r.weight) }}>{Math.round(r.weight)} dBm</td>
-                    <td>{r.observedAt ? new Date(r.observedAt).toLocaleString() : "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+            <SightingTable
+              rows={tableReadings.map((r, index) => ({
+                id: `${r.bssid}-${r.observedAt}-${index}`,
+                bssid: r.bssid,
+                signal: Math.round(r.weight),
+                latitude: r.lat ?? null,
+                longitude: r.lng ?? null,
+                observedAt: r.observedAt ?? null,
+              }))}
+              columns={[
+                {
+                  key: "bssid",
+                  label: "BSSID",
+                  render: (row) => (
+                    <Link className="mono" to={`/networks/${encodeURIComponent(row.bssid)}`}>
+                      {row.bssid}
+                    </Link>
+                  ),
+                },
+                {
+                  key: "signal",
+                  label: "Signal",
+                  render: (row) => (
+                    <span style={{ color: signalStrengthColor(row.signal) }}>{row.signal} dBm</span>
+                  ),
+                },
+              ]}
+            />
+            </>
           )}
         </>
       )}

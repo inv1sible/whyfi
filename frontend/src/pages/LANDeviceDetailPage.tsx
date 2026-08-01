@@ -2,13 +2,17 @@ import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { DeviceTypeBadge, LAN_DEVICE_LABELS } from "../components/DeviceTypeBadge";
 import { MapDisplayModeControls } from "../components/MapDisplayModeControls";
+import { PrintReportButton } from "../components/PrintReportButton";
 import { RadioMap } from "../components/RadioMap";
 import type { CoveragePolygon, MapPoint } from "../components/RadioMap";
+import { ReportHeader } from "../components/ReportHeader";
+import { SightingTable } from "../components/SightingTable";
 import { SimpleLineChart } from "../components/SimpleLineChart";
 import { COVERAGE_STROKE_COLOR, classifyDeviceCoverage, soloShapes } from "../coverageConfig";
 import { useFilter } from "../context/FilterContext";
 import { resolveCurrentScan } from "../currentScan";
 import { useDeleteScanSession } from "../hooks/useDeleteScanSession";
+import { describeObservedSpan, useReportPrinting, useReportViewSettings } from "../hooks/useDeviceReport";
 import { usePolling } from "../hooks/usePolling";
 import { responseTimeColor, responseTimeLabel } from "../signalColor";
 
@@ -66,11 +70,14 @@ export function LANDeviceDetailPage() {
     setScanIndexPercent,
   } = useFilter();
 
-  const device = usePolling(() => api.lanDevice(ip), 20000, [ip]);
+  const { printing, onMapReady, printButtonProps } = useReportPrinting();
+
+  const device = usePolling(() => api.lanDevice(ip), 20000, [ip], { paused: printing });
   const observations = usePolling(
     () => api.lanObservationsForDevice(ip, { since, sessionLimit }),
     20000,
     [ip, refreshKey, since, sessionLimit],
+    { paused: printing },
   );
 
   const chronological = observations.data ? [...observations.data].reverse() : [];
@@ -153,10 +160,37 @@ export function LANDeviceDetailPage() {
         .map((port) => ({ port, url: `${WEB_PORTS[port]}://${device.data?.ip_address ?? ip}${port === 80 || port === 443 ? "" : `:${port}`}` }))
     : [];
 
+  const reportViewSettings = useReportViewSettings(currentScan.label);
+  // No RSSI on a LAN sweep — response time is the closest thing to a signal,
+  // and faster is "stronger" (see responseTimeColor).
+  const visibleResponseTimes = visibleChronological
+    .map((o) => o.response_time_ms)
+    .filter((v): v is number => v != null);
+  const reportSummary = [
+    { label: "Device", value: device.data?.hostname || device.data?.ip_address || "LAN device" },
+    { label: "IP address", value: ip },
+    { label: "MAC address", value: device.data?.mac_address || "—" },
+    { label: "Sightings", value: `${visibleChronological.length} of ${chronological.length} in range` },
+    {
+      label: "Response time",
+      value:
+        visibleResponseTimes.length > 0
+          ? `${Math.min(...visibleResponseTimes).toFixed(0)}–${Math.max(...visibleResponseTimes).toFixed(0)} ms`
+          : "—",
+    },
+    { label: "Observed", value: describeObservedSpan(visibleChronological.map((o) => o.observed_at)) },
+  ];
+
   return (
     <section>
-      <h1>{device.data?.hostname || device.data?.ip_address || "LAN device"}</h1>
-      <p className="mono page-hint">{ip}</p>
+      <ReportHeader
+        title={`Device report — ${device.data?.hostname || ip}`}
+        summary={reportSummary}
+        viewSettings={reportViewSettings}
+      />
+
+      <h1 className="print-hide">{device.data?.hostname || device.data?.ip_address || "LAN device"}</h1>
+      <p className="mono page-hint print-hide">{ip}</p>
 
       {device.error && <p className="error-text">Could not reach the backend: {device.error.message}</p>}
 
@@ -211,7 +245,13 @@ export function LANDeviceDetailPage() {
       {geotagged.length === 0 && <p className="empty-state">No geotagged sightings yet.</p>}
       {geotagged.length > 0 && (
         <>
-          <RadioMap points={displayPoints} mode="heat" polygons={displayPolygons} onDeleteScanSession={deleteScanSession} />
+          <RadioMap
+            points={displayPoints}
+            mode="heat"
+            polygons={displayPolygons}
+            onDeleteScanSession={deleteScanSession}
+            onReady={onMapReady}
+          />
           <MapDisplayModeControls
             mode={mapDisplayMode}
             onModeChange={setMapDisplayMode}
@@ -220,6 +260,9 @@ export function LANDeviceDetailPage() {
             label={currentScan.label}
           />
           <p className="page-hint">Coverage/signal strength here reflects response time (faster = stronger), not RSSI.</p>
+          <div style={{ margin: "0.75rem 0" }}>
+            <PrintReportButton {...printButtonProps} />
+          </div>
         </>
       )}
 
@@ -238,28 +281,28 @@ export function LANDeviceDetailPage() {
       <h2>Sighting history</h2>
       <p className="page-hint">Follows the slider above — chart and table show the same readings the map does.</p>
       {observations.data && observations.data.length > 0 && (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Hostname</th>
-              <th>Open ports</th>
-              <th>Response time</th>
-              <th>Observed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {observations.data
-              .filter((o) => isRowVisible(o.scan_session, o.observed_at))
-              .map((sighting) => (
-              <tr key={sighting.id}>
-                <td>{sighting.hostname || "—"}</td>
-                <td>{sighting.open_ports.length > 0 ? sighting.open_ports.join(", ") : "—"}</td>
-                <td>{sighting.response_time_ms != null ? `${sighting.response_time_ms.toFixed(0)} ms` : "—"}</td>
-                <td>{new Date(sighting.observed_at).toLocaleString()}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <SightingTable
+          rows={observations.data
+            .filter((o) => isRowVisible(o.scan_session, o.observed_at))
+            .map((o) => ({
+              id: o.id,
+              hostname: o.hostname || "—",
+              openPorts: o.open_ports.length > 0 ? o.open_ports.join(", ") : "—",
+              responseTimeMs: o.response_time_ms,
+              latitude: o.latitude ?? null,
+              longitude: o.longitude ?? null,
+              observedAt: o.observed_at,
+            }))}
+          columns={[
+            { key: "hostname", label: "Hostname" },
+            { key: "openPorts", label: "Open ports", hideMobile: true },
+            {
+              key: "responseTimeMs",
+              label: "Response time",
+              render: (row) => (row.responseTimeMs != null ? `${row.responseTimeMs.toFixed(0)} ms` : "—"),
+            },
+          ]}
+        />
       )}
     </section>
   );

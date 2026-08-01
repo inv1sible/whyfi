@@ -73,13 +73,13 @@ export function ChannelCongestionPage() {
       <p className="page-hint">Grouped by SSID — a mesh network's individual BSSIDs are listed on its detail page.</p>
       {accessPoints.loading && !accessPoints.data && <p>Loading…</p>}
       {accessPoints.error && <p className="error-text">Could not reach the backend: {accessPoints.error.message}</p>}
-      <TableControls />
-
       {accessPoints.data && sortedGroups.length === 0 && (
         <p className="empty-state">No networks seen on {band} in this time range.</p>
       )}
       {sortedGroups.length > 0 && (
-        <table className="data-table">
+        <>
+          <TableControls />
+          <table className="data-table">
           <thead>
             <tr>
               <SortableTh label="SSID" sortKey="ssid" currentKey={sortKey} direction={direction} onSort={requestSort} />
@@ -110,6 +110,7 @@ export function ChannelCongestionPage() {
             ))}
           </tbody>
         </table>
+        </>
       )}
     </section>
   );

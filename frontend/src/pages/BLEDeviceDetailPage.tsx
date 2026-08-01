@@ -4,14 +4,24 @@ import { api } from "../api/client";
 import { CompassArrow } from "../components/CompassArrow";
 import { DeviceTypeBadge } from "../components/DeviceTypeBadge";
 import { MapDisplayModeControls } from "../components/MapDisplayModeControls";
+import { PrintReportButton } from "../components/PrintReportButton";
 import { RadioMap } from "../components/RadioMap";
 import type { CoveragePolygon, MapPoint } from "../components/RadioMap";
+import { ReportHeader } from "../components/ReportHeader";
+import { SightingTable } from "../components/SightingTable";
 import { SimpleLineChart } from "../components/SimpleLineChart";
 import { ALWAYS_MOBILE_BLE_TYPES, COVERAGE_STROKE_COLOR, classifyDeviceCoverage, soloShapes } from "../coverageConfig";
 import { useFilter } from "../context/FilterContext";
 import { resolveCurrentScan } from "../currentScan";
 import { useDeleteScanSession } from "../hooks/useDeleteScanSession";
+import {
+  describeObservedSpan,
+  describeSignalRange,
+  useReportPrinting,
+  useReportViewSettings,
+} from "../hooks/useDeviceReport";
 import { usePolling } from "../hooks/usePolling";
+import { formatCoords } from "../reportLinks";
 import { bearingToCompass, formatDistance, haversineDistanceMeters, initialBearingDegrees, weightedCentroid } from "../geo";
 import { signalStrengthColor, signalStrengthLabel } from "../signalColor";
 
@@ -27,11 +37,14 @@ export function BLEDeviceDetailPage() {
     setScanIndexPercent,
   } = useFilter();
 
-  const device = usePolling(() => api.bleDevice(identifier), 20000, [identifier]);
+  const { printing, onMapReady, printButtonProps } = useReportPrinting();
+
+  const device = usePolling(() => api.bleDevice(identifier), 20000, [identifier], { paused: printing });
   const observations = usePolling(
     () => api.bleObservationsForDevice(identifier, { since, sessionLimit }),
     20000,
     [identifier, refreshKey, since, sessionLimit],
+    { paused: printing },
   );
 
   const [browserLocation, setBrowserLocation] = useState<GeolocationCoordinates | null>(null);
@@ -158,10 +171,35 @@ export function BLEDeviceDetailPage() {
     distanceBearingText = `${formatDistance(distance)} away, bearing ${bearingToCompass(bearingDegrees)} (${Math.round(bearingDegrees)}°) from where you are now`;
   }
 
+  const reportViewSettings = useReportViewSettings(currentScan.label);
+  const reportSummary = [
+    { label: "Device", value: device.data?.latest_device_name || device.data?.device_key || "BLE device" },
+    { label: "Identifier", value: identifier },
+    { label: "Type", value: device.data?.device_type_guess ?? "—" },
+    { label: "Readings", value: `${visibleChronological.length} of ${chronological.length} in range` },
+    { label: "Signal range", value: describeSignalRange(visibleChronological.map((s) => s.rssi)) },
+    { label: "Observed", value: describeObservedSpan(visibleChronological.map((s) => s.observed_at)) },
+    {
+      label: "Estimated position",
+      // Forced-mobile devices deliberately have no estimate — see above.
+      value: apEstimatedLocation
+        ? formatCoords(apEstimatedLocation.lat, apEstimatedLocation.lng)
+        : isForcedMobile
+          ? "Not estimated (device moves with its owner)"
+          : "—",
+    },
+  ];
+
   return (
     <section>
-      <h1>{device.data?.latest_device_name || device.data?.device_key || "BLE device"}</h1>
-      <p className="mono page-hint">{identifier}</p>
+      <ReportHeader
+        title={`Coverage report — ${device.data?.latest_device_name || identifier}`}
+        summary={reportSummary}
+        viewSettings={reportViewSettings}
+      />
+
+      <h1 className="print-hide">{device.data?.latest_device_name || device.data?.device_key || "BLE device"}</h1>
+      <p className="mono page-hint print-hide">{identifier}</p>
 
       {device.error && <p className="error-text">Could not reach the backend: {device.error.message}</p>}
 
@@ -193,9 +231,13 @@ export function BLEDeviceDetailPage() {
         </dl>
       )}
 
-      <h2>Direction</h2>
+      {/* Print-hidden: this is a live bearing from whoever is *reading* the
+          screen to the device, so on paper it's either stale or, more often,
+          a "Getting your location…" placeholder. Nothing about it describes
+          the survey being reported. */}
+      <h2 className="print-hide">Direction</h2>
       {distanceBearingText && bearingDegrees != null && (
-        <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+        <div className="print-hide" style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
           <CompassArrow bearingDegrees={bearingDegrees} />
           <p>
             {distanceBearingText}
@@ -205,21 +247,29 @@ export function BLEDeviceDetailPage() {
         </div>
       )}
       {!distanceBearingText && locationError && (
-        <p className="page-hint">
+        <p className="page-hint print-hide">
           Can't compute direction — {locationError}. Direction needs your browser's location and at least one
           geotagged sighting.
         </p>
       )}
-      {!distanceBearingText && !locationError && !browserLocation && <p className="page-hint">Getting your location…</p>}
+      {!distanceBearingText && !locationError && !browserLocation && (
+        <p className="page-hint print-hide">Getting your location…</p>
+      )}
       {!distanceBearingText && !locationError && browserLocation && (
-        <p className="page-hint">No geotagged sighting available yet to compute direction from.</p>
+        <p className="page-hint print-hide">No geotagged sighting available yet to compute direction from.</p>
       )}
 
       <h2>Sighting locations</h2>
       {geotagged.length === 0 && <p className="empty-state">No geotagged sightings yet.</p>}
       {geotagged.length > 0 && (
         <>
-          <RadioMap points={displayPoints} mode="heat" polygons={displayPolygons} onDeleteScanSession={deleteScanSession} />
+          <RadioMap
+            points={displayPoints}
+            mode="heat"
+            polygons={displayPolygons}
+            onDeleteScanSession={deleteScanSession}
+            onReady={onMapReady}
+          />
           <MapDisplayModeControls
             mode={mapDisplayMode}
             onModeChange={setMapDisplayMode}
@@ -227,6 +277,9 @@ export function BLEDeviceDetailPage() {
             onPercentChange={setScanIndexPercent}
             label={currentScan.label}
           />
+          <div style={{ margin: "0.75rem 0" }}>
+            <PrintReportButton {...printButtonProps} />
+          </div>
         </>
       )}
 
@@ -243,24 +296,24 @@ export function BLEDeviceDetailPage() {
       <h2>Sighting history</h2>
       <p className="page-hint">Follows the slider above — chart and table show the same readings the map does.</p>
       {observations.data && observations.data.length > 0 && (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Signal</th>
-              <th>Observed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {observations.data
-              .filter((s) => isRowVisible(s.scan_session, s.observed_at))
-              .map((sighting) => (
-              <tr key={sighting.id}>
-                <td style={{ color: signalStrengthColor(sighting.rssi) }}>{sighting.rssi} dBm</td>
-                <td>{new Date(sighting.observed_at).toLocaleString()}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <SightingTable
+          rows={observations.data
+            .filter((o) => isRowVisible(o.scan_session, o.observed_at))
+            .map((o) => ({
+              id: o.id,
+              signal: o.rssi,
+              latitude: o.latitude ?? null,
+              longitude: o.longitude ?? null,
+              observedAt: o.observed_at,
+            }))}
+          columns={[
+            {
+              key: "signal",
+              label: "Signal",
+              render: (row) => <span style={{ color: signalStrengthColor(row.signal) }}>{row.signal} dBm</span>,
+            },
+          ]}
+        />
       )}
     </section>
   );

@@ -1,8 +1,11 @@
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { MapDisplayModeControls } from "../components/MapDisplayModeControls";
+import { PrintReportButton } from "../components/PrintReportButton";
 import { RadioMap } from "../components/RadioMap";
 import type { CoveragePolygon, MapPoint } from "../components/RadioMap";
+import { ReportHeader } from "../components/ReportHeader";
+import { SightingTable } from "../components/SightingTable";
 import { SecurityBadge } from "../components/SecurityBadge";
 import { SimpleLineChart } from "../components/SimpleLineChart";
 import { COVERAGE_STROKE_COLOR, classifyDeviceCoverage, soloShapes } from "../coverageConfig";
@@ -10,7 +13,14 @@ import { useFilter } from "../context/FilterContext";
 import { resolveCurrentScan } from "../currentScan";
 import { weightedCentroid } from "../geo";
 import { useDeleteScanSession } from "../hooks/useDeleteScanSession";
+import {
+  describeObservedSpan,
+  describeSignalRange,
+  useReportPrinting,
+  useReportViewSettings,
+} from "../hooks/useDeviceReport";
 import { usePolling } from "../hooks/usePolling";
+import { formatCoords } from "../reportLinks";
 import { signalStrengthColor, signalStrengthLabel } from "../signalColor";
 
 export function NetworkDetailPage() {
@@ -25,11 +35,14 @@ export function NetworkDetailPage() {
     setScanIndexPercent,
   } = useFilter();
 
-  const ap = usePolling(() => api.accessPoint(bssid), 20000, [bssid]);
+  const { printing, onMapReady, printButtonProps } = useReportPrinting();
+
+  const ap = usePolling(() => api.accessPoint(bssid), 20000, [bssid], { paused: printing });
   const observations = usePolling(
     () => api.wifiObservationsForAp(bssid, { since, sessionLimit }),
     20000,
     [bssid, refreshKey, since, sessionLimit],
+    { paused: printing },
   );
   const siblingAps = usePolling(
     () => (ap.data?.ssid ? api.accessPoints(`?ssid_exact=${encodeURIComponent(ap.data.ssid)}`) : Promise.resolve(null)),
@@ -137,10 +150,30 @@ export function NetworkDetailPage() {
   const displayPoints: MapPoint[] =
     mapDisplayMode === "solo" ? (soloPolygons.length > 0 ? [] : currentScan.points) : heatPoints;
 
+  const reportViewSettings = useReportViewSettings(currentScan.label);
+  const reportSummary = [
+    { label: "Network", value: ap.data?.ssid || "(hidden network)" },
+    { label: "BSSID", value: bssid },
+    { label: "Security", value: ap.data?.latest_security_type ?? "—" },
+    { label: "Readings", value: `${visibleChronological.length} of ${chronological.length} in range` },
+    { label: "Signal range", value: describeSignalRange(visibleChronological.map((o) => o.rssi)) },
+    { label: "Observed", value: describeObservedSpan(visibleChronological.map((o) => o.observed_at)) },
+    {
+      label: "Estimated position",
+      value: apEstimatedLocation ? formatCoords(apEstimatedLocation.lat, apEstimatedLocation.lng) : "—",
+    },
+  ];
+
   return (
     <section>
-      <h1>{ap.data?.ssid || "(hidden network)"}</h1>
-      <p className="mono page-hint">{bssid}</p>
+      <ReportHeader
+        title={`Coverage report — ${ap.data?.ssid || bssid}`}
+        summary={reportSummary}
+        viewSettings={reportViewSettings}
+      />
+
+      <h1 className="print-hide">{ap.data?.ssid || "(hidden network)"}</h1>
+      <p className="mono page-hint print-hide">{bssid}</p>
       {ap.data?.ssid && siblingAps.data && siblingAps.data.count > 1 && (
         <p className="page-hint">
           {siblingAps.data.count} access points share this SSID —{" "}
@@ -194,7 +227,13 @@ export function NetworkDetailPage() {
       {geotagged.length === 0 && <p className="empty-state">No geotagged sightings yet.</p>}
       {geotagged.length > 0 && (
         <>
-          <RadioMap points={displayPoints} mode="heat" polygons={displayPolygons} onDeleteScanSession={deleteScanSession} />
+          <RadioMap
+            points={displayPoints}
+            mode="heat"
+            polygons={displayPolygons}
+            onDeleteScanSession={deleteScanSession}
+            onReady={onMapReady}
+          />
           <MapDisplayModeControls
             mode={mapDisplayMode}
             onModeChange={setMapDisplayMode}
@@ -202,6 +241,9 @@ export function NetworkDetailPage() {
             onPercentChange={setScanIndexPercent}
             label={currentScan.label}
           />
+          <div style={{ margin: "0.75rem 0" }}>
+            <PrintReportButton {...printButtonProps} />
+          </div>
         </>
       )}
 
@@ -218,28 +260,28 @@ export function NetworkDetailPage() {
       <h2>Sighting history</h2>
       <p className="page-hint">Follows the slider above — chart and table show the same readings the map does.</p>
       {observations.data && observations.data.length > 0 && (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Signal</th>
-              <th>Band</th>
-              <th>Channel</th>
-              <th>Observed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {observations.data
-              .filter((o) => isRowVisible(o.scan_session, o.observed_at))
-              .map((sighting) => (
-              <tr key={sighting.id}>
-                <td style={{ color: signalStrengthColor(sighting.rssi) }}>{sighting.rssi} dBm</td>
-                <td>{sighting.band}</td>
-                <td>{sighting.channel}</td>
-                <td>{new Date(sighting.observed_at).toLocaleString()}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <SightingTable
+          rows={observations.data
+            .filter((o) => isRowVisible(o.scan_session, o.observed_at))
+            .map((o) => ({
+              id: o.id,
+              signal: o.rssi,
+              band: o.band,
+              channel: o.channel,
+              latitude: o.latitude ?? null,
+              longitude: o.longitude ?? null,
+              observedAt: o.observed_at,
+            }))}
+          columns={[
+            {
+              key: "signal",
+              label: "Signal",
+              render: (row) => <span style={{ color: signalStrengthColor(row.signal) }}>{row.signal} dBm</span>,
+            },
+            { key: "band", label: "Band" },
+            { key: "channel", label: "Channel" },
+          ]}
+        />
       )}
     </section>
   );

@@ -49,8 +49,6 @@ export function LANDevicesPage() {
       {loading && !data && <p>Loading…</p>}
       {error && <p className="error-text">Could not reach the backend: {error.message}</p>}
 
-      <TableControls />
-
       {data && data.results.length === 0 && (
         <p className="empty-state">No LAN scan results yet. Run "Scan LAN" from the Android app.</p>
       )}
@@ -77,7 +75,9 @@ export function LANDevicesPage() {
       )}
 
       {sorted.length > 0 && (
-        <table className="data-table">
+        <>
+          <TableControls />
+          <table className="data-table">
           <thead>
             <tr>
               <SortableTh label="IP address" sortKey="ip_address" currentKey={sortKey} direction={direction} onSort={requestSort} />
@@ -117,6 +117,7 @@ export function LANDevicesPage() {
             ))}
           </tbody>
         </table>
+        </>
       )}
     </section>
   );

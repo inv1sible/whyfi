@@ -470,6 +470,9 @@ button:disabled {
   width: 186mm;
   height: 118mm;
   max-width: 100%;
+  /* Centred on the page: the printed column is wider than the map box, so
+     without this the map sits left-aligned against the margin. */
+  margin: 0 auto;
 }
 
 .build-log {
@@ -581,6 +584,12 @@ button:disabled {
 
 .remote-interval input {
   width: 4.5rem;
+}
+
+/* The adaptive switch shares the interval row but is a checkbox, so it must
+   not inherit the fixed numeric width above. */
+.remote-adaptive-toggle input {
+  width: auto;
 }
 
 /* An inline action inside running text, styled as a link rather than a
@@ -705,8 +714,9 @@ button:disabled {
 
 /* Report header — print-only, so it carries no screen styling weight. The
    live controls already say all of this on screen; on paper nothing else
-   does. */
-.report-header h1 {
+   does. Rendered as two siblings (title, then fields) so the print block can
+   put the coverage map between them. */
+.report-title-row h1 {
   margin: 0;
 }
 
@@ -857,6 +867,18 @@ button:disabled {
   display: none;
 }
 
+/* Shown only when the browser declined to open a print dialog. A button that
+   does nothing visible is indistinguishable from a broken app — that is
+   exactly how the silent-failure bug was first reported. */
+.print-blocked-hint {
+  display: inline-block;
+  margin-left: 0.6rem;
+  max-width: 34rem;
+  vertical-align: middle;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
 @media print {
   /* The app defaults to dark; printing a navy page wastes ink and reads
      badly. Re-point the same custom properties at the light palette rather
@@ -907,6 +929,46 @@ button:disabled {
 
   .print-only {
     display: block;
+  }
+
+  /* Reorder the printed page: title, summary, coverage map, then the rest,
+     with the spec lists demoted to an appendix at the end.
+     The map is hoisted above everything except the header so it is always on
+     page 1 — the substance of a coverage report shouldn't depend on how much
+     happens to precede it in the DOM. It sits *after* the summary because a
+     reader needs to know what they're looking at before they look at it.
+     Flex ordering does this without touching the on-screen layout at all.
+     Scoped to the page's own root section so the nested <section>s inside
+     .report-fields keep their normal block layout. */
+  .app-main > section {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .app-main > section > .report-title-row {
+    order: -3;
+  }
+
+  .app-main > section > .report-fields {
+    order: -2;
+  }
+
+  .app-main > section > .radio-map-block {
+    order: -1;
+    /* Never let the hero map be split across a page boundary. */
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin-bottom: 0.6rem;
+  }
+
+  .app-main > section > .detail-list {
+    order: 1;
+  }
+
+  /* .print-only flips to display:block above, which would flatten the
+     two-column field layout — restate it after that rule wins. */
+  .report-fields {
+    display: flex;
   }
 
   /* Attribution stays: using OSM tiles obliges us to credit them, and that

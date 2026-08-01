@@ -291,6 +291,14 @@ function ringCenter(ring: { lat: number; lng: number }[]): { lat: number; lng: n
 
 const DEFAULT_AREA_RADIUS_M = 250;
 
+// Tile-settling budget for printing. MIN gives Leaflet time to queue requests
+// after a re-frame (checking sooner reads "not loading" and prints a blank
+// basemap); MAX stops an unreachable tile server wedging the report.
+const TILE_POLL_MS = 80;
+const TILE_SETTLE_MS = 350;
+const TILE_MIN_WAIT_MS = 450;
+const TILE_MAX_WAIT_MS = 8000;
+
 export function RadioMap({
   points,
   mode = "heat",
@@ -573,23 +581,50 @@ export function RadioMap({
     map.fitBounds(lastBoundsRef.current, { maxZoom: 17 });
   }
 
-  /** Resolves once the tile layer has finished fetching whatever the current
-   * view needs. isLoading() is false when re-framing needed no new tiles, in
-   * which case 'load' never fires and waiting for it would hang until the
-   * caller's timeout — so that case just gives layout a frame to settle. */
+  /**
+   * Resolves once the basemap has actually finished drawing.
+   *
+   * Polls rather than waiting on a single `load` event, because both of the
+   * obvious approaches are wrong on their own:
+   *
+   *  - Waiting for `load` hangs forever when the re-frame needed no new tiles,
+   *    since the event never fires.
+   *  - Checking `isLoading()` once, immediately after `fitBounds`, reads false
+   *    *before Leaflet has queued the new requests* — so it resolved instantly
+   *    and printed a half-drawn map. That race is why the printed map was
+   *    unreliable.
+   *
+   * So: give Leaflet a beat to start, then require it to be idle continuously
+   * for [TILE_SETTLE_MS] before believing it. Capped, because an unreachable
+   * tile server must not wedge the report.
+   */
   const waitForTiles = useCallback(
     () =>
       new Promise<void>((resolve) => {
         const tiles = tileLayerRef.current;
-        if (!tiles || !tiles.isLoading()) {
-          setTimeout(resolve, 150);
+        if (!tiles) {
+          setTimeout(resolve, TILE_MIN_WAIT_MS);
           return;
         }
-        const finish = () => {
-          tiles.off("load", finish);
-          resolve();
+        const startedAt = Date.now();
+        let idleSince: number | null = null;
+
+        const tick = () => {
+          const now = Date.now();
+          if (tiles.isLoading()) {
+            idleSince = null;
+          } else if (idleSince === null) {
+            idleSince = now;
+          }
+          const settled = idleSince !== null && now - idleSince >= TILE_SETTLE_MS;
+          const waitedLongEnough = now - startedAt >= TILE_MIN_WAIT_MS;
+          if ((settled && waitedLongEnough) || now - startedAt >= TILE_MAX_WAIT_MS) {
+            resolve();
+            return;
+          }
+          setTimeout(tick, TILE_POLL_MS);
         };
-        tiles.on("load", finish);
+        tick();
       }),
     [],
   );
@@ -622,7 +657,11 @@ export function RadioMap({
     // .map-print-fit pins the container to the same mm box the print
     // stylesheet uses; the afterprint listener below takes it off again.
     containerRef.current?.classList.add("map-print-fit");
-    map.invalidateSize();
+    // Read a layout property to force the mm-based resize to apply before
+    // Leaflet re-measures — otherwise invalidateSize() can pick up the old
+    // pixel size and address tiles for a box that no longer exists.
+    void containerRef.current?.offsetHeight;
+    map.invalidateSize({ animate: false });
     // A focus circle outranks everything: it's the declared subject of the
     // report, so the page should show that area rather than wherever the
     // surviving devices happen to sprawl.
@@ -631,7 +670,10 @@ export function RadioMap({
       // its bounds once it's been added to a map and projected, so calling
       // getBounds() on a detached one throws — which silently aborted the
       // whole prepare step and printed the un-reframed map.
-      map.fitBounds(L.latLng(area.lat, area.lng).toBounds(area.radiusM * 2), { padding: [24, 24] });
+      map.fitBounds(L.latLng(area.lat, area.lng).toBounds(area.radiusM * 2), {
+        padding: [24, 24],
+        animate: false,
+      });
       await waitForTiles();
       return;
     }
@@ -647,7 +689,9 @@ export function RadioMap({
     if (bounds) {
       // Padding keeps the outermost shapes off the page edge — "centred, not
       // cut off" is the whole point of the report map.
-      map.fitBounds(bounds, { padding: [24, 24], maxZoom: 17 });
+      // animate:false so the view is final when this returns — an in-flight
+      // pan would otherwise still be moving while the tiles are counted.
+      map.fitBounds(bounds, { padding: [24, 24], maxZoom: 17, animate: false });
     }
     await waitForTiles();
   }, [area, waitForTiles]);
@@ -715,7 +759,10 @@ export function RadioMap({
   }, [area, onAreaChange]);
 
   return (
-    <div style={{ position: "relative" }}>
+    // Classed so the print stylesheet can hoist the map above the report
+    // header — the coverage map is the substance of the report, and on paper
+    // it should be the first thing on the page.
+    <div className="radio-map-block" style={{ position: "relative" }}>
       <div ref={containerRef} className={`map-container${placing ? " map-placing" : ""}`} />
       {(points.length > 0 || polygons.length > 0) && (
         <button

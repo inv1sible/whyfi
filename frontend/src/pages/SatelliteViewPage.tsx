@@ -5,6 +5,7 @@ import { SortableTh } from "../components/SortableTh";
 import { useSortableData } from "../hooks/useSortableData";
 import { usePolling } from "../hooks/usePolling";
 import type { SatelliteObservation } from "../api/types";
+import { TableControls } from "../components/TableControls";
 
 const CONSTELLATION_COLORS: Record<string, string> = {
   GPS: "#0f766e",
@@ -130,6 +131,7 @@ export function SatelliteViewPage() {
           </p>
           <SatelliteSkyPlot satellites={satelliteResults} />
 
+          <TableControls />
           <table className="data-table">
             <thead>
               <tr>

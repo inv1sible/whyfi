@@ -113,14 +113,14 @@ export function DashboardPage() {
 
       {loading && !anyData && <p>Loading…</p>}
       {anyError && <p className="error-text">Could not reach the backend: {anyError.message}</p>}
-      <TableControls />
-
       {anyData && sorted.length === 0 && (
         <p className="empty-state">No scans yet. Run a scan from the Android app.</p>
       )}
 
       {sorted.length > 0 && (
-        <table className="data-table">
+        <>
+          <TableControls />
+          <table className="data-table">
           <thead>
             <tr>
               <SortableTh label="Identifier" sortKey="identifier" currentKey={sortKey} direction={direction} onSort={requestSort} />
@@ -144,6 +144,7 @@ export function DashboardPage() {
             ))}
           </tbody>
         </table>
+        </>
       )}
     </section>
   );

@@ -1,18 +1,20 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { BLE_LABELS } from "../components/DeviceTypeBadge";
 import { MapDisplayModeControls } from "../components/MapDisplayModeControls";
 import { PrintReportButton } from "../components/PrintReportButton";
 import { RadioMap } from "../components/RadioMap";
-import type { CoveragePolygon, MapPoint, RadioMapHandle } from "../components/RadioMap";
-import { ReportHeader, describeDisplayMode, describeFilterWindow } from "../components/ReportHeader";
+import type { CoveragePolygon, MapPoint } from "../components/RadioMap";
+import { ReportHeader } from "../components/ReportHeader";
+import { SightingTable } from "../components/SightingTable";
 import type { ReportField } from "../components/ReportHeader";
 import { SimpleLineChart } from "../components/SimpleLineChart";
 import { ALWAYS_MOBILE_BLE_TYPES, COVERAGE_STROKE_COLOR, classifyDeviceCoverage, soloShapes } from "../coverageConfig";
 import { useFilter } from "../context/FilterContext";
 import { resolveCurrentScanMultiDevice } from "../currentScan";
 import { weightedCentroid } from "../geo";
+import { useReportPrinting, useReportViewSettings } from "../hooks/useDeviceReport";
 import { usePolling } from "../hooks/usePolling";
 import { formatCoords, osmLink } from "../reportLinks";
 import { signalStrengthColor, signalStrengthLabel } from "../signalColor";
@@ -109,13 +111,7 @@ export function HeatmapPage() {
   // Held across the whole print interaction so a 20s poll can't swap the data
   // out between clicking Print and the dialog opening — the report has to be
   // the view that was on screen.
-  const [printing, setPrinting] = useState(false);
-  const mapHandleRef = useRef<RadioMapHandle | null>(null);
-  // Stable identity: RadioMap re-invokes this whenever it changes, and it only
-  // writes a ref, so there's no render loop.
-  const handleMapReady = useCallback((handle: RadioMapHandle) => {
-    mapHandleRef.current = handle;
-  }, []);
+  const { printing, onMapReady, printButtonProps } = useReportPrinting();
 
   const activeSources = SOURCES.map((s) => s.value).filter((s) => enabled[s]);
 
@@ -354,17 +350,12 @@ export function HeatmapPage() {
   // The provenance half — everything needed to reproduce this exact map.
   // The area line is not optional: a report filtered to a circle without
   // saying so is a report that lies by omission about what it left out.
+  const sharedViewSettings = useReportViewSettings(currentScanLabel);
+  // Same four rows as every other report, plus the source toggles that only
+  // exist here.
   const reportViewSettings: ReportField[] = [
     { label: "Sources", value: activeSources.map((s) => SOURCE_SHORT[s]).join(", ") || "none" },
-    { label: "Range", value: describeFilterWindow(filter) },
-    {
-      label: "Focus area",
-      value: filter.area
-        ? `${Math.round(filter.area.radiusM)} m around ${formatCoords(filter.area.lat, filter.area.lng)}`
-        : "Whole survey",
-    },
-    { label: "Display mode", value: describeDisplayMode(filter.mapDisplayMode) },
-    { label: "Selected scan", value: currentScanLabel ?? "—" },
+    ...sharedViewSettings,
   ];
 
   return (
@@ -448,13 +439,25 @@ export function HeatmapPage() {
             points={[...mobilePoints, ...devicePoints]}
             mode="heat"
             polygons={coveragePolygons}
-            onReady={handleMapReady}
+            onReady={onMapReady}
             area={filter.area}
             onAreaChange={filter.setArea}
           />
 
           {/* Paper has no hover and no legend control, so both have to be
               printed alongside the map. */}
+          {/* A stationary survey can't produce coverage shapes at all: a
+              hull needs a device to have been heard from several different
+              places. Without this note the printed map is just a dot, and the
+              reader has no way to tell a limitation of the data from a
+              failure of the tool. */}
+          {coveragePolygons.length === 0 && (
+            <p className="page-hint print-only">
+              No coverage areas in this view — every device here was heard from a single position, so there is
+              nothing to draw an area from. Coverage shapes appear once the phone has moved between scans; walk or
+              drive the route you want mapped and the same report will show estimated coverage per device.
+            </p>
+          )}
           <p className="page-hint print-only">
             Shapes are estimated coverage per device: solid green at the estimated device location, fading to orange at
             the edge of where it was still detected. Numbered badges match the <strong>#</strong> column in the sighting
@@ -471,10 +474,7 @@ export function HeatmapPage() {
           />
 
           <div className="print-hide" style={{ margin: "0.75rem 0" }}>
-            <PrintReportButton
-              onPrepare={() => mapHandleRef.current?.prepareForPrint() ?? Promise.resolve()}
-              onPrintingChange={setPrinting}
-            />
+            <PrintReportButton {...printButtonProps} />
           </div>
 
           {/* Both sections describe the readings behind the map, so neither
@@ -503,39 +503,33 @@ export function HeatmapPage() {
             Follows the slider above — chart and table show the same readings the map does.
           </p>
           {tableReadings.length > 0 && (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th title="Matches the numbered badge on the map">#</th>
-                  <th>Device</th>
-                  <th>Type</th>
-                  <th>Signal</th>
-                  <th>Coordinates</th>
-                  <th>Observed</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tableReadings.map((r, index) => (
-                  <tr key={`${r.detailPath}-${r.observedAt}-${index}`}>
-                    <td className="callout-ref">{calloutByPath.get(r.detailPath) ?? "—"}</td>
-                    <td>
-                      <Link to={r.detailPath}>{r.label}</Link>
-                    </td>
-                    <td>{describeType(r.source, r.deviceTypeGuess)}</td>
-                    <td style={{ color: signalStrengthColor(r.weight) }}>{Math.round(r.weight)} dBm</td>
-                    <td className="mono">
-                      {/* Opens a marker at the exact point. Survives into a
-                          saved PDF as a real link annotation, which is the
-                          one piece of interactivity printing does preserve. */}
-                      <a href={osmLink(r.lat, r.lng)} target="_blank" rel="noreferrer">
-                        {formatCoords(r.lat, r.lng)}
-                      </a>
-                    </td>
-                    <td>{r.observedAt ? new Date(r.observedAt).toLocaleString() : "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <SightingTable
+              rows={tableReadings.map((r, index) => ({
+                id: `${r.detailPath}-${r.observedAt}-${index}`,
+                callout: calloutByPath.get(r.detailPath) ?? null,
+                device: r.label,
+                detailPath: r.detailPath,
+                type: describeType(r.source, r.deviceTypeGuess),
+                signal: Math.round(r.weight),
+                latitude: r.lat,
+                longitude: r.lng,
+                observedAt: r.observedAt ?? null,
+              }))}
+              columns={[
+                {
+                  key: "callout",
+                  label: "#",
+                  render: (row) => <span className="callout-ref">{row.callout ?? "—"}</span>,
+                },
+                { key: "device", label: "Device", render: (row) => <Link to={row.detailPath}>{row.device}</Link> },
+                { key: "type", label: "Type" },
+                {
+                  key: "signal",
+                  label: "Signal",
+                  render: (row) => <span style={{ color: signalStrengthColor(row.signal) }}>{row.signal} dBm</span>,
+                },
+              ]}
+            />
           )}
         </>
       )}

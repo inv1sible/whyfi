@@ -32,13 +32,13 @@ export function TimeScanFilterControls({
     <>
       <div className="band-selector">
         <button className={mode === "last-n-scans" ? "active" : ""} onClick={() => onModeChange("last-n-scans")}>
-          Last N scans
+          Scans
         </button>
         <button className={mode === "time" ? "active" : ""} onClick={() => onModeChange("time")}>
-          Time window
+          Time
         </button>
         <button className={mode === "range" ? "active" : ""} onClick={() => onModeChange("range")}>
-          Date range
+          Date
         </button>
       </div>
 

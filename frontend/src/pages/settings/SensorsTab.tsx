@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../../api/client";
 import type { Sensor } from "../../api/types";
+import { TableControls } from "../../components/TableControls";
 
 interface RevealedToken {
   name: string;
@@ -94,7 +95,9 @@ export function SensorsTab() {
       {!loading && sensors.length === 0 && <p className="empty-state">No sensors yet — create one above.</p>}
 
       {sensors.length > 0 && (
-        <table className="data-table">
+        <>
+        <TableControls />
+          <table className="data-table">
           <thead>
             <tr>
               <th>Name</th>
@@ -118,6 +121,7 @@ export function SensorsTab() {
             ))}
           </tbody>
         </table>
+        </>
       )}
     </div>
   );

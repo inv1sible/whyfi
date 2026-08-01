@@ -3,6 +3,8 @@ import { TableSearchBox } from "./TableSearchBox";
 
 interface TableControlsProps {
   searchPlaceholder?: string;
+  searchValue?: string;
+  onSearchChange?: (value: string) => void;
 }
 
 // The controls that act on the table right below them — rendered inline
@@ -15,12 +17,14 @@ interface TableControlsProps {
 // a per-table setting, so toggling it here applies everywhere and survives
 // navigation. Only one table view is mounted at a time, so there's no
 // ambiguity about which one the search box belongs to.
-export function TableControls({ searchPlaceholder }: TableControlsProps) {
+export function TableControls({ searchPlaceholder, searchValue, onSearchChange }: TableControlsProps) {
   const { searchQuery, setSearchQuery, compactTables, setCompactTables } = useFilter();
+  const effectiveSearchValue = searchValue ?? searchQuery;
+  const effectiveSearchChange = onSearchChange ?? setSearchQuery;
 
   return (
     <div className="table-controls">
-      <TableSearchBox value={searchQuery} onChange={setSearchQuery} placeholder={searchPlaceholder} />
+      <TableSearchBox value={effectiveSearchValue} onChange={effectiveSearchChange} placeholder={searchPlaceholder} />
       <label className="table-controls-toggle">
         <input type="checkbox" checked={compactTables} onChange={(e) => setCompactTables(e.target.checked)} />
         Show all columns
