@@ -14,6 +14,31 @@ const MIN_INTERVAL_WITH_WIFI = 30;
 const MIN_INTERVAL_WITHOUT_WIFI = 15;
 const MIN_HEARTBEAT_SECONDS = 5;
 
+type MotionIntervalKey =
+  | "stationary_interval_seconds"
+  | "walking_interval_seconds"
+  | "driving_interval_seconds";
+
+const MOTION_INTERVALS: { key: MotionIntervalKey; label: string; hint: string }[] = [
+  {
+    key: "stationary_interval_seconds",
+    label: "Stationary",
+    hint: "Used while the phone isn't moving — it's re-scanning the same airwaves, so this is where the battery saving comes from.",
+  },
+  { key: "walking_interval_seconds", label: "Walking", hint: "Used at walking pace." },
+  {
+    key: "driving_interval_seconds",
+    label: "Driving",
+    hint: "Fastest of the three: a vehicle covers the most unmapped ground per minute. 30s is the floor while WiFi is included.",
+  },
+];
+
+const MOTION_LABELS: Record<string, string> = {
+  STATIONARY: "Stationary",
+  WALKING: "Walking",
+  DRIVING: "Driving",
+};
+
 const RADIOS = [
   { key: "include_wifi", label: "WiFi" },
   { key: "include_cellular", label: "Cellular" },
@@ -75,6 +100,7 @@ function SensorCard({ sensor, onChanged }: { sensor: Sensor; onChanged: () => vo
   // the source of truth the rest of the time (and a change made in another
   // browser tab shows up here).
   const [transmitDraft, setTransmitDraft] = useState<string | null>(null);
+  const [motionDrafts, setMotionDrafts] = useState<Record<string, string>>({});
   const [checkInDraft, setCheckInDraft] = useState<string | null>(null);
 
   async function apply(patch: SensorScanPolicyUpdate) {
@@ -114,6 +140,24 @@ function SensorCard({ sensor, onChanged }: { sensor: Sensor; onChanged: () => vo
     } finally {
       setBusy(false);
     }
+  }
+
+  function commitMotionInterval(key: MotionIntervalKey, label: string) {
+    const raw = motionDrafts[key];
+    setMotionDrafts((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    if (raw === undefined) return;
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value === policy[key]) return;
+    const floor = policy.include_wifi ? MIN_INTERVAL_WITH_WIFI : MIN_INTERVAL_WITHOUT_WIFI;
+    if (value < floor) {
+      setError(`${label} interval must be at least ${floor}s${policy.include_wifi ? " while WiFi is included" : ""}.`);
+      return;
+    }
+    apply({ [key]: value } as SensorScanPolicyUpdate);
   }
 
   function commitTransmitInterval() {
@@ -179,6 +223,39 @@ function SensorCard({ sensor, onChanged }: { sensor: Sensor; onChanged: () => vo
       </div>
 
       <div className="remote-intervals">
+        <label className="field remote-interval remote-adaptive-toggle">
+          <span
+            title={
+              "Pick the interval from how the phone is moving. A phone on a desk re-scans the same airwaves; " +
+              "a phone in a car covers new ground every second."
+            }
+          >
+            Adaptive
+          </span>
+          <input
+            type="checkbox"
+            checked={policy.adaptive_scan_enabled}
+            onChange={(e) => apply({ adaptive_scan_enabled: e.target.checked })}
+            disabled={busy}
+          />
+        </label>
+        {policy.adaptive_scan_enabled ? (
+          MOTION_INTERVALS.map((entry) => (
+            <label className="field remote-interval" key={entry.key}>
+              <span title={entry.hint}>{entry.label} (s)</span>
+              <input
+                type="number"
+                min={MIN_INTERVAL_WITHOUT_WIFI}
+                step={5}
+                value={motionDrafts[entry.key] ?? policy[entry.key]}
+                onChange={(e) => setMotionDrafts((prev) => ({ ...prev, [entry.key]: e.target.value }))}
+                onBlur={() => commitMotionInterval(entry.key, entry.label)}
+                onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                disabled={busy}
+              />
+            </label>
+          ))
+        ) : (
         <label className="field remote-interval">
           <span title="How often the phone runs a scan pass and sends it up">Transmit (s)</span>
           <input
@@ -192,6 +269,7 @@ function SensorCard({ sensor, onChanged }: { sensor: Sensor; onChanged: () => vo
             disabled={busy}
           />
         </label>
+        )}
         <label className="field remote-interval">
           <span
             title={
@@ -227,6 +305,15 @@ function SensorCard({ sensor, onChanged }: { sensor: Sensor; onChanged: () => vo
             <button className="link-button" onClick={handleResetCounters} disabled={busy || !policy.agent_online}>
               reset
             </button>
+          </span>
+        )}
+        {policy.reported_motion_state && (
+          <span
+            title="What the phone's motion sensors currently believe, and the interval it picked as a result"
+          >
+            {MOTION_LABELS[policy.reported_motion_state] ?? policy.reported_motion_state}
+            {policy.reported_effective_interval_seconds !== null &&
+              ` · every ${policy.reported_effective_interval_seconds}s`}
           </span>
         )}
         {policy.reported_battery_percent !== null && <span>Battery {policy.reported_battery_percent}%</span>}

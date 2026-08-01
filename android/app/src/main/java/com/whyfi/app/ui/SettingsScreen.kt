@@ -1,10 +1,6 @@
 package com.whyfi.app.ui
 
-import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
-import android.content.ServiceConnection
-import android.os.IBinder
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,10 +18,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -36,16 +30,15 @@ import com.whyfi.app.BuildConfig
 import com.whyfi.app.data.LocationSourcePreference
 import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.ThemePreference
-import com.whyfi.app.data.local.WhyfiDatabase
 import com.whyfi.app.permissions.PermissionHelper
 import com.whyfi.app.scan.ScanForegroundService
-import java.util.Locale
 
 @Composable
 fun SettingsScreen(
     settingsRepository: SettingsRepository,
     themePreference: ThemePreference,
     onThemePreferenceChange: (ThemePreference) -> Unit,
+    service: ScanForegroundService?,
 ) {
     // Pre-filled from the build (WHYFI_PUBLIC_URL, set when this APK was
     // built) if nothing's been saved yet — still just a starting point,
@@ -57,28 +50,13 @@ fun SettingsScreen(
     var savedMessage by remember { mutableStateOf<String?>(null) }
     var locationSource by remember { mutableStateOf(settingsRepository.locationSourcePreference) }
     var quotaMb by remember { mutableStateOf(settingsRepository.outboxQuotaMb.toString()) }
+    var adaptiveScan by remember { mutableStateOf(settingsRepository.adaptiveScanEnabled) }
+    var stationaryInterval by remember { mutableStateOf(settingsRepository.stationaryIntervalSeconds.toString()) }
+    var walkingInterval by remember { mutableStateOf(settingsRepository.walkingIntervalSeconds.toString()) }
+    var drivingInterval by remember { mutableStateOf(settingsRepository.drivingIntervalSeconds.toString()) }
     val outboxUsage = rememberOutboxUsage(quotaMb.toIntOrNull() ?: settingsRepository.outboxQuotaMb)
 
-    // Remote control needs a live handle on the scan service (to arm it and
-    // to start it in the first place), so this screen binds too — same
-    // pattern as ScanScreen/LanScreen.
     val context = LocalContext.current
-    var service by remember { mutableStateOf<ScanForegroundService?>(null) }
-    val connection = remember {
-        object : ServiceConnection {
-            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-                service = (binder as ScanForegroundService.LocalBinder).getService()
-            }
-
-            override fun onServiceDisconnected(name: ComponentName?) {
-                service = null
-            }
-        }
-    }
-    DisposableEffect(Unit) {
-        context.bindService(Intent(context, ScanForegroundService::class.java), connection, Context.BIND_AUTO_CREATE)
-        onDispose { context.unbindService(connection) }
-    }
 
     var remoteControlOn by remember { mutableStateOf(settingsRepository.remoteControlEnabled) }
     val permissionsGranted = PermissionHelper.hasAllRequiredPermissions(context)
@@ -183,6 +161,66 @@ fun SettingsScreen(
             }
         }
 
+        Text("Scan cadence", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "A phone sitting on a desk keeps re-scanning the same airwaves; a phone in a car covers new " +
+                "ground every second. With this on, the scanner picks its interval from how the phone is " +
+                "actually moving — which is where most of the battery saving is.",
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Switch(
+                checked = adaptiveScan,
+                onCheckedChange = {
+                    adaptiveScan = it
+                    settingsRepository.adaptiveScanEnabled = it
+                },
+            )
+            Text(if (adaptiveScan) "On — interval follows movement" else "Off — one fixed interval")
+        }
+
+        if (adaptiveScan) {
+            IntervalField("Stationary (seconds)", stationaryInterval) { stationaryInterval = it }
+            IntervalField("Walking (seconds)", walkingInterval) { walkingInterval = it }
+            IntervalField("Driving (seconds)", drivingInterval) { drivingInterval = it }
+            Text(
+                "30 seconds is the practical floor while WiFi is included — Android allows 4 WiFi scans " +
+                    "per 2 minutes, so a shorter interval produces no extra scans. Movement is detected " +
+                    "with the phone's motion sensors; speed (to tell walking from driving) comes from the " +
+                    "positions each scan already records, so nothing extra wakes the GPS.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(
+                onClick = {
+                    val stationary = stationaryInterval.toIntOrNull()
+                    val walking = walkingInterval.toIntOrNull()
+                    val driving = drivingInterval.toIntOrNull()
+                    if (stationary == null || walking == null || driving == null ||
+                        listOf(stationary, walking, driving).any { it < SettingsRepository.MIN_INTERVAL_SECONDS }
+                    ) {
+                        savedMessage = "Each interval must be at least ${SettingsRepository.MIN_INTERVAL_SECONDS} seconds."
+                    } else {
+                        settingsRepository.stationaryIntervalSeconds = stationary
+                        settingsRepository.walkingIntervalSeconds = walking
+                        settingsRepository.drivingIntervalSeconds = driving
+                        // Read back: the setters clamp, so show what was stored.
+                        stationaryInterval = settingsRepository.stationaryIntervalSeconds.toString()
+                        walkingInterval = settingsRepository.walkingIntervalSeconds.toString()
+                        drivingInterval = settingsRepository.drivingIntervalSeconds.toString()
+                        savedMessage = "Scan cadence saved."
+                    }
+                },
+            ) {
+                Text("Save scan cadence")
+            }
+            if (remoteControlOn) {
+                Text(
+                    "Remote control is on, so these are driven from the web UI — whatever you set here " +
+                        "will be replaced by the backend's values on the next check-in.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+
         Text("Offline storage", style = MaterialTheme.typography.titleMedium)
         Text(
             "Scans are queued on the phone whenever the backend is unreachable, then uploaded automatically. " +
@@ -218,22 +256,25 @@ fun SettingsScreen(
     }
 }
 
-/** Human-readable size of whatever is currently queued for upload. */
+/** Human-readable size of whatever is currently queued for upload, against
+ * the configured budget. The read itself is shared with the Dashboard —
+ * see [rememberOutboxStatus]. */
 @Composable
 private fun rememberOutboxUsage(quotaMb: Int): String {
-    val context = LocalContext.current
-    val usage by produceState(initialValue = "…", quotaMb) {
-        val dao = WhyfiDatabase.getInstance(context).pendingScanDao()
-        val bytes = dao.totalBytes() ?: 0L
-        val count = dao.count()
-        val readable = when {
-            bytes < 1024 -> "$bytes B"
-            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-            else -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
-        }
-        value = "$readable of $quotaMb MB ($count scan${if (count == 1) "" else "s"} waiting to upload)"
-    }
-    return usage
+    val status = rememberOutboxStatus(quotaMb) ?: return "…"
+    val plural = if (status.count == 1) "" else "s"
+    return "${formatBytes(status.bytes)} of $quotaMb MB " +
+        "(${status.count} scan$plural waiting to upload)"
+}
+
+@Composable
+private fun IntervalField(label: String, value: String, onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { onChange(it.filter(Char::isDigit)) },
+        label = { Text(label) },
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 @Composable

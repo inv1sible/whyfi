@@ -19,7 +19,10 @@ import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.local.WhyfiDatabase
 import com.whyfi.app.data.remote.LanObservationDto
 import com.whyfi.app.data.remote.ScanPolicyResponse
+import com.whyfi.app.data.remote.ScanSessionUploadRequest
 import com.whyfi.app.data.remote.SensorHeartbeatRequest
+import com.whyfi.app.motion.MotionDetector
+import com.whyfi.app.motion.MotionState
 import com.whyfi.app.permissions.PermissionHelper
 import com.whyfi.app.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
@@ -46,6 +49,11 @@ data class ScanUiState(
     val wifiUnavailableReason: String? = null,
     val cellularUnavailableReason: String? = null,
     val bleUnavailableReason: String? = null,
+    val lanUnavailableReason: String? = null,
+    // Every IPv4 interface the phone has and whether a sweep could use it.
+    // Shown on the LAN screen so a refusal can be checked rather than taken
+    // on trust — the /32 tunnel bug looked exactly like a correct answer.
+    val lanNetworkReport: List<String> = emptyList(),
     val isLanScanning: Boolean = false,
     val lanChecked: Int = 0,
     val lanTotal: Int = 0,
@@ -53,6 +61,19 @@ data class ScanUiState(
     // Grows live as devices are confirmed during a LAN scan, and stays
     // populated afterwards as the "last results" until the next scan starts.
     val lanDevices: List<LanObservationDto> = emptyList(),
+    // The two most recent completed passes, kept so the UI can show what was
+    // actually found rather than only how many — and diff the two (see
+    // ScanDiff). Two is the whole buffer: it's what "new since last time"
+    // needs, and it keeps this bounded. Anything longer belongs on the
+    // backend, which already has every pass ever uploaded.
+    val latestPass: ScanSessionUploadRequest? = null,
+    val previousPass: ScanSessionUploadRequest? = null,
+    val survey: SurveyStats = SurveyStats(),
+    // Null when adaptive cadence is off, so the UI can tell "not using this"
+    // from "using it and currently stationary".
+    val motionState: MotionState? = null,
+    val effectiveIntervalSeconds: Int? = null,
+    val motionSource: String = "",
 )
 
 /** What the continuous loop should be doing right now. Held in a StateFlow
@@ -108,6 +129,26 @@ class ScanForegroundService : Service() {
 
     private val _uiState = MutableStateFlow(ScanUiState())
     val uiState: StateFlow<ScanUiState> = _uiState.asStateFlow()
+
+    /** Running totals for the Dashboard. Lives here rather than in a
+     * Composable so it survives tab switches, and dies with the service so
+     * "since the scanner started" stays true. */
+    private val surveyTally = SurveyTally()
+
+    /** Set when the motion detector sees movement resume, to cut short a sleep
+     * that was sized for a stationary phone. Without this, walking away from a
+     * desk would go unnoticed for the rest of a 10-minute interval — which is
+     * most of the ground you'd want mapped. */
+    @Volatile
+    private var wakeFromSleepRequested = false
+
+    private val motionDetector by lazy {
+        MotionDetector(
+            context = applicationContext,
+            scope = serviceScope,
+            onMovementResumed = { wakeFromSleepRequested = true },
+        )
+    }
 
     inner class LocalBinder : Binder() {
         fun getService(): ScanForegroundService = this@ScanForegroundService
@@ -166,14 +207,19 @@ class ScanForegroundService : Service() {
 
     fun isRemoteControlEnabled(): Boolean = settingsRepository.remoteControlEnabled
 
-    /** Zeroes the per-session tallies (completed passes and the last pass's
-     * per-radio counts).
+    /** Zeroes the per-session tallies (completed passes, the last pass's
+     * per-radio counts, the retained passes and the Dashboard totals).
      *
      * "Session" used to mean "since the service last started", which was fine
      * when the service died whenever it went idle. Under remote control it
      * never dies, so the count would otherwise climb forever with no way to
-     * zero it short of force-stopping the app. */
+     * zero it short of force-stopping the app.
+     *
+     * Reachable from the Dashboard's Reset button as well as the remote
+     * reset-counters nonce — both mean the same thing, so they share a path
+     * rather than clearing overlapping subsets of the state. */
     fun resetSessionCounters() {
+        surveyTally.reset()
         _uiState.update {
             it.copy(
                 completedScanCount = 0,
@@ -181,6 +227,9 @@ class ScanForegroundService : Service() {
                 cellularCount = null,
                 bleCount = null,
                 satelliteCount = null,
+                latestPass = null,
+                previousPass = null,
+                survey = surveyTally.snapshot(),
             )
         }
     }
@@ -213,11 +262,22 @@ class ScanForegroundService : Service() {
                 reportedPolicyRevision = appliedPolicyRevision,
                 reportedScanNowNonce = appliedScanNowNonce,
                 reportedResetCountersNonce = appliedResetCountersNonce,
+                reportedMotionState = state.motionState?.name ?: "",
+                reportedEffectiveIntervalSeconds = state.effectiveIntervalSeconds,
             )
         }
 
         override suspend fun onPolicy(policy: ScanPolicyResponse) {
             refreshAvailability()
+            // The policy is the source of truth while armed, so these land in
+            // local settings too — otherwise the phone's Settings screen and
+            // the web UI would show different numbers for the same behaviour.
+            settingsRepository.applyRemoteAdaptiveSettings(
+                enabled = policy.adaptiveScanEnabled,
+                stationary = policy.stationaryIntervalSeconds,
+                walking = policy.walkingIntervalSeconds,
+                driving = policy.drivingIntervalSeconds,
+            )
             val options = ScanOptions(
                 includeWifi = policy.includeWifi,
                 includeCellular = policy.includeCellular,
@@ -293,13 +353,14 @@ class ScanForegroundService : Service() {
 
         gracefulStopRequested = false
         _uiState.update { it.copy(isContinuous = true) }
+        if (settingsRepository.adaptiveScanEnabled) motionDetector.start()
         continuousJob = serviceScope.launch {
             try {
                 while (isActive && !gracefulStopRequested) {
                     val config = continuousConfig.value
                     if (canScanNow(config.options.includeWifi)) {
                         runOnePass(config.options)
-                        interruptibleDelay(config.intervalMs)
+                        interruptibleDelay(nextIntervalMs(config))
                     } else {
                         interruptibleDelay(throttleBackoffMs())
                     }
@@ -307,7 +368,15 @@ class ScanForegroundService : Service() {
             } finally {
                 // Runs on cancellation too, so both stop paths converge here.
                 continuousJob = null
-                _uiState.update { it.copy(isContinuous = false, currentPhase = null) }
+                motionDetector.stop()
+                _uiState.update {
+                    it.copy(
+                        isContinuous = false,
+                        currentPhase = null,
+                        motionState = null,
+                        effectiveIntervalSeconds = null,
+                    )
+                }
                 stopIfNothingKeepsUsAlive()
             }
         }
@@ -331,12 +400,54 @@ class ScanForegroundService : Service() {
     /** Waits in short slices so a graceful stop doesn't have to sit through a
      * full scan interval (which can be minutes) before taking effect. */
     private suspend fun interruptibleDelay(totalMs: Long) {
+        wakeFromSleepRequested = false
         var remaining = totalMs
-        while (remaining > 0 && !gracefulStopRequested) {
+        while (remaining > 0 && !gracefulStopRequested && !wakeFromSleepRequested) {
             val slice = minOf(remaining, GRACEFUL_STOP_CHECK_MS)
             delay(slice)
             remaining -= slice
         }
+        wakeFromSleepRequested = false
+    }
+
+    /**
+     * How long to wait before the next pass.
+     *
+     * With adaptive cadence off this is just the configured interval. With it
+     * on, the motion state picks between three — a phone on a desk re-scans
+     * the same airwaves, while a phone in a car covers new ground every
+     * second, so the two deserve very different cadences.
+     */
+    private fun nextIntervalMs(config: ContinuousConfig): Long {
+        if (!settingsRepository.adaptiveScanEnabled) {
+            _uiState.update {
+                it.copy(
+                    motionState = null,
+                    effectiveIntervalSeconds = (config.intervalMs / 1000L).toInt(),
+                    motionSource = "",
+                )
+            }
+            return config.intervalMs
+        }
+
+        // Dwell timers only elapse with the clock, so ask for a fresh verdict
+        // rather than using whatever the last sensor event left behind.
+        motionDetector.refresh()
+        val state = motionDetector.state.value
+        val seconds = when (state) {
+            MotionState.STATIONARY -> settingsRepository.stationaryIntervalSeconds
+            MotionState.WALKING -> settingsRepository.walkingIntervalSeconds
+            MotionState.DRIVING -> settingsRepository.drivingIntervalSeconds
+        }
+        _uiState.update {
+            it.copy(
+                motionState = state,
+                effectiveIntervalSeconds = seconds,
+                motionSource = motionDetector.describeSource(),
+            )
+        }
+        updateNotification("${state.label} — next scan in ${formatInterval(seconds)}")
+        return seconds.toLong() * 1000L
     }
 
     /** How long until Android's WiFi scan throttle lets us go again.
@@ -349,7 +460,34 @@ class ScanForegroundService : Service() {
 
     fun scanLan() {
         if (_uiState.value.isLanScanning) return
-        _uiState.update { it.copy(isLanScanning = true, lanChecked = 0, lanTotal = 0, lanDeviceCount = null, lanDevices = emptyList()) }
+
+        // Ask before sweeping. A sweep that can't run produced an empty device
+        // list that was indistinguishable from "nobody answered" — and still
+        // uploaded a zero-observation session, which then consumed a slot in
+        // the "last N scans" filter for no information at all.
+        val report = scanCoordinator.lanScanner.inspectNetworks().map { it.describe() }
+        val unavailable = scanCoordinator.lanScanner.unavailableReason()
+        if (unavailable != null) {
+            _uiState.update {
+                it.copy(
+                    isLanScanning = false,
+                    lanUnavailableReason = unavailable,
+                    lanNetworkReport = report,
+                    lanDeviceCount = null,
+                    lanDevices = emptyList(),
+                )
+            }
+            stopIfNothingKeepsUsAlive()
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                isLanScanning = true, lanChecked = 0, lanTotal = 0,
+                lanDeviceCount = null, lanDevices = emptyList(), lanUnavailableReason = null,
+                lanNetworkReport = report,
+            )
+        }
         updateNotification("Scanning LAN…")
         serviceScope.launch {
             val result = scanCoordinator.runLanScan(
@@ -368,7 +506,7 @@ class ScanForegroundService : Service() {
                 wifiCount = null, cellularCount = null, bleCount = null, satelliteCount = null,
             )
         }
-        scanCoordinator.runScan(
+        val pass = scanCoordinator.runScan(
             options,
             onPhaseChange = { phase ->
                 _uiState.update { it.copy(currentPhase = phase) }
@@ -386,7 +524,27 @@ class ScanForegroundService : Service() {
                 }
             },
         )
-        _uiState.update { it.copy(isScanning = false, currentPhase = null, completedScanCount = it.completedScanCount + 1) }
+        // runScan's return value used to be discarded, which is why the app
+        // could say "41 WiFi" but never which 41. Keeping the last two shifts
+        // that from a count to a result set at no storage cost.
+        surveyTally.record(pass)
+        // Speed for the walking/driving split, taken from a position the scan
+        // already needed — never by waking the GPS just to ask.
+        val lat = pass.latitude
+        val lng = pass.longitude
+        if (lat != null && lng != null) {
+            motionDetector.onPassLocation(lat, lng, System.currentTimeMillis())
+        }
+        _uiState.update {
+            it.copy(
+                isScanning = false,
+                currentPhase = null,
+                completedScanCount = it.completedScanCount + 1,
+                latestPass = pass,
+                previousPass = it.latestPass,
+                survey = surveyTally.snapshot(),
+            )
+        }
     }
 
     /** Drops the persistent notification once nothing needs us alive.
@@ -405,6 +563,12 @@ class ScanForegroundService : Service() {
         }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun formatInterval(seconds: Int): String = when {
+        seconds < 60 -> "${seconds}s"
+        seconds % 60 == 0 -> "${seconds / 60} min"
+        else -> "${seconds / 60} min ${seconds % 60}s"
     }
 
     private fun idleNotificationText(): String =

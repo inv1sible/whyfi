@@ -122,6 +122,11 @@ data class SensorHeartbeatRequest(
     @SerializedName("reported_policy_revision") val reportedPolicyRevision: Int,
     @SerializedName("reported_scan_now_nonce") val reportedScanNowNonce: Int,
     @SerializedName("reported_reset_counters_nonce") val reportedResetCountersNonce: Int,
+    // Why the device is scanning at the cadence it is. Without these a phone
+    // deliberately idling at 10-minute intervals is indistinguishable from a
+    // broken one in the web UI.
+    @SerializedName("reported_motion_state") val reportedMotionState: String = "",
+    @SerializedName("reported_effective_interval_seconds") val reportedEffectiveIntervalSeconds: Int? = null,
 )
 
 /**
@@ -143,4 +148,11 @@ data class ScanPolicyResponse(
     @SerializedName("scan_now_nonce") val scanNowNonce: Int = 0,
     @SerializedName("reset_counters_nonce") val resetCountersNonce: Int = 0,
     @SerializedName("policy_revision") val policyRevision: Int = 0,
+    // Per-motion-state cadence. Defaults match SettingsRepository and the
+    // backend model, so a malformed or partial response lands on the same
+    // numbers rather than something surprising.
+    @SerializedName("adaptive_scan_enabled") val adaptiveScanEnabled: Boolean = true,
+    @SerializedName("stationary_interval_seconds") val stationaryIntervalSeconds: Int = 600,
+    @SerializedName("walking_interval_seconds") val walkingIntervalSeconds: Int = 60,
+    @SerializedName("driving_interval_seconds") val drivingIntervalSeconds: Int = 30,
 )

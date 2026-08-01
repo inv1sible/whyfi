@@ -1,6 +1,7 @@
 package com.whyfi.app.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -24,6 +25,10 @@ import androidx.compose.ui.unit.sp
  * 2 · ..." text line. `count == null` reads as "not scanned yet / this
  * radio wasn't included"; `isActivePhase` shows a spinner specifically for
  * "scanning this one right now".
+ *
+ * Pass [onClick] to make the chip a way into the matching results table.
+ * It's optional because there's nothing to open until a pass has completed
+ * — a chip that looks tappable and does nothing is worse than a flat one.
  */
 @Composable
 fun RadioStatChip(
@@ -33,11 +38,13 @@ fun RadioStatChip(
     isActivePhase: Boolean,
     accentColor: Color,
     modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
 ) {
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(accentColor.copy(alpha = 0.12f))
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 14.dp, vertical = 10.dp),
     ) {
         Text(icon, fontSize = 18.sp)

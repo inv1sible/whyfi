@@ -544,3 +544,111 @@ class AuthEndpointTests(TestCase):
         client.post("/api/v1/auth/logout/")
         session_response = client.get("/api/v1/auth/session/")
         self.assertEqual(session_response.json(), {"authenticated": False})
+
+
+class AdaptiveScanPolicyTests(TestCase):
+    """Per-motion-state cadence, configured from the web UI and obeyed by the
+    device. Lives on the policy rather than only on the phone so both ends
+    edit the same values — see SensorScanPolicy.adaptive_scan_enabled."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(username="operator", password="test-pass-123")
+        self.sensor = Sensor.objects.create(name="Phone A")
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+        self.url = f"/api/v1/sensors/{self.sensor.id}/scan-policy/"
+
+    def test_defaults_are_the_documented_ones(self):
+        body = self.client.get("/api/v1/sensors/").json()["results"][0]["scan_policy"]
+        self.assertTrue(body["adaptive_scan_enabled"])
+        self.assertEqual(body["stationary_interval_seconds"], 600)
+        self.assertEqual(body["walking_interval_seconds"], 60)
+        self.assertEqual(body["driving_interval_seconds"], 30)
+
+    def test_operator_can_set_each_interval(self):
+        response = self.client.post(
+            self.url,
+            {
+                "adaptive_scan_enabled": True,
+                "stationary_interval_seconds": 900,
+                "walking_interval_seconds": 45,
+                "driving_interval_seconds": 30,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+
+        policy = SensorScanPolicy.objects.get(sensor=self.sensor)
+        self.assertEqual(policy.stationary_interval_seconds, 900)
+        self.assertEqual(policy.walking_interval_seconds, 45)
+        self.assertEqual(policy.driving_interval_seconds, 30)
+
+    def test_every_interval_respects_the_wifi_floor(self):
+        # Not just scan_interval_seconds — each motion state is a real cadence.
+        for field in ("stationary_interval_seconds", "walking_interval_seconds", "driving_interval_seconds"):
+            with self.subTest(field=field):
+                response = self.client.post(self.url, {field: 20}, format="json")
+                self.assertEqual(response.status_code, 400)
+                self.assertIn(field, response.json())
+
+    def test_short_state_intervals_allowed_without_wifi(self):
+        response = self.client.post(
+            self.url, {"driving_interval_seconds": 20, "include_wifi": False}, format="json"
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+
+    def test_reenabling_wifi_against_a_stored_short_state_interval_is_rejected(self):
+        # Same resulting-state rule the single-interval check already had: an
+        # unused-but-invalid cadence must not become live by toggling WiFi.
+        self.client.post(self.url, {"driving_interval_seconds": 20, "include_wifi": False}, format="json")
+        response = self.client.post(self.url, {"include_wifi": True}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("driving_interval_seconds", response.json())
+
+    def test_device_receives_adaptive_settings_in_its_heartbeat_response(self):
+        self.client.post(
+            self.url,
+            {"adaptive_scan_enabled": True, "stationary_interval_seconds": 1200},
+            format="json",
+        )
+        device = APIClient()
+        device.credentials(HTTP_AUTHORIZATION=f"Token {self.sensor.token}")
+
+        body = device.post("/api/v1/sensors/me/heartbeat/", {"reported_is_scanning": False}, format="json").json()
+
+        self.assertTrue(body["adaptive_scan_enabled"])
+        self.assertEqual(body["stationary_interval_seconds"], 1200)
+
+    def test_device_reports_its_motion_state_and_effective_interval(self):
+        device = APIClient()
+        device.credentials(HTTP_AUTHORIZATION=f"Token {self.sensor.token}")
+
+        device.post(
+            "/api/v1/sensors/me/heartbeat/",
+            {
+                "reported_is_continuous": True,
+                "reported_motion_state": "STATIONARY",
+                "reported_effective_interval_seconds": 600,
+            },
+            format="json",
+        )
+
+        policy = SensorScanPolicy.objects.get(sensor=self.sensor)
+        self.assertEqual(policy.reported_motion_state, "STATIONARY")
+        self.assertEqual(policy.reported_effective_interval_seconds, 600)
+
+    def test_device_cannot_write_adaptive_desired_state(self):
+        # Same wall as every other desired field: a phone must not be able to
+        # widen its own cadence and have the operator's UI agree with it.
+        device = APIClient()
+        device.credentials(HTTP_AUTHORIZATION=f"Token {self.sensor.token}")
+
+        device.post(
+            "/api/v1/sensors/me/heartbeat/",
+            {"stationary_interval_seconds": 99, "adaptive_scan_enabled": False},
+            format="json",
+        )
+
+        policy = SensorScanPolicy.objects.get(sensor=self.sensor)
+        self.assertEqual(policy.stationary_interval_seconds, 600)
+        self.assertTrue(policy.adaptive_scan_enabled)

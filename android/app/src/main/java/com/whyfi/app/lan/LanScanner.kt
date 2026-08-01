@@ -1,9 +1,6 @@
 package com.whyfi.app.lan
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.LinkProperties
-import android.net.Network
 import com.whyfi.app.data.remote.LanObservationDto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -13,6 +10,7 @@ import java.io.File
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.NetworkInterface
 import java.net.Socket
 
 /**
@@ -41,7 +39,29 @@ class LanScanner(private val context: Context) {
     private val connectTimeoutMs = 400
     private val bannerReadTimeoutMs = 500
     private val hostConcurrency = 8 // ports are now probed in parallel per host too, so keep this modest
-    private val maxHostsToScan = 512 // refuses to sweep pathologically large subnets (e.g. a /16)
+
+
+    /** Turns "no usable network" into something a person can act on, naming
+     * what was actually found rather than just refusing. */
+    private fun explainNoCandidate(candidates: List<NetworkCandidate>): String {
+        if (candidates.none { it.kind != "Other" || it.skipReason != "loopback" } && candidates.isEmpty()) {
+            return "This phone reports no IPv4 network interfaces at all."
+        }
+        val real = candidates.filterNot { it.skipReason == "loopback" }
+        if (real.isEmpty()) return "This phone isn't connected to any network."
+
+        val tunnels = real.filter { it.kind == "VPN/tunnel" }
+        val mobile = real.filter { it.kind == "Mobile data" }
+        return when {
+            tunnels.isNotEmpty() && real.none { it.kind == "WiFi" || it.kind == "Wired" } ->
+                "Only a VPN/tunnel interface (${tunnels.first().interfaceName}) has an IPv4 address, and there's " +
+                    "no local network behind a tunnel. Disconnect the VPN, or connect to WiFi, to sweep a LAN."
+            mobile.isNotEmpty() && real.none { it.kind == "WiFi" || it.kind == "Wired" } ->
+                "This phone is on mobile data, not WiFi — there's no local network to sweep."
+            else ->
+                "No sweepable network found. Details: " + real.joinToString("; ") { it.describe() }
+        }
+    }
 
     suspend fun scan(
         onProgress: (checked: Int, total: Int) -> Unit = { _, _ -> },
@@ -51,7 +71,11 @@ class LanScanner(private val context: Context) {
         onDeviceFound: (LanObservationDto) -> Unit = {},
     ): List<LanObservationDto> =
         withContext(Dispatchers.IO) {
-            val hosts = currentSubnetHosts() ?: return@withContext emptyList()
+            // An empty result must mean "swept the subnet, nobody answered" —
+            // never "couldn't sweep". Callers check unavailableReason() first;
+            // this is the belt-and-braces half of the same contract.
+            val hosts = (resolveSubnet() as? SubnetResolution.Hosts)?.addresses
+                ?: return@withContext emptyList()
             val arpTable = readArpTable()
             var checked = 0
 
@@ -152,27 +176,139 @@ class LanScanner(private val context: Context) {
     /** Current WiFi subnet's usable host addresses, from the active
      * network's link properties (its own IP + prefix length) — refuses
      * anything wider than a /24-ish range to keep the sweep bounded. */
-    private fun currentSubnetHosts(): List<InetAddress>? {
-        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network: Network = connectivityManager.activeNetwork ?: return null
-        val linkProperties: LinkProperties = connectivityManager.getLinkProperties(network) ?: return null
+    /**
+     * Why a sweep can't run right now, or null if it can.
+     *
+     * Mirrors WifiScanManager/CellularManager/BleDeviceScanner's
+     * unavailableReason(). Every one of the conditions below used to collapse
+     * into an empty device list, which the UI then showed as "0 devices found"
+     * — identical to a successful sweep of an empty network, and the reason a
+     * phone on mobile data looked like a broken scanner.
+     */
+    /**
+     * Every IPv4 interface the phone has, and whether a sweep could use it.
+     *
+     * Exposed so the LAN screen can show its working. The previous version
+     * asked ConnectivityManager for the *active* network and took the first
+     * IPv4 address on it — which, with a VPN up, is the tunnel's own /32.
+     * It then reported "no other addresses on it" while the phone was plainly
+     * sitting on a /24 with a router and a dozen hosts on it.
+     */
+    fun inspectNetworks(): List<NetworkCandidate> {
+        val interfaces = runCatching { NetworkInterface.getNetworkInterfaces()?.toList().orEmpty() }
+            .getOrDefault(emptyList())
 
-        val linkAddress = linkProperties.linkAddresses.firstOrNull { it.address is Inet4Address } ?: return null
-        val prefixLength = linkAddress.prefixLength
-        if (prefixLength < 24) return null
+        return interfaces.flatMap { nic ->
+            val up = runCatching { nic.isUp }.getOrDefault(false)
+            val loopback = runCatching { nic.isLoopback }.getOrDefault(false)
+            nic.interfaceAddresses.orEmpty()
+                .filter { it.address is Inet4Address }
+                .map { addr ->
+                    val kind = classify(nic.name)
+                    NetworkCandidate(
+                        interfaceName = nic.name,
+                        address = addr.address.hostAddress ?: "?",
+                        prefixLength = addr.networkPrefixLength.toInt(),
+                        kind = kind,
+                        skipReason = skipReason(
+                            up = up,
+                            loopback = loopback,
+                            kind = kind,
+                            address = addr.address as Inet4Address,
+                            prefixLength = addr.networkPrefixLength.toInt(),
+                        ),
+                    )
+                }
+        }
+    }
 
+    /** Why a sweep can't run right now, or null if it can. */
+    fun unavailableReason(): String? = (resolveSubnet() as? SubnetResolution.Unavailable)?.reason
+
+    data class NetworkCandidate(
+        val interfaceName: String,
+        val address: String,
+        val prefixLength: Int,
+        val kind: String,
+        /** Null when this is a network a sweep could actually use. */
+        val skipReason: String?,
+    ) {
+        val usable: Boolean get() = skipReason == null
+        fun describe(): String {
+            val head = "$interfaceName  $address/$prefixLength  ($kind)"
+            return if (skipReason == null) "$head — usable" else "$head — $skipReason"
+        }
+    }
+
+    companion object {
+        /** Refuses to sweep pathologically large subnets (e.g. a /16). */
+        const val MAX_HOSTS_TO_SCAN = 512
+
+        /** Which interface to sweep when several qualify. */
+        val KIND_PREFERENCE = listOf("WiFi", "Wired", "Other")
+
+        internal fun classify(name: String): String = when {
+            name.startsWith("wlan") || name.startsWith("ap") -> "WiFi"
+            name.startsWith("eth") || name.startsWith("usb") || name.startsWith("rndis") -> "Wired"
+            name.startsWith("tun") || name.startsWith("tap") || name.startsWith("ppp") ||
+                name.startsWith("ipsec") || name.startsWith("utun") || name.startsWith("wg") -> "VPN/tunnel"
+            name.startsWith("rmnet") || name.startsWith("ccmni") || name.startsWith("seth") ||
+                name.startsWith("pdp") -> "Mobile data"
+            else -> "Other"
+        }
+
+        internal fun skipReason(
+            up: Boolean,
+            loopback: Boolean,
+            kind: String,
+            address: Inet4Address,
+            prefixLength: Int,
+        ): String? {
+            if (loopback) return "loopback"
+            if (!up) return "interface is down"
+            // A tunnel endpoint has no broadcast domain behind it, and sweeping
+            // a carrier's subnet would be both useless and other people's
+            // machines. Neither is "you are alone on this network".
+            if (kind == "VPN/tunnel") return "a tunnel has no local network behind it"
+            if (kind == "Mobile data") return "mobile data has no local network to sweep"
+            if (address.isLinkLocalAddress) return "self-assigned address, not a real network"
+            if (prefixLength >= 31) return "/$prefixLength is point-to-point — no other hosts"
+            if (prefixLength < 16) return "/$prefixLength is far too large to sweep host by host"
+            val hosts = (1 shl (32 - prefixLength)) - 2
+            if (hosts > MAX_HOSTS_TO_SCAN) {
+                return "$hosts addresses exceeds the $MAX_HOSTS_TO_SCAN-address limit"
+            }
+            return null
+        }
+    }
+
+    private sealed interface SubnetResolution {
+        data class Hosts(val addresses: List<InetAddress>) : SubnetResolution
+        data class Unavailable(val reason: String) : SubnetResolution
+    }
+
+    private fun resolveSubnet(): SubnetResolution {
+        val candidates = inspectNetworks()
+        // WiFi first, then wired, then anything else usable — a phone with
+        // both WiFi and USB tethering up should sweep the WiFi it's on.
+        val chosen = candidates.filter { it.usable }
+            .minByOrNull { KIND_PREFERENCE.indexOf(it.kind).takeIf { i -> i >= 0 } ?: KIND_PREFERENCE.size }
+            ?: return SubnetResolution.Unavailable(explainNoCandidate(candidates))
+
+        val prefixLength = chosen.prefixLength
         val hostBits = 32 - prefixLength
         val hostCount = (1 shl hostBits) - 2 // exclude network + broadcast addresses
-        if (hostCount <= 0 || hostCount > maxHostsToScan) return null
 
-        val addressBytes = linkAddress.address.address
+        val addressBytes = (InetAddress.getByName(chosen.address) as Inet4Address).address
+
         val baseInt = ((addressBytes[0].toInt() and 0xFF) shl 24) or
             ((addressBytes[1].toInt() and 0xFF) shl 16) or
             ((addressBytes[2].toInt() and 0xFF) shl 8) or
             (addressBytes[3].toInt() and 0xFF)
         val networkInt = baseInt and (-1 shl hostBits)
 
-        return (1..hostCount).mapNotNull { offset ->
+        return SubnetResolution.Hosts(
+            (1..hostCount).mapNotNull { offset ->
             val hostInt = networkInt + offset
             val bytes = byteArrayOf(
                 ((hostInt shr 24) and 0xFF).toByte(),
@@ -180,8 +316,9 @@ class LanScanner(private val context: Context) {
                 ((hostInt shr 8) and 0xFF).toByte(),
                 (hostInt and 0xFF).toByte(),
             )
-            runCatching { InetAddress.getByAddress(bytes) }.getOrNull()
-        }
+                runCatching { InetAddress.getByAddress(bytes) }.getOrNull()
+            },
+        )
     }
 
     private fun readArpTable(): Map<String, String> = runCatching {

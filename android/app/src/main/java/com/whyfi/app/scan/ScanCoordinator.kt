@@ -45,7 +45,7 @@ class ScanCoordinator(private val context: Context) {
     val cellularManager = CellularManager(context)
     val bleDeviceScanner = BleDeviceScanner(context)
     private val gnssStatusManager = GnssStatusManager(context)
-    private val lanScanner = LanScanner(context)
+    val lanScanner = LanScanner(context)
     private val settingsRepository = SettingsRepository(context)
     private val gson = Gson()
 

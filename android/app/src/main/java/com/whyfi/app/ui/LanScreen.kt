@@ -1,10 +1,5 @@
 package com.whyfi.app.ui
 
-import android.content.ComponentName
-import android.content.Context
-import android.content.Intent
-import android.content.ServiceConnection
-import android.os.IBinder
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -23,52 +18,26 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.whyfi.app.data.remote.LanObservationDto
 import com.whyfi.app.scan.ScanForegroundService
 import com.whyfi.app.scan.ScanUiState
 import com.whyfi.app.ui.components.RadioStatChip
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun LanScreen() {
+fun LanScreen(service: ScanForegroundService?, uiState: ScanUiState) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val resultsAnchor = remember { BringIntoViewRequester() }
-
-    var service by remember { mutableStateOf<ScanForegroundService?>(null) }
-    val connection = remember {
-        object : ServiceConnection {
-            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-                service = (binder as ScanForegroundService.LocalBinder).getService()
-            }
-
-            override fun onServiceDisconnected(name: ComponentName?) {
-                service = null
-            }
-        }
-    }
-
-    DisposableEffect(Unit) {
-        context.bindService(Intent(context, ScanForegroundService::class.java), connection, Context.BIND_AUTO_CREATE)
-        onDispose { context.unbindService(connection) }
-    }
-
-    val fallbackState = remember { MutableStateFlow(ScanUiState()) }
-    val uiState by (service?.uiState ?: fallbackState).collectAsState()
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
@@ -108,6 +77,24 @@ fun LanScreen() {
             },
         ) {
             Text(if (uiState.isLanScanning) "Scanning…" else "Scan LAN")
+        }
+
+        // Previously this case was silent: the sweep returned an empty list,
+        // the chip read "0 devices", and there was nothing to distinguish it
+        // from a genuinely empty network.
+        uiState.lanUnavailableReason?.let { reason ->
+            Text(reason, color = MaterialTheme.colorScheme.error)
+        }
+
+        // Shown whether or not the sweep ran. If the app refuses, this is the
+        // evidence for the refusal; if it sweeps, it's a record of which
+        // network was swept — either way it can be checked against what a
+        // tool like Portdroid reports instead of being taken on trust.
+        if (uiState.lanNetworkReport.isNotEmpty()) {
+            Text("Network interfaces", style = MaterialTheme.typography.titleMedium)
+            uiState.lanNetworkReport.forEach { line ->
+                Text(line, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+            }
         }
 
         if (uiState.isLanScanning && uiState.lanTotal > 0) {

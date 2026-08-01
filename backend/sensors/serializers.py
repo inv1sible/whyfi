@@ -8,6 +8,16 @@ from .models import Sensor, SensorScanPolicy
 # MinValueValidator(15) is the only floor.
 MIN_INTERVAL_SECONDS_WITH_WIFI = 30
 
+# Every field that ends up as a scan cadence, and so has to clear the WiFi
+# throttle floor. Kept as one list so a future fifth motion state can't be
+# added to the model and quietly skip validation.
+INTERVAL_FIELDS = [
+    "scan_interval_seconds",
+    "stationary_interval_seconds",
+    "walking_interval_seconds",
+    "driving_interval_seconds",
+]
+
 POLICY_DESIRED_FIELDS = [
     "remote_scan_enabled",
     "scan_interval_seconds",
@@ -16,6 +26,10 @@ POLICY_DESIRED_FIELDS = [
     "include_cellular",
     "include_ble",
     "include_gnss",
+    "adaptive_scan_enabled",
+    "stationary_interval_seconds",
+    "walking_interval_seconds",
+    "driving_interval_seconds",
 ]
 
 POLICY_REPORTED_FIELDS = [
@@ -36,6 +50,8 @@ POLICY_REPORTED_FIELDS = [
     "reported_policy_revision",
     "reported_scan_now_nonce",
     "reported_reset_counters_nonce",
+    "reported_motion_state",
+    "reported_effective_interval_seconds",
 ]
 
 
@@ -80,20 +96,23 @@ class SensorScanPolicyUpdateSerializer(serializers.ModelSerializer):
         # 20s interval is stored must be rejected too.
         instance = self.instance
         include_wifi = attrs.get("include_wifi", instance.include_wifi if instance else True)
-        interval = attrs.get(
-            "scan_interval_seconds",
-            instance.scan_interval_seconds if instance else 60,
-        )
-        if include_wifi and interval < MIN_INTERVAL_SECONDS_WITH_WIFI:
-            raise serializers.ValidationError(
-                {
-                    "scan_interval_seconds": (
-                        f"Must be at least {MIN_INTERVAL_SECONDS_WITH_WIFI} seconds while WiFi is "
-                        "included — Android throttles WiFi scans to 4 per 2 minutes, so a shorter "
-                        "interval does not produce more scans."
-                    )
-                }
-            )
+        if not include_wifi:
+            return attrs
+
+        # Every cadence is checked, not just the one in use. An unused
+        # interval that violates the floor is a trap set for whoever later
+        # switches modes — better to refuse to store it at all.
+        errors = {}
+        for name in INTERVAL_FIELDS:
+            value = attrs.get(name, getattr(instance, name) if instance else None)
+            if value is not None and value < MIN_INTERVAL_SECONDS_WITH_WIFI:
+                errors[name] = (
+                    f"Must be at least {MIN_INTERVAL_SECONDS_WITH_WIFI} seconds while WiFi is "
+                    "included — Android throttles WiFi scans to 4 per 2 minutes, so a shorter "
+                    "interval does not produce more scans."
+                )
+        if errors:
+            raise serializers.ValidationError(errors)
         return attrs
 
 

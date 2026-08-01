@@ -82,6 +82,40 @@ local iteration, keep the production path as "build into the backend image."
   new sweep mode) should go through this service, not a fresh
   `rememberCoroutineScope()` — that's exactly the bug this replaced (see
   MEMORY.md).
+  **Bind to it once, in `WhyfiApp`, and pass the handle down** — never per
+  screen. The service `stopSelf()`s when idle, and a stopped service is
+  destroyed the instant its last client unbinds, so per-screen bindings leave
+  a zero-client gap on every tab switch that silently wipes `ScanUiState`.
+- **The phone keeps the last two scan passes in memory and nothing more.**
+  `ScanUiState.latestPass`/`previousPass` back the results tables, and
+  `SurveyTally` accumulates unique devices (not passes) for the Dashboard.
+  Both live in the scan service and are meant to die with it — the totals say
+  "this session" precisely because of that. Don't "fix" this by adding a Room
+  history table: the outbox is deliberately write-then-delete and the full
+  survey belongs on the backend. See `docs/architecture.md`.
+- **The LAN sweep picks its subnet from `NetworkInterface`, not
+  `ConnectivityManager.activeNetwork`.** With a VPN up, `activeNetwork` is the
+  tunnel and its first IPv4 address is a `/32` — which the scanner reported as
+  "no other addresses on it" while the phone sat on a populated `/24`. Keep
+  `unavailableReason()` distinct from an empty result: empty must mean "swept,
+  nobody answered", and a sweep that can't run must not upload a session.
+  `LanScannerTest` pins the classification. See `docs/architecture.md`.
+- **Adaptive scan cadence is driven by platform sensors, never Play
+  Services.** `motion/MotionDetector.kt` degrades through three tiers and
+  needs no runtime permission; don't "improve" it with
+  `ActivityRecognitionClient` (adds Play Services) or `TYPE_STEP_COUNTER`
+  (adds `ACTIVITY_RECOGNITION`). The judgement lives in the pure
+  `MotionClassifier`, which is unit-tested — put new rules there, not in the
+  detector. The three intervals live on `SensorScanPolicy` so the app and
+  `/remote` stay consistent; the device reports its motion state so a slow
+  cadence never looks like a hang. See `docs/architecture.md`.
+- **`android/…/scan/RadioFormat.kt` mirrors `backend/scans/serializers.py`**
+  (`band_for_frequency`, `channel_for_frequency`,
+  `security_type_from_capabilities`). Change one side and you must change the
+  other, or the phone and the PWA report different channels and security for
+  the same sighting. `RadioFormatTest` is pinned to the same cases as
+  `SecurityParsingTests`; `gradle testDebugUnitTest` runs them in the
+  `android-builder` container.
 - **Control-plane state is desired/reported reconciliation, not a command
   queue.** Remote scanning control (`SensorScanPolicy`) stores what a device
   *should* be doing; the device polls `POST /sensors/me/heartbeat/`, reports

@@ -84,10 +84,56 @@ class SettingsRepository(context: Context) {
     val outboxQuotaBytes: Long
         get() = outboxQuotaMb.toLong() * 1024L * 1024L
 
+    /** Pick the scan interval from how the phone is moving instead of using
+     * one fixed cadence. A phone on a desk re-scans the same airwaves all day;
+     * a phone in a car covers new ground every second. */
+    var adaptiveScanEnabled: Boolean
+        get() = prefs.getBoolean(KEY_ADAPTIVE_SCAN, true)
+        set(value) = prefs.edit { putBoolean(KEY_ADAPTIVE_SCAN, value) }
+
+    var stationaryIntervalSeconds: Int
+        get() = prefs.getInt(KEY_STATIONARY_INTERVAL, DEFAULT_STATIONARY_INTERVAL_SECONDS)
+        set(value) = prefs.edit { putInt(KEY_STATIONARY_INTERVAL, clampInterval(value)) }
+
+    var walkingIntervalSeconds: Int
+        get() = prefs.getInt(KEY_WALKING_INTERVAL, DEFAULT_WALKING_INTERVAL_SECONDS)
+        set(value) = prefs.edit { putInt(KEY_WALKING_INTERVAL, clampInterval(value)) }
+
+    var drivingIntervalSeconds: Int
+        get() = prefs.getInt(KEY_DRIVING_INTERVAL, DEFAULT_DRIVING_INTERVAL_SECONDS)
+        set(value) = prefs.edit { putInt(KEY_DRIVING_INTERVAL, clampInterval(value)) }
+
+    /** Applies the operator's settings from a heartbeat response.
+     *
+     * The policy is the single source of truth while remote control is armed,
+     * so these are written straight into local settings — the phone's Settings
+     * screen then shows the same numbers the web UI does, rather than the two
+     * quietly disagreeing about what the device is doing. */
+    fun applyRemoteAdaptiveSettings(enabled: Boolean, stationary: Int, walking: Int, driving: Int) {
+        adaptiveScanEnabled = enabled
+        stationaryIntervalSeconds = stationary
+        walkingIntervalSeconds = walking
+        drivingIntervalSeconds = driving
+    }
+
     companion object {
         const val DEFAULT_OUTBOX_QUOTA_MB = 100
         const val MIN_OUTBOX_QUOTA_MB = 5
         const val MAX_OUTBOX_QUOTA_MB = 10_000
+
+        const val DEFAULT_STATIONARY_INTERVAL_SECONDS = 600
+        const val DEFAULT_WALKING_INTERVAL_SECONDS = 60
+        const val DEFAULT_DRIVING_INTERVAL_SECONDS = 30
+
+        /** Mirrors the backend's MinValueValidator(15) in sensors/models.py.
+         * Note 30s is the real floor whenever WiFi is included — Android
+         * allows 4 WiFi scans per 2 minutes — which the backend enforces in
+         * SensorScanPolicyUpdateSerializer and the scan loop absorbs via
+         * ScanThrottleController. */
+        const val MIN_INTERVAL_SECONDS = 15
+        const val MAX_INTERVAL_SECONDS = 24 * 60 * 60
+
+        private fun clampInterval(value: Int) = value.coerceIn(MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS)
 
         private const val KEY_BACKEND_URL = "backend_url"
         private const val KEY_SENSOR_TOKEN = "sensor_token"
@@ -95,5 +141,9 @@ class SettingsRepository(context: Context) {
         private const val KEY_LOCATION_SOURCE = "location_source_preference"
         private const val KEY_REMOTE_CONTROL = "remote_control_enabled"
         private const val KEY_OUTBOX_QUOTA_MB = "outbox_quota_mb"
+        private const val KEY_ADAPTIVE_SCAN = "adaptive_scan_enabled"
+        private const val KEY_STATIONARY_INTERVAL = "stationary_interval_seconds"
+        private const val KEY_WALKING_INTERVAL = "walking_interval_seconds"
+        private const val KEY_DRIVING_INTERVAL = "driving_interval_seconds"
     }
 }

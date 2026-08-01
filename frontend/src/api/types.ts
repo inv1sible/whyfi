@@ -20,6 +20,12 @@ export interface SensorScanPolicy {
   include_cellular: boolean;
   include_ble: boolean;
   include_gnss: boolean;
+  // Adaptive cadence — one interval per motion state. When enabled the device
+  // picks from these and ignores scan_interval_seconds.
+  adaptive_scan_enabled: boolean;
+  stationary_interval_seconds: number;
+  walking_interval_seconds: number;
+  driving_interval_seconds: number;
   scan_now_nonce: number;
   reset_counters_nonce: number;
   policy_revision: number;
@@ -43,6 +49,10 @@ export interface SensorScanPolicy {
   reported_policy_revision: number | null;
   reported_scan_now_nonce: number | null;
   reported_reset_counters_nonce: number | null;
+  // Why the device is scanning at the cadence it is. Empty/null when the
+  // device is older than this feature, or has adaptive cadence off.
+  reported_motion_state: string;
+  reported_effective_interval_seconds: number | null;
   // Derived server-side
   agent_online: boolean;
   policy_pending: boolean;
@@ -59,6 +69,10 @@ export type SensorScanPolicyUpdate = Partial<
     | "include_cellular"
     | "include_ble"
     | "include_gnss"
+    | "adaptive_scan_enabled"
+    | "stationary_interval_seconds"
+    | "walking_interval_seconds"
+    | "driving_interval_seconds"
   >
 >;
 

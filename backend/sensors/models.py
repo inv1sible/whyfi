@@ -92,6 +92,23 @@ class SensorScanPolicy(models.Model):
     # conditional check in SensorScanPolicyUpdateSerializer.
     scan_interval_seconds = models.PositiveIntegerField(default=60, validators=[MinValueValidator(15)])
     heartbeat_interval_seconds = models.PositiveIntegerField(default=10, validators=[MinValueValidator(5)])
+    # --- Adaptive cadence ---
+    # A phone sitting on a desk re-scans the same airwaves forever; a phone in
+    # a car covers new ground every second. When enabled, the device picks its
+    # interval from its own motion state and `scan_interval_seconds` is
+    # ignored (the device reports which interval it actually used, so the UI
+    # can say so rather than looking broken).
+    #
+    # These live on the policy rather than only on the phone so the web UI and
+    # the app configure the same thing. While remote control is armed the
+    # policy wins, exactly like every other field here.
+    adaptive_scan_enabled = models.BooleanField(default=True)
+    stationary_interval_seconds = models.PositiveIntegerField(default=600, validators=[MinValueValidator(15)])
+    walking_interval_seconds = models.PositiveIntegerField(default=60, validators=[MinValueValidator(15)])
+    # Fastest of the three: a vehicle covers the most unmapped ground per
+    # minute. 30s is the practical floor when WiFi is included — Android
+    # allows 4 WiFi scans per 2 minutes.
+    driving_interval_seconds = models.PositiveIntegerField(default=30, validators=[MinValueValidator(15)])
     include_wifi = models.BooleanField(default=True)
     include_cellular = models.BooleanField(default=True)
     include_ble = models.BooleanField(default=True)
@@ -128,6 +145,13 @@ class SensorScanPolicy(models.Model):
     reported_policy_revision = models.PositiveIntegerField(null=True, blank=True)
     reported_scan_now_nonce = models.PositiveIntegerField(null=True, blank=True)
     reported_reset_counters_nonce = models.PositiveIntegerField(null=True, blank=True)
+    # What the device's motion detector currently believes, and the interval it
+    # picked as a result. Without these a stationary phone scanning every ten
+    # minutes is indistinguishable from a broken one — the UI needs to be able
+    # to say "10 min because it's stationary", not just show a stale timestamp.
+    # Blank when the device is too old to report it, or adaptive is off.
+    reported_motion_state = models.CharField(max_length=16, blank=True)
+    reported_effective_interval_seconds = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         verbose_name_plural = "sensor scan policies"
