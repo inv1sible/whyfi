@@ -184,7 +184,7 @@ export function ManageScansPage() {
                 <SortableTh label="Started" sortKey="started_at" currentKey={sortKey} direction={direction} onSort={requestSort} />
                 <SortableTh label="Sensor" sortKey="sensor_name" currentKey={sortKey} direction={direction} onSort={requestSort} />
                 <th>Location</th>
-                <th>Data</th>
+                <th className="hide-mobile">Data</th>
               </tr>
             </thead>
             <tbody>
@@ -204,7 +204,7 @@ export function ManageScansPage() {
                     />
                   </td>
                   <td>{s.started_display}</td>
-                  <td>{s.sensor_name}</td>
+                  <td>{s.sensor_name ?? "(sensor deleted)"}</td>
                   <td>
                     {s.resolved_address ? (
                       <>
@@ -223,7 +223,7 @@ export function ManageScansPage() {
                       "—"
                     )}
                   </td>
-                  <td>{formatObservationCounts(s)}</td>
+                  <td className="hide-mobile">{formatObservationCounts(s)}</td>
                 </tr>
               ))}
             </tbody>

@@ -130,8 +130,11 @@ export interface WiFiObservation {
 
 export interface ScanSession {
   id: string;
-  sensor: string;
-  sensor_name: string;
+  // Both null once the sensor that recorded this session has been deleted
+  // with "keep data" (see SensorViewSet.destroy()'s on_conflict="keep_data")
+  // — the scan session and its observations survive, just detached.
+  sensor: string | null;
+  sensor_name: string | null;
   started_at: string;
   completed_at: string;
   latitude: number | null;

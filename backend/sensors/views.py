@@ -89,26 +89,31 @@ class SensorViewSet(
         payload (ErrorDetail wraps everything, ints included) — a plain
         Response here just returns the number as a number.
 
-        ScanSession.sensor is on_delete=CASCADE, so deleting a sensor that
-        has ever uploaded anything would otherwise silently take its entire
-        scan history with it — every WiFi/cellular/BLE/satellite/LAN
-        observation it ever contributed, gone with no confirmation of
-        *that*, just "delete this device". Bare DELETE stays guarded (409)
-        so that can never happen by accident; the caller has to say so
-        explicitly via delete_data=true, which is what lets the PWA offer
-        "delete everything" as a real, deliberate choice rather than a dead
-        end pointing at Manage Scans.
+        Deleting a sensor that has ever uploaded anything is ambiguous on
+        its own — does "delete this device" mean its scan history too, or
+        not? Bare DELETE stays guarded (409) so that's never assumed; the
+        caller has to say which via `on_conflict`:
+          - "delete_data": cascades — every scan session (and so every
+            WiFi/cellular/BLE/satellite/LAN observation) this sensor ever
+            contributed is deleted along with it.
+          - "keep_data": the sensor row is deleted, but its scan sessions
+            aren't touched. ScanSession.sensor is on_delete=SET_NULL (not
+            CASCADE) specifically so this is enforced at the DB level, not
+            just an application-layer promise — deleting the sensor here
+            just detaches its history, which then shows up with no sensor
+            name attached rather than disappearing.
         """
         instance = self.get_object()
         scan_count = instance.scan_sessions.count()
         if scan_count > 0:
-            delete_data = bool(request.data.get("delete_data"))
-            if not delete_data:
+            on_conflict = request.data.get("on_conflict")
+            if on_conflict == "delete_data":
+                instance.scan_sessions.all().delete()
+            elif on_conflict != "keep_data":
                 return Response(
                     {"detail": "This sensor has scan sessions.", "scan_session_count": scan_count},
                     status=status.HTTP_409_CONFLICT,
                 )
-            instance.scan_sessions.all().delete()
         instance.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 

@@ -262,8 +262,8 @@ export const api = {
   regenerateSensorToken: (id: string) => post<SensorWithToken>(`/sensors/${id}/regenerate-token/`),
   setSensorActive: (id: string, isActive: boolean) =>
     post<Sensor>(`/sensors/${id}/set-active/`, { is_active: isActive }),
-  deleteSensor: (id: string, opts: { deleteData?: boolean } = {}) =>
-    del<void>(`/sensors/${id}/`, opts.deleteData ? { delete_data: true } : undefined),
+  deleteSensor: (id: string, opts: { onConflict?: "delete_data" | "keep_data" } = {}) =>
+    del<void>(`/sensors/${id}/`, opts.onConflict ? { on_conflict: opts.onConflict } : undefined),
   setSensorScanPolicy: (id: string, patch: SensorScanPolicyUpdate) =>
     post<SensorScanPolicy>(`/sensors/${id}/scan-policy/`, patch),
   sensorScanNow: (id: string) => post<SensorScanPolicy>(`/sensors/${id}/scan-now/`),

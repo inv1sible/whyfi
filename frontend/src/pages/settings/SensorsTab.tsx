@@ -116,10 +116,9 @@ export function SensorsTab() {
     }
   }
 
-  async function handleToggleActive(sensor: Sensor, { quiet = false }: { quiet?: boolean } = {}) {
+  async function handleToggleActive(sensor: Sensor) {
     const activating = !sensor.is_active;
     if (
-      !quiet &&
       !activating &&
       !window.confirm(
         `Deactivate "${sensor.name}"? Its token stops authenticating immediately — it won't be able to check in ` +
@@ -141,11 +140,11 @@ export function SensorsTab() {
     }
   }
 
-  async function handleDelete(sensor: Sensor, { deleteData = false }: { deleteData?: boolean } = {}) {
+  async function handleDelete(sensor: Sensor, opts: { onConflict?: "delete_data" | "keep_data" } = {}) {
     setBusyId(sensor.id);
     setError(null);
     try {
-      await api.deleteSensor(sensor.id, { deleteData });
+      await api.deleteSensor(sensor.id, opts);
       setConfirmDeleteId(null);
       setDeleteConflict(null);
       loadSensors();
@@ -171,15 +170,19 @@ export function SensorsTab() {
       return (
         <div className="sensor-actions">
           <p className="page-hint">
-            "{sensor.name}" has {count} scan session{count === 1 ? "" : "s"}. Delete them too, or keep the data and
-            just deactivate this sensor instead?
+            "{sensor.name}" has {count} scan session{count === 1 ? "" : "s"}. Delete the sensor and that data
+            together, or delete the sensor but keep the data (its scans stay, just without a device attached)?
           </p>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-            <button onClick={() => handleDelete(sensor, { deleteData: true })} disabled={busy} className="danger-button">
+            <button
+              onClick={() => handleDelete(sensor, { onConflict: "delete_data" })}
+              disabled={busy}
+              className="danger-button"
+            >
               Delete sensor + all its data
             </button>
-            <button onClick={() => handleToggleActive(sensor, { quiet: true })} disabled={busy}>
-              Keep data, just deactivate
+            <button onClick={() => handleDelete(sensor, { onConflict: "keep_data" })} disabled={busy} className="danger-button">
+              Delete sensor, keep data
             </button>
             <button onClick={() => setDeleteConflict(null)} disabled={busy}>
               Cancel

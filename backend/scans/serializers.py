@@ -153,7 +153,11 @@ class WiFiObservationSerializer(serializers.ModelSerializer):
 
 
 class ScanSessionSerializer(serializers.ModelSerializer):
-    sensor_name = serializers.CharField(source="sensor.name", read_only=True)
+    # SerializerMethodField, not CharField(source="sensor.name") — the
+    # latter does a plain getattr(getattr(instance, "sensor"), "name") with
+    # no null-safety, so it 500s the instant `sensor` is None (a sensor
+    # deleted with on_conflict="keep_data" — see SensorViewSet.destroy()).
+    sensor_name = serializers.SerializerMethodField()
     wifi_count = serializers.SerializerMethodField()
     cell_count = serializers.SerializerMethodField()
     ble_count = serializers.SerializerMethodField()
@@ -171,6 +175,9 @@ class ScanSessionSerializer(serializers.ModelSerializer):
             "created_at", "wifi_count", "cell_count", "ble_count", "satellite_count", "lan_count",
             "resolved_address", "identifiers_summary",
         ]
+
+    def get_sensor_name(self, obj):
+        return obj.sensor.name if obj.sensor else None
 
     # ScanSessionViewSet.get_queryset() annotates these counts so listing
     # many sessions (the scan-management page) doesn't run 5 extra queries

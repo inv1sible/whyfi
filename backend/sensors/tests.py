@@ -179,7 +179,9 @@ class SensorDeactivateAndDeleteTests(TestCase):
         )
         self.assertEqual(ScanSession.objects.filter(sensor=sensor).count(), 1)
 
-        response = self.client.delete(f"/api/v1/sensors/{sensor.id}/", data={"delete_data": True}, format="json")
+        response = self.client.delete(
+            f"/api/v1/sensors/{sensor.id}/", data={"on_conflict": "delete_data"}, format="json"
+        )
         self.assertEqual(response.status_code, 204, response.content)
         self.assertFalse(Sensor.objects.filter(id=sensor.id).exists())
         self.assertEqual(ScanSession.objects.filter(client_scan_id="scan-delete-with-data").count(), 0)
@@ -189,7 +191,45 @@ class SensorDeactivateAndDeleteTests(TestCase):
         # are what "its data" means.
         self.assertTrue(AccessPoint.objects.filter(bssid="aa:bb:cc:dd:ee:ff").exists())
 
-    def test_delete_data_false_still_blocks(self):
+    def test_delete_with_keep_data_detaches_but_preserves_scan_sessions(self):
+        from scans.models import ScanSession
+
+        sensor = Sensor.objects.create(name="Has History")
+        ingest = APIClient()
+        ingest.credentials(HTTP_AUTHORIZATION=f"Token {sensor.token}")
+        ingest.post(
+            "/api/v1/scan-sessions/",
+            {
+                "client_scan_id": "scan-keep-data",
+                "started_at": "2026-07-16T10:00:00Z",
+                "completed_at": "2026-07-16T10:00:03Z",
+                "wifi_observations": [
+                    {"bssid": "aa:bb:cc:dd:ee:ff", "ssid": "Net", "rssi": -55,
+                     "frequency_mhz": 2437, "capabilities": "[ESS]"},
+                ],
+            },
+            format="json",
+        )
+
+        response = self.client.delete(
+            f"/api/v1/sensors/{sensor.id}/", data={"on_conflict": "keep_data"}, format="json"
+        )
+        self.assertEqual(response.status_code, 204, response.content)
+        self.assertFalse(Sensor.objects.filter(id=sensor.id).exists())
+
+        session = ScanSession.objects.get(client_scan_id="scan-keep-data")
+        self.assertIsNone(session.sensor)
+        self.assertEqual(session.wifi_observations.count(), 1)
+
+        # The scan-sessions list endpoint must still render an orphaned
+        # session rather than 500ing on a null sensor.
+        list_response = self.client.get("/api/v1/scan-sessions/")
+        self.assertEqual(list_response.status_code, 200)
+        orphaned = next(s for s in list_response.json()["results"] if s["id"] == str(session.id))
+        self.assertIsNone(orphaned["sensor_name"])
+        self.assertIsNone(orphaned["sensor"])
+
+    def test_delete_without_on_conflict_still_blocks(self):
         sensor = Sensor.objects.create(name="Has History")
         ingest = APIClient()
         ingest.credentials(HTTP_AUTHORIZATION=f"Token {sensor.token}")
@@ -202,7 +242,7 @@ class SensorDeactivateAndDeleteTests(TestCase):
             },
             format="json",
         )
-        response = self.client.delete(f"/api/v1/sensors/{sensor.id}/", data={"delete_data": False}, format="json")
+        response = self.client.delete(f"/api/v1/sensors/{sensor.id}/")
         self.assertEqual(response.status_code, 409)
         self.assertTrue(Sensor.objects.filter(id=sensor.id).exists())
 

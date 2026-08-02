@@ -290,6 +290,19 @@ h2 {
   zoom: 0.65;
 }
 
+/* Same idea applied to the Sensors tab's table/card switch (see
+   .sensor-cards below): "zoom out" means see everything, table included,
+   so it overrides the mobile card layout back to the (now zoomed-out,
+   via the .data-table rule above — .sensors-table carries both classes)
+   table rather than leaving the cards up regardless of this toggle. */
+.compact-tables .sensors-table {
+  display: table;
+}
+
+.compact-tables .sensor-cards {
+  display: none;
+}
+
 .data-table tbody tr:hover {
   background: color-mix(in srgb, var(--accent) 6%, transparent);
 }

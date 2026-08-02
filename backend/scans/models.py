@@ -16,7 +16,14 @@ class ScanSession(models.Model):
     from (gps vs network), not just a bare coordinate pair."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    sensor = models.ForeignKey(Sensor, on_delete=models.CASCADE, related_name="scan_sessions")
+    # Nullable so a sensor can be deleted while explicitly choosing to keep
+    # its scan history (SensorViewSet.destroy()'s on_conflict="keep_data")
+    # — SET_NULL rather than CASCADE means that choice is enforced at the DB
+    # level, not just by an application-layer promise. Ingest always sets a
+    # real sensor (see ScanSessionIngestSerializer); a null here only ever
+    # means "the device that recorded this was deleted, deliberately, with
+    # its data kept".
+    sensor = models.ForeignKey(Sensor, null=True, blank=True, on_delete=models.SET_NULL, related_name="scan_sessions")
     client_scan_id = models.CharField(max_length=64, unique=True)
     started_at = models.DateTimeField()
     completed_at = models.DateTimeField()
@@ -38,7 +45,7 @@ class ScanSession(models.Model):
         ordering = ["-started_at"]
 
     def __str__(self):
-        return f"ScanSession {self.id} ({self.sensor.name})"
+        return f"ScanSession {self.id} ({self.sensor.name if self.sensor else 'sensor deleted'})"
 
 
 class AccessPoint(models.Model):
