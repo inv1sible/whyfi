@@ -42,7 +42,15 @@ export function ManageScansPage() {
   const { data, error, loading } = usePolling(() => api.scanSessions("?limit=1000"), 15000, [refreshKey]);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [armed, setArmed] = useState(false);
+  // Set the moment "Delete selected" is clicked — a snapshot of exactly what
+  // was selected then, not a re-read of the live `selected` state. Confirm
+  // acts on this snapshot, not on `selected` itself: the previous version
+  // used one shared handler that branched on a boolean `armed` flag re-read
+  // at click time, which meant "arm" and "confirm" could only be told apart
+  // by that flag's value at the exact moment each click's handler ran. This
+  // version makes the two clicks structurally distinct (arm sets a value,
+  // confirm consumes it) so there's no shared state whose staleness matters.
+  const [armedIds, setArmedIds] = useState<Set<string> | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [resolving, setResolving] = useState(false);
@@ -62,7 +70,7 @@ export function ManageScansPage() {
   // A stale "confirm delete?" prompt applying to a since-changed selection
   // would be actively dangerous — disarm the moment the selection changes.
   useEffect(() => {
-    setArmed(false);
+    setArmedIds(null);
   }, [selected]);
 
   function toggleOne(id: string) {
@@ -98,22 +106,27 @@ export function ManageScansPage() {
     setSelected(new Set());
   }
 
-  async function handleDelete() {
-    if (!armed) {
-      setArmed(true);
-      return;
-    }
+  function handleArmDelete() {
+    setArmedIds(new Set(selected));
+  }
+
+  function handleCancelArm() {
+    setArmedIds(null);
+  }
+
+  async function handleConfirmDelete() {
+    if (!armedIds) return;
     setDeleting(true);
     setDeleteError(null);
     try {
-      await api.bulkDeleteScanSessions([...selected]);
+      await api.bulkDeleteScanSessions([...armedIds]);
       setSelected(new Set());
+      setArmedIds(null);
       setRefreshKey((k) => k + 1);
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : "Delete failed.");
     } finally {
       setDeleting(false);
-      setArmed(false);
     }
   }
 
@@ -234,22 +247,22 @@ export function ManageScansPage() {
       {selected.size > 0 && (
         <div className="floating-action-bar">
           {deleteError && <p className="error-text">{deleteError}</p>}
-          {!armed ? (
+          {!armedIds ? (
             <>
               <span>{selected.size} scan{selected.size === 1 ? "" : "s"} selected</span>
-              <button onClick={handleDelete}>Delete selected</button>
+              <button onClick={handleArmDelete}>Delete selected</button>
               <button onClick={clearSelection}>Cancel</button>
             </>
           ) : (
             <>
               <span>
-                Delete {selected.size} scan{selected.size === 1 ? "" : "s"}? This also deletes every WiFi/cellular/
-                BLE/satellite/LAN observation in {selected.size === 1 ? "it" : "them"} — cannot be undone.
+                Delete {armedIds.size} scan{armedIds.size === 1 ? "" : "s"}? This also deletes every WiFi/cellular/
+                BLE/satellite/LAN observation in {armedIds.size === 1 ? "it" : "them"} — cannot be undone.
               </span>
-              <button onClick={handleDelete} disabled={deleting} className="danger-button">
+              <button onClick={handleConfirmDelete} disabled={deleting} className="danger-button">
                 {deleting ? "Deleting…" : "Confirm delete"}
               </button>
-              <button onClick={() => setArmed(false)} disabled={deleting}>
+              <button onClick={handleCancelArm} disabled={deleting}>
                 Cancel
               </button>
             </>
