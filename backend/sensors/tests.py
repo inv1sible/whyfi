@@ -87,6 +87,77 @@ class SensorCreateAndRegenerateTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
 
+class SensorDeactivateAndDeleteTests(TestCase):
+    """Deactivate (reversible, keeps history) and delete (irreversible,
+    guarded against taking a device's scan history with it) — see
+    SensorViewSet.set_active/perform_destroy."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(username="operator", password="test-pass-123")
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def test_set_active_false_blocks_the_token(self):
+        sensor = Sensor.objects.create(name="Retiring Phone")
+        token = sensor.token
+
+        response = self.client.post(f"/api/v1/sensors/{sensor.id}/set-active/", {"is_active": False}, format="json")
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertFalse(response.json()["is_active"])
+
+        ingest_client = APIClient()
+        ingest_client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
+        heartbeat = ingest_client.post("/api/v1/sensors/me/heartbeat/", {}, format="json")
+        self.assertEqual(heartbeat.status_code, 401)
+
+    def test_set_active_true_reactivates_it(self):
+        sensor = Sensor.objects.create(name="Phone", is_active=False)
+        response = self.client.post(f"/api/v1/sensors/{sensor.id}/set-active/", {"is_active": True}, format="json")
+        self.assertEqual(response.status_code, 200)
+        sensor.refresh_from_db()
+        self.assertTrue(sensor.is_active)
+
+    def test_set_active_requires_a_boolean(self):
+        sensor = Sensor.objects.create(name="Phone")
+        response = self.client.post(f"/api/v1/sensors/{sensor.id}/set-active/", {"is_active": "nope"}, format="json")
+        self.assertEqual(response.status_code, 400)
+
+    def test_set_active_requires_auth(self):
+        sensor = Sensor.objects.create(name="Phone")
+        response = APIClient().post(f"/api/v1/sensors/{sensor.id}/set-active/", {"is_active": False}, format="json")
+        self.assertEqual(response.status_code, 403)
+
+    def test_delete_a_sensor_with_no_scans_succeeds(self):
+        sensor = Sensor.objects.create(name="Never Used")
+        response = self.client.delete(f"/api/v1/sensors/{sensor.id}/")
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Sensor.objects.filter(id=sensor.id).exists())
+
+    def test_delete_a_sensor_with_scans_is_blocked(self):
+        sensor = Sensor.objects.create(name="Has History")
+        ingest = APIClient()
+        ingest.credentials(HTTP_AUTHORIZATION=f"Token {sensor.token}")
+        ingest.post(
+            "/api/v1/scan-sessions/",
+            {
+                "client_scan_id": "scan-has-history",
+                "started_at": "2026-07-16T10:00:00Z",
+                "completed_at": "2026-07-16T10:00:03Z",
+            },
+            format="json",
+        )
+
+        response = self.client.delete(f"/api/v1/sensors/{sensor.id}/")
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertTrue(Sensor.objects.filter(id=sensor.id).exists())
+
+    def test_delete_requires_auth(self):
+        sensor = Sensor.objects.create(name="Phone")
+        response = APIClient().delete(f"/api/v1/sensors/{sensor.id}/")
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(Sensor.objects.filter(id=sensor.id).exists())
+
+
 class SensorCsrfProtectionTests(TestCase):
     """force_authenticate (used above) bypasses CSRF middleware entirely —
     this exercises the real login+cookie+header flow. See MEMORY.md."""

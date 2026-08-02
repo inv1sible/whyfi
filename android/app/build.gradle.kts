@@ -104,5 +104,13 @@ dependencies {
     // documented stub (see UwbLocateManager.isPeerRangingProfileSupported).
     implementation("androidx.core.uwb:uwb:1.0.0-alpha07")
 
+    // QR scanning for the "scan to configure" flow in Settings — bundles its
+    // own camera capture activity (CaptureActivity, merged in via its AAR
+    // manifest) so this doesn't need a CameraX dependency of its own. No
+    // Play Services requirement, unlike ML Kit's on-device barcode model —
+    // matters for a scanning tool whose audience skews toward de-Googled
+    // phones. Published directly to Maven Central, no extra repo needed.
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+
     testImplementation("junit:junit:4.13.2")
 }

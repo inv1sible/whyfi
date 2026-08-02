@@ -10,6 +10,13 @@
     <!-- Cellular serving/neighbor cell info -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
+    <!-- Scanning a setup QR code in Settings (backend URL + sensor token) —
+         see ui/SettingsScreen.kt. Requested on demand when the button is
+         tapped, not at launch. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
     <!-- BLE device discovery (Android 12+) -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
 

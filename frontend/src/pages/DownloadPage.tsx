@@ -1,5 +1,6 @@
 import QRCode from "qrcode";
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, downloadWithProgress } from "../api/client";
 import type { AppRelease, BuildStatusResponse } from "../api/types";
 
@@ -112,6 +113,9 @@ export function DownloadPage() {
       <h1>Download the whyfi Android app</h1>
       <p className="page-hint">
         Scanning WiFi, cellular, and Bluetooth only works from the native Android app — no browser can do it.
+      </p>
+      <p className="page-hint">
+        Need a sensor and a token for a new phone first? Go to <Link to="/settings?tab=sensors">Settings → Sensors</Link>.
       </p>
 
       <div className="download-card">

@@ -1,6 +1,7 @@
 from django.utils import timezone
-from rest_framework import mixins, viewsets
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action, api_view, authentication_classes, permission_classes
+from rest_framework.exceptions import APIException
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -27,11 +28,18 @@ def _policy_for(sensor: Sensor) -> SensorScanPolicy:
     return policy
 
 
-class SensorViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.CreateModelMixin, viewsets.GenericViewSet):
-    """Create/list/regenerate — session-authenticated (a human managing
-    devices via Settings > Sensors), not a public self-registration
-    endpoint. Uses the project-wide SessionAuthentication + IsAuthenticated
-    default (see config/settings.py) — no override needed here.
+class SensorViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Create/list/regenerate/deactivate/delete — session-authenticated (a
+    human managing devices via Settings > Sensors), not a public
+    self-registration endpoint. Uses the project-wide SessionAuthentication +
+    IsAuthenticated default (see config/settings.py) — no override needed
+    here.
 
     Note this viewset is deliberately kept 100% session-auth even though the
     remote-control feature has a device-facing counterpart: that one lives in
@@ -54,6 +62,42 @@ class SensorViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Cre
         sensor.token = generate_sensor_token()
         sensor.save(update_fields=["token"])
         return Response(SensorTokenRevealSerializer(sensor).data)
+
+    @action(detail=True, methods=["post"], url_path="set-active")
+    def set_active(self, request, pk=None):
+        """Toggling this off is the "retire this phone" button: the token
+        stops authenticating immediately (SensorTokenAuthentication already
+        filters on is_active=True), but every scan session it ever uploaded
+        stays put — unlike delete below, this is fully reversible.
+
+        POST rather than PATCH for the same reason as scan_policy above: the
+        PWA's api client only has get/post/del helpers.
+        """
+        sensor = self.get_object()
+        is_active = request.data.get("is_active")
+        if not isinstance(is_active, bool):
+            return Response({"detail": "is_active must be a boolean."}, status=status.HTTP_400_BAD_REQUEST)
+        sensor.is_active = is_active
+        sensor.save(update_fields=["is_active"])
+        return Response(SensorSerializer(sensor).data)
+
+    def perform_destroy(self, instance):
+        # ScanSession.sensor is on_delete=CASCADE, so deleting a sensor that
+        # has ever uploaded anything would silently take its entire scan
+        # history with it — every WiFi/cellular/BLE/satellite/LAN
+        # observation it ever contributed, gone with no confirmation of
+        # *that*, just "delete this device". Deactivating already covers
+        # "stop this phone from doing anything"; delete is reserved for
+        # cleaning up a sensor that was created by mistake or never used —
+        # clear its scans via Manage Scans first if you actually want both gone.
+        if instance.scan_sessions.exists():
+            error = APIException(
+                "This sensor has scan sessions. Delete its scans from Manage Scans first, "
+                "or deactivate it instead to keep the history but stop it from reporting."
+            )
+            error.status_code = status.HTTP_409_CONFLICT
+            raise error
+        instance.delete()
 
     @action(detail=True, methods=["post"], url_path="scan-policy")
     def scan_policy(self, request, pk=None):

@@ -135,6 +135,10 @@ async function del<T>(path: string, body?: unknown): Promise<T> {
   });
   if (response.status === 401) throw new UnauthorizedError(`Not logged in for ${path}`);
   if (!response.ok) throw new ApiError(response.status, await parseErrorBody(response), path);
+  // DRF's default destroy() (used by e.g. DELETE /sensors/{id}/) returns 204
+  // with no body — response.json() on that throws a JSON parse error, so
+  // callers expecting Promise<void> get undefined instead of a crash.
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -256,6 +260,9 @@ export const api = {
   createSensor: (name: string, sensorType = "android") =>
     post<SensorWithToken>("/sensors/", { name, sensor_type: sensorType }),
   regenerateSensorToken: (id: string) => post<SensorWithToken>(`/sensors/${id}/regenerate-token/`),
+  setSensorActive: (id: string, isActive: boolean) =>
+    post<Sensor>(`/sensors/${id}/set-active/`, { is_active: isActive }),
+  deleteSensor: (id: string) => del<void>(`/sensors/${id}/`),
   setSensorScanPolicy: (id: string, patch: SensorScanPolicyUpdate) =>
     post<SensorScanPolicy>(`/sensors/${id}/scan-policy/`, patch),
   sensorScanNow: (id: string) => post<SensorScanPolicy>(`/sensors/${id}/scan-now/`),

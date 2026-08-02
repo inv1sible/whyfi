@@ -2,6 +2,7 @@ package com.whyfi.app.ui
 
 import android.content.Intent
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,6 +33,14 @@ import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.ThemePreference
 import com.whyfi.app.permissions.PermissionHelper
 import com.whyfi.app.scan.ScanForegroundService
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
+import org.json.JSONObject
+
+// Mirrors SETUP_QR_PREFIX in frontend/src/pages/settings/SensorsTab.tsx —
+// change one, change both. Lets a scan tell "this is a whyfi setup code"
+// apart from an arbitrary QR code before it tries to parse JSON out of it.
+private const val SETUP_QR_PREFIX = "whyfi-setup:"
 
 @Composable
 fun SettingsScreen(
@@ -97,6 +106,37 @@ fun SettingsScreen(
         }
 
         Text("Point this app at your self-hosted whyfi backend (see docs/deployment.md for creating a sensor + token).")
+
+        val qrScanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+            val raw = result.contents
+            when {
+                raw == null -> Unit // user backed out of the scanner; nothing to report
+                !raw.startsWith(SETUP_QR_PREFIX) -> savedMessage = "That QR code isn't a whyfi setup code."
+                else -> runCatching {
+                    val payload = JSONObject(raw.removePrefix(SETUP_QR_PREFIX))
+                    val newBackend = payload.getString("backend")
+                    val newToken = payload.getString("token")
+                    val name = payload.optString("name", "")
+                    backendUrl = newBackend
+                    token = newToken
+                    settingsRepository.backendUrl = newBackend
+                    settingsRepository.sensorToken = newToken
+                    savedMessage = if (name.isNotBlank()) "Configured for \"$name\" and saved." else "Configured and saved."
+                }.onFailure { e ->
+                    savedMessage = "Could not read that QR code: ${e.message}"
+                }
+            }
+        }
+        Button(onClick = {
+            qrScanLauncher.launch(
+                ScanOptions()
+                    .setPrompt("Scan the setup QR code from Settings → Sensors on the whyfi web UI")
+                    .setBeepEnabled(false)
+                    .setOrientationLocked(false),
+            )
+        }) {
+            Text("Scan QR to configure")
+        }
 
         OutlinedTextField(
             value = backendUrl,
