@@ -2,6 +2,7 @@ package com.whyfi.app.gnss
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.pm.PackageManager
 import android.location.GnssStatus
 import android.location.LocationManager
 import android.os.Handler
@@ -10,6 +11,24 @@ import com.whyfi.app.data.remote.SatelliteObservationDto
 import kotlinx.coroutines.delay
 
 class GnssStatusManager(private val context: Context) {
+
+    /** Non-null only when GNSS scanning can't proceed — mirrors WifiScanManager/
+     * CellularManager/BleDeviceScanner's unavailableReason(). This device class
+     * of bug (an unguarded hardware/feature check) is exactly what took the
+     * app down on a WiFi-only tablet's cellular path; GNSS was the one radio
+     * with no equivalent check or explanation at all, so a device with no GPS
+     * chip (or location services off) silently came back with zero satellites
+     * and no indication why. */
+    fun unavailableReason(): String? {
+        if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_LOCATION_GPS)) {
+            return "This device has no GPS hardware."
+        }
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val gpsEnabled = runCatching { locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) }
+            .getOrDefault(false)
+        if (!gpsEnabled) return "Location services (GPS) are off."
+        return null
+    }
 
     @SuppressLint("MissingPermission")
     suspend fun captureSnapshot(durationMs: Long = 5000): List<SatelliteObservationDto> {

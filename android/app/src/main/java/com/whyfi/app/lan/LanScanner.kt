@@ -173,9 +173,6 @@ class LanScanner(private val context: Context) {
         return if (canonical == host.hostAddress) "" else canonical
     }
 
-    /** Current WiFi subnet's usable host addresses, from the active
-     * network's link properties (its own IP + prefix length) — refuses
-     * anything wider than a /24-ish range to keep the sweep bounded. */
     /**
      * Why a sweep can't run right now, or null if it can.
      *
@@ -217,6 +214,7 @@ class LanScanner(private val context: Context) {
                             address = addr.address as Inet4Address,
                             prefixLength = addr.networkPrefixLength.toInt(),
                         ),
+                        truncated = isTruncated(addr.networkPrefixLength.toInt()),
                     )
                 }
         }
@@ -232,11 +230,21 @@ class LanScanner(private val context: Context) {
         val kind: String,
         /** Null when this is a network a sweep could actually use. */
         val skipReason: String?,
+        /** True when this network is usable but has more host addresses than
+         * MAX_HOSTS_TO_SCAN — the sweep still runs, just over the first
+         * MAX_HOSTS_TO_SCAN addresses rather than refusing outright. A /21
+         * office network is a real LAN worth partial results from, not a
+         * mistake to reject. */
+        val truncated: Boolean = false,
     ) {
         val usable: Boolean get() = skipReason == null
         fun describe(): String {
             val head = "$interfaceName  $address/$prefixLength  ($kind)"
-            return if (skipReason == null) "$head — usable" else "$head — $skipReason"
+            return when {
+                skipReason != null -> "$head — $skipReason"
+                truncated -> "$head — usable, but only the first $MAX_HOSTS_TO_SCAN of its addresses will be swept"
+                else -> "$head — usable"
+            }
         }
     }
 
@@ -273,12 +281,20 @@ class LanScanner(private val context: Context) {
             if (kind == "Mobile data") return "mobile data has no local network to sweep"
             if (address.isLinkLocalAddress) return "self-assigned address, not a real network"
             if (prefixLength >= 31) return "/$prefixLength is point-to-point — no other hosts"
-            if (prefixLength < 16) return "/$prefixLength is far too large to sweep host by host"
-            val hosts = (1 shl (32 - prefixLength)) - 2
-            if (hosts > MAX_HOSTS_TO_SCAN) {
-                return "$hosts addresses exceeds the $MAX_HOSTS_TO_SCAN-address limit"
-            }
+            // No size-based refusal here: a subnet larger than
+            // MAX_HOSTS_TO_SCAN is still swept, just capped (see
+            // isTruncated/NetworkCandidate.truncated and resolveSubnet's
+            // hostCount) — a big office network is a real LAN worth partial
+            // results from, not a mistake to reject outright.
             return null
+        }
+
+        /** True when this prefix has more host addresses than
+         * MAX_HOSTS_TO_SCAN — the network is still usable, just truncated. */
+        internal fun isTruncated(prefixLength: Int): Boolean {
+            if (prefixLength <= 0 || prefixLength >= 31) return false
+            val hosts = (1 shl (32 - prefixLength)) - 2
+            return hosts > MAX_HOSTS_TO_SCAN
         }
     }
 
@@ -297,7 +313,12 @@ class LanScanner(private val context: Context) {
 
         val prefixLength = chosen.prefixLength
         val hostBits = 32 - prefixLength
-        val hostCount = (1 shl hostBits) - 2 // exclude network + broadcast addresses
+        // Capped at MAX_HOSTS_TO_SCAN regardless of how large the subnet
+        // actually is (see NetworkCandidate.truncated) — enumerating and
+        // sweeping the first N addresses of a big network is still useful,
+        // and this cap is what keeps that bounded rather than needing the
+        // whole subnet refused up front.
+        val hostCount = minOf((1 shl hostBits) - 2, MAX_HOSTS_TO_SCAN) // exclude network + broadcast addresses
 
         val addressBytes = (InetAddress.getByName(chosen.address) as Inet4Address).address
 

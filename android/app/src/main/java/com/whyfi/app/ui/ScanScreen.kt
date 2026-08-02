@@ -196,6 +196,9 @@ fun ScanScreen(
             Checkbox(checked = includeGnss, onCheckedChange = { includeGnss = it }, enabled = !uiState.isContinuous)
             Text("GNSS satellites")
         }
+        if (includeGnss && uiState.gnssUnavailableReason != null) {
+            Text("${uiState.gnssUnavailableReason} Satellite results will be empty until this is resolved.")
+        }
 
         Button(
             enabled = canScanNow() && !uiState.isScanning && !uiState.isContinuous,

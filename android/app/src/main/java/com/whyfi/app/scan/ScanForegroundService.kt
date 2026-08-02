@@ -49,6 +49,7 @@ data class ScanUiState(
     val wifiUnavailableReason: String? = null,
     val cellularUnavailableReason: String? = null,
     val bleUnavailableReason: String? = null,
+    val gnssUnavailableReason: String? = null,
     val lanUnavailableReason: String? = null,
     // Every IPv4 interface the phone has and whether a sweep could use it.
     // Shown on the LAN screen so a refusal can be checked rather than taken
@@ -325,6 +326,7 @@ class ScanForegroundService : Service() {
                 wifiUnavailableReason = scanCoordinator.wifiScanManager.unavailableReason(),
                 cellularUnavailableReason = scanCoordinator.cellularManager.unavailableReason(),
                 bleUnavailableReason = scanCoordinator.bleDeviceScanner.unavailableReason(),
+                gnssUnavailableReason = scanCoordinator.gnssStatusManager.unavailableReason(),
             )
         }
     }
