@@ -149,12 +149,61 @@ class SensorDeactivateAndDeleteTests(TestCase):
 
         response = self.client.delete(f"/api/v1/sensors/{sensor.id}/")
         self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(response.json()["scan_session_count"], 1)
         self.assertTrue(Sensor.objects.filter(id=sensor.id).exists())
 
     def test_delete_requires_auth(self):
         sensor = Sensor.objects.create(name="Phone")
         response = APIClient().delete(f"/api/v1/sensors/{sensor.id}/")
         self.assertEqual(response.status_code, 403)
+        self.assertTrue(Sensor.objects.filter(id=sensor.id).exists())
+
+    def test_delete_with_delete_data_cascades_scan_sessions(self):
+        from scans.models import AccessPoint, ScanSession, WiFiObservation
+
+        sensor = Sensor.objects.create(name="Has History")
+        ingest = APIClient()
+        ingest.credentials(HTTP_AUTHORIZATION=f"Token {sensor.token}")
+        ingest.post(
+            "/api/v1/scan-sessions/",
+            {
+                "client_scan_id": "scan-delete-with-data",
+                "started_at": "2026-07-16T10:00:00Z",
+                "completed_at": "2026-07-16T10:00:03Z",
+                "wifi_observations": [
+                    {"bssid": "aa:bb:cc:dd:ee:ff", "ssid": "Net", "rssi": -55,
+                     "frequency_mhz": 2437, "capabilities": "[ESS]"},
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(ScanSession.objects.filter(sensor=sensor).count(), 1)
+
+        response = self.client.delete(f"/api/v1/sensors/{sensor.id}/", data={"delete_data": True}, format="json")
+        self.assertEqual(response.status_code, 204, response.content)
+        self.assertFalse(Sensor.objects.filter(id=sensor.id).exists())
+        self.assertEqual(ScanSession.objects.filter(client_scan_id="scan-delete-with-data").count(), 0)
+        self.assertEqual(WiFiObservation.objects.count(), 0)
+        # The AccessPoint itself (a dedup'd aggregate, not owned by any one
+        # sensor) is untouched — only this sensor's own sessions/observations
+        # are what "its data" means.
+        self.assertTrue(AccessPoint.objects.filter(bssid="aa:bb:cc:dd:ee:ff").exists())
+
+    def test_delete_data_false_still_blocks(self):
+        sensor = Sensor.objects.create(name="Has History")
+        ingest = APIClient()
+        ingest.credentials(HTTP_AUTHORIZATION=f"Token {sensor.token}")
+        ingest.post(
+            "/api/v1/scan-sessions/",
+            {
+                "client_scan_id": "scan-delete-data-false",
+                "started_at": "2026-07-16T10:00:00Z",
+                "completed_at": "2026-07-16T10:00:03Z",
+            },
+            format="json",
+        )
+        response = self.client.delete(f"/api/v1/sensors/{sensor.id}/", data={"delete_data": False}, format="json")
+        self.assertEqual(response.status_code, 409)
         self.assertTrue(Sensor.objects.filter(id=sensor.id).exists())
 
 

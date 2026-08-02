@@ -15,6 +15,24 @@ interface SearchableRow extends ScanSession {
   started_display: string;
 }
 
+// One compact column instead of five (WiFi/Cell/BLE/Sat/LAN each had their
+// own) — this is a management/cleanup table, not a per-radio browser (those
+// already exist on their own pages), so the per-scan breakdown only needs
+// to be scannable at a glance, not sortable column-by-column. Zero counts
+// are omitted rather than shown as "WiFi 0" — a LAN scan pass legitimately
+// has nothing in the other four, and spelling that out on every single row
+// is exactly the clutter this is meant to remove.
+function formatObservationCounts(s: ScanSession): string {
+  const parts = [
+    s.wifi_count > 0 && `WiFi ${s.wifi_count}`,
+    s.cell_count > 0 && `Cell ${s.cell_count}`,
+    s.ble_count > 0 && `BLE ${s.ble_count}`,
+    s.satellite_count > 0 && `Sat ${s.satellite_count}`,
+    s.lan_count > 0 && `LAN ${s.lan_count}`,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : "—";
+}
+
 export function ManageScansPage() {
   // Bumped after a successful delete/resolve to force an immediate refetch
   // rather than waiting out the rest of the 15s poll interval — usePolling
@@ -165,19 +183,14 @@ export function ManageScansPage() {
                 </th>
                 <SortableTh label="Started" sortKey="started_at" currentKey={sortKey} direction={direction} onSort={requestSort} />
                 <SortableTh label="Sensor" sortKey="sensor_name" currentKey={sortKey} direction={direction} onSort={requestSort} />
-                <th>Address</th>
                 <th>Location</th>
-                <SortableTh label="WiFi" sortKey="wifi_count" currentKey={sortKey} direction={direction} onSort={requestSort} />
-                <SortableTh label="Cell" sortKey="cell_count" currentKey={sortKey} direction={direction} onSort={requestSort} />
-                <SortableTh label="BLE" sortKey="ble_count" currentKey={sortKey} direction={direction} onSort={requestSort} />
-                <SortableTh label="Sat" sortKey="satellite_count" currentKey={sortKey} direction={direction} onSort={requestSort} />
-                <SortableTh label="LAN" sortKey="lan_count" currentKey={sortKey} direction={direction} onSort={requestSort} />
+                <th>Data</th>
               </tr>
             </thead>
             <tbody>
               {sorted.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="empty-state">No scans match your search.</td>
+                  <td colSpan={5} className="empty-state">No scans match your search.</td>
                 </tr>
               )}
               {sorted.map((s) => (
@@ -192,13 +205,25 @@ export function ManageScansPage() {
                   </td>
                   <td>{s.started_display}</td>
                   <td>{s.sensor_name}</td>
-                  <td>{s.resolved_address || "—"}</td>
-                  <td>{s.latitude != null && s.longitude != null ? `${s.latitude.toFixed(4)}, ${s.longitude.toFixed(4)}` : "—"}</td>
-                  <td>{s.wifi_count}</td>
-                  <td>{s.cell_count}</td>
-                  <td>{s.ble_count}</td>
-                  <td>{s.satellite_count}</td>
-                  <td>{s.lan_count}</td>
+                  <td>
+                    {s.resolved_address ? (
+                      <>
+                        {s.resolved_address}
+                        {s.latitude != null && s.longitude != null && (
+                          <div className="identifier-subtext mono">
+                            {s.latitude.toFixed(4)}, {s.longitude.toFixed(4)}
+                          </div>
+                        )}
+                      </>
+                    ) : s.latitude != null && s.longitude != null ? (
+                      <span className="mono">
+                        {s.latitude.toFixed(4)}, {s.longitude.toFixed(4)}
+                      </span>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td>{formatObservationCounts(s)}</td>
                 </tr>
               ))}
             </tbody>

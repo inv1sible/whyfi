@@ -564,6 +564,35 @@ button:disabled {
   margin-bottom: 0.75rem;
 }
 
+.sensor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Sensors tab (Settings): a plain data-table with a multi-button action
+   column has nowhere to go on a narrow screen but a horizontal scroll,
+   which reads badly for a short, low-row-count list like this one (unlike
+   Manage Scans/Satellites, which keep the table + scroll at every width).
+   Below 640px this switches to one download-card per sensor instead —
+   .sensor-cards is built (see SensorsTab.tsx) but hidden by default so it
+   doesn't double up with the table above this breakpoint. */
+.sensor-cards {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .sensors-table {
+    display: none;
+  }
+
+  .sensor-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+}
+
 .remote-intervals {
   display: flex;
   flex-wrap: wrap;

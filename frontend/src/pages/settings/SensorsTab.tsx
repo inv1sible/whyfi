@@ -1,5 +1,5 @@
 import QRCode from "qrcode";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError, api, getBackendUrlOverride } from "../../api/client";
 import type { Sensor } from "../../api/types";
 import { TableControls } from "../../components/TableControls";
@@ -7,6 +7,14 @@ import { TableControls } from "../../components/TableControls";
 interface RevealedToken {
   name: string;
   token: string;
+}
+
+/** Set once a delete attempt comes back 409 (this sensor has scan
+ * sessions) — replaces the plain confirm/cancel step with a real choice
+ * instead of a dead-end error message. */
+interface DeleteConflict {
+  sensorId: string;
+  scanSessionCount: number;
 }
 
 function describeError(err: unknown): string {
@@ -62,6 +70,7 @@ export function SensorsTab() {
   const [revealed, setRevealed] = useState<RevealedToken | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deleteConflict, setDeleteConflict] = useState<DeleteConflict | null>(null);
 
   function loadSensors() {
     setLoading(true);
@@ -107,9 +116,10 @@ export function SensorsTab() {
     }
   }
 
-  async function handleToggleActive(sensor: Sensor) {
+  async function handleToggleActive(sensor: Sensor, { quiet = false }: { quiet?: boolean } = {}) {
     const activating = !sensor.is_active;
     if (
+      !quiet &&
       !activating &&
       !window.confirm(
         `Deactivate "${sensor.name}"? Its token stops authenticating immediately — it won't be able to check in ` +
@@ -122,6 +132,7 @@ export function SensorsTab() {
     setError(null);
     try {
       await api.setSensorActive(sensor.id, activating);
+      setDeleteConflict(null);
       loadSensors();
     } catch (err) {
       setError(`Could not update "${sensor.name}" — ${describeError(err)}`);
@@ -130,22 +141,78 @@ export function SensorsTab() {
     }
   }
 
-  async function handleDelete(sensor: Sensor) {
+  async function handleDelete(sensor: Sensor, { deleteData = false }: { deleteData?: boolean } = {}) {
     setBusyId(sensor.id);
     setError(null);
     try {
-      await api.deleteSensor(sensor.id);
+      await api.deleteSensor(sensor.id, { deleteData });
       setConfirmDeleteId(null);
+      setDeleteConflict(null);
       loadSensors();
     } catch (err) {
-      // Most likely the 409 guard (this sensor has scan sessions) — surfaced
-      // inline rather than losing the confirm-delete row, so the message
-      // ("delete its scans from Manage Scans first, or deactivate instead")
-      // stays visible right next to the button that triggered it.
-      setError(`Could not delete "${sensor.name}" — ${describeError(err)}`);
+      if (err instanceof ApiError && err.status === 409 && err.body && typeof err.body === "object") {
+        const count = (err.body as { scan_session_count?: number }).scan_session_count ?? 0;
+        setDeleteConflict({ sensorId: sensor.id, scanSessionCount: count });
+      } else {
+        setError(`Could not delete "${sensor.name}" — ${describeError(err)}`);
+      }
     } finally {
       setBusyId(null);
     }
+  }
+
+  // Shared between the desktop table row and the mobile card — same
+  // buttons, same states, just laid out differently.
+  function renderActions(sensor: Sensor): ReactNode {
+    const busy = busyId === sensor.id;
+
+    if (deleteConflict?.sensorId === sensor.id) {
+      const count = deleteConflict.scanSessionCount;
+      return (
+        <div className="sensor-actions">
+          <p className="page-hint">
+            "{sensor.name}" has {count} scan session{count === 1 ? "" : "s"}. Delete them too, or keep the data and
+            just deactivate this sensor instead?
+          </p>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            <button onClick={() => handleDelete(sensor, { deleteData: true })} disabled={busy} className="danger-button">
+              Delete sensor + all its data
+            </button>
+            <button onClick={() => handleToggleActive(sensor, { quiet: true })} disabled={busy}>
+              Keep data, just deactivate
+            </button>
+            <button onClick={() => setDeleteConflict(null)} disabled={busy}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="sensor-actions">
+        <button onClick={() => handleRegenerate(sensor)} disabled={busy}>
+          Regenerate token
+        </button>
+        <button onClick={() => handleToggleActive(sensor)} disabled={busy}>
+          {sensor.is_active ? "Deactivate" : "Reactivate"}
+        </button>
+        {confirmDeleteId === sensor.id ? (
+          <>
+            <button onClick={() => handleDelete(sensor)} disabled={busy} className="danger-button">
+              Confirm delete
+            </button>
+            <button onClick={() => setConfirmDeleteId(null)} disabled={busy}>
+              Cancel
+            </button>
+          </>
+        ) : (
+          <button onClick={() => setConfirmDeleteId(sensor.id)} disabled={busy}>
+            Delete
+          </button>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -181,58 +248,56 @@ export function SensorsTab() {
 
       {sensors.length > 0 && (
         <>
-        <TableControls />
-          <table className="data-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Active</th>
-              <th>Last seen</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
+          <TableControls />
+
+          {/* Desktop/wide: a table. Below 640px (see .sensors-table /
+              .sensor-cards in index.css) a plain data-table with 5 columns
+              plus an action row has nowhere to go but a horizontal scroll,
+              which is what this replaces on narrow screens. */}
+          <table className="data-table sensors-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Active</th>
+                <th>Last seen</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sensors.map((sensor) => (
+                <tr key={sensor.id}>
+                  <td>{sensor.name}</td>
+                  <td>{sensor.sensor_type}</td>
+                  <td>
+                    <span className={`badge ${sensor.is_active ? "badge-ok" : "badge-neutral"}`}>
+                      {sensor.is_active ? "Active" : "Deactivated"}
+                    </span>
+                  </td>
+                  <td>{sensor.last_seen_at ? new Date(sensor.last_seen_at).toLocaleString() : "Never"}</td>
+                  <td>{renderActions(sensor)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div className="sensor-cards">
             {sensors.map((sensor) => (
-              <tr key={sensor.id}>
-                <td>{sensor.name}</td>
-                <td>{sensor.sensor_type}</td>
-                <td>
+              <div className="download-card" key={sensor.id}>
+                <div className="remote-card-header">
+                  <h2>{sensor.name}</h2>
                   <span className={`badge ${sensor.is_active ? "badge-ok" : "badge-neutral"}`}>
                     {sensor.is_active ? "Active" : "Deactivated"}
                   </span>
-                </td>
-                <td>{sensor.last_seen_at ? new Date(sensor.last_seen_at).toLocaleString() : "Never"}</td>
-                <td style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                  <button onClick={() => handleRegenerate(sensor)} disabled={busyId === sensor.id}>
-                    Regenerate token
-                  </button>
-                  <button onClick={() => handleToggleActive(sensor)} disabled={busyId === sensor.id}>
-                    {sensor.is_active ? "Deactivate" : "Reactivate"}
-                  </button>
-                  {confirmDeleteId === sensor.id ? (
-                    <>
-                      <button
-                        onClick={() => handleDelete(sensor)}
-                        disabled={busyId === sensor.id}
-                        className="danger-button"
-                      >
-                        Confirm delete
-                      </button>
-                      <button onClick={() => setConfirmDeleteId(null)} disabled={busyId === sensor.id}>
-                        Cancel
-                      </button>
-                    </>
-                  ) : (
-                    <button onClick={() => setConfirmDeleteId(sensor.id)} disabled={busyId === sensor.id}>
-                      Delete
-                    </button>
-                  )}
-                </td>
-              </tr>
+                </div>
+                <p className="page-hint">
+                  {sensor.sensor_type} · last seen{" "}
+                  {sensor.last_seen_at ? new Date(sensor.last_seen_at).toLocaleString() : "never"}
+                </p>
+                {renderActions(sensor)}
+              </div>
             ))}
-          </tbody>
-        </table>
+          </div>
         </>
       )}
     </div>

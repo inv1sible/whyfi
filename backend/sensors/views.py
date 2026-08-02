@@ -1,7 +1,6 @@
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action, api_view, authentication_classes, permission_classes
-from rest_framework.exceptions import APIException
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -81,23 +80,37 @@ class SensorViewSet(
         sensor.save(update_fields=["is_active"])
         return Response(SensorSerializer(sensor).data)
 
-    def perform_destroy(self, instance):
-        # ScanSession.sensor is on_delete=CASCADE, so deleting a sensor that
-        # has ever uploaded anything would silently take its entire scan
-        # history with it — every WiFi/cellular/BLE/satellite/LAN
-        # observation it ever contributed, gone with no confirmation of
-        # *that*, just "delete this device". Deactivating already covers
-        # "stop this phone from doing anything"; delete is reserved for
-        # cleaning up a sensor that was created by mistake or never used —
-        # clear its scans via Manage Scans first if you actually want both gone.
-        if instance.scan_sessions.exists():
-            error = APIException(
-                "This sensor has scan sessions. Delete its scans from Manage Scans first, "
-                "or deactivate it instead to keep the history but stop it from reporting."
-            )
-            error.status_code = status.HTTP_409_CONFLICT
-            raise error
+    def destroy(self, request, *args, **kwargs):
+        """Overrides DestroyModelMixin's default rather than using
+        perform_destroy: the 409 conflict response below needs a real
+        integer scan_session_count field for the PWA to display ("this
+        sensor has 4 scan sessions"), and routing an APIException through
+        DRF's exception handler stringifies every value in its detail
+        payload (ErrorDetail wraps everything, ints included) — a plain
+        Response here just returns the number as a number.
+
+        ScanSession.sensor is on_delete=CASCADE, so deleting a sensor that
+        has ever uploaded anything would otherwise silently take its entire
+        scan history with it — every WiFi/cellular/BLE/satellite/LAN
+        observation it ever contributed, gone with no confirmation of
+        *that*, just "delete this device". Bare DELETE stays guarded (409)
+        so that can never happen by accident; the caller has to say so
+        explicitly via delete_data=true, which is what lets the PWA offer
+        "delete everything" as a real, deliberate choice rather than a dead
+        end pointing at Manage Scans.
+        """
+        instance = self.get_object()
+        scan_count = instance.scan_sessions.count()
+        if scan_count > 0:
+            delete_data = bool(request.data.get("delete_data"))
+            if not delete_data:
+                return Response(
+                    {"detail": "This sensor has scan sessions.", "scan_session_count": scan_count},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            instance.scan_sessions.all().delete()
         instance.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=["post"], url_path="scan-policy")
     def scan_policy(self, request, pk=None):
