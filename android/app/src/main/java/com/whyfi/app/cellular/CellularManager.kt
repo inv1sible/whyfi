@@ -2,7 +2,9 @@ package com.whyfi.app.cellular
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import android.telephony.CellInfo
 import android.telephony.CellInfoGsm
 import android.telephony.CellInfoLte
@@ -42,13 +44,34 @@ class CellularManager(private val context: Context) {
         return if (serviceState.state == ServiceState.STATE_POWER_OFF) "Cellular radio is off (airplane mode?)." else null
     }
 
+    /** True only when the device actually has a modem. A WiFi-only tablet
+     * still returns a (non-null, unusable) TelephonyManager instance from
+     * getSystemService — the framework doesn't refuse to hand one out just
+     * because there's no radio behind it — so this is the check that
+     * actually distinguishes "has cellular hardware" from "doesn't". */
+    private fun hasTelephonyHardware(): Boolean =
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
+
     @SuppressLint("MissingPermission")
     suspend fun readCellObservations(): List<CellObservationDto> {
-        val cellInfoList = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            requestFreshCellInfo()
-        } else {
-            @Suppress("DEPRECATION")
-            telephonyManager.allCellInfo ?: emptyList()
+        if (!hasTelephonyHardware()) return emptyList()
+        val cellInfoList = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                requestFreshCellInfo()
+            } else {
+                @Suppress("DEPRECATION")
+                telephonyManager.allCellInfo ?: emptyList()
+            }
+        }.getOrElse { error ->
+            // Since API 30, TelephonyManager methods throw
+            // UnsupportedOperationException synchronously (before any
+            // callback fires) on hardware without FEATURE_TELEPHONY — the
+            // check above should already catch that, but a modem can also
+            // throw for other transient reasons (radio busy/off, OEM
+            // quirks), and this is a "best-effort extra" radio, not one
+            // worth taking the whole scan pass down over.
+            Log.w("CellularManager", "readCellObservations failed, treating as no cellular this pass", error)
+            emptyList()
         }
         return cellInfoList.mapNotNull(::toDto)
     }

@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
 import android.os.Build
+import android.util.Log
 import androidx.core.content.ContextCompat
 import com.google.gson.Gson
 import com.whyfi.app.ble.BleDeviceScanner
@@ -62,28 +63,30 @@ class ScanCoordinator(private val context: Context) {
 
         val wifiObservations = if (options.includeWifi) {
             onPhaseChange(ScanPhase.WIFI)
-            wifiScanManager.scan().also { onPartialResult(ScanPhase.WIFI, it.size) }
+            runPhaseCatching("WiFi") { wifiScanManager.scan() }.also { onPartialResult(ScanPhase.WIFI, it.size) }
         } else {
             emptyList()
         }
 
         val cellObservations = if (options.includeCellular) {
             onPhaseChange(ScanPhase.CELLULAR)
-            cellularManager.readCellObservations().also { onPartialResult(ScanPhase.CELLULAR, it.size) }
+            runPhaseCatching("Cellular") { cellularManager.readCellObservations() }
+                .also { onPartialResult(ScanPhase.CELLULAR, it.size) }
         } else {
             emptyList()
         }
 
         val bleObservations = if (options.includeBle) {
             onPhaseChange(ScanPhase.BLE)
-            bleDeviceScanner.scan().also { onPartialResult(ScanPhase.BLE, it.size) }
+            runPhaseCatching("BLE") { bleDeviceScanner.scan() }.also { onPartialResult(ScanPhase.BLE, it.size) }
         } else {
             emptyList()
         }
 
         val satelliteObservations = if (options.includeGnss) {
             onPhaseChange(ScanPhase.GNSS)
-            gnssStatusManager.captureSnapshot().also { onPartialResult(ScanPhase.GNSS, it.size) }
+            runPhaseCatching("GNSS") { gnssStatusManager.captureSnapshot() }
+                .also { onPartialResult(ScanPhase.GNSS, it.size) }
         } else {
             emptyList()
         }
@@ -221,6 +224,19 @@ class ScanCoordinator(private val context: Context) {
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         return runCatching { locationManager.getLastKnownLocation(LocationManager.FUSED_PROVIDER) }.getOrNull()
     }
+
+    /** One radio misbehaving (a permission edge case, hardware the device
+     * doesn't have, an OEM firmware quirk) must not take the other three
+     * down with it — this ran with no isolation at all before, so an
+     * uncaught exception from any single phase crashed the whole scan pass
+     * (and, since nothing installs a CoroutineExceptionHandler either, the
+     * whole app). Degrades to "nothing from this radio this pass" rather
+     * than losing everything already collected. */
+    private suspend fun <T> runPhaseCatching(radioName: String, block: suspend () -> List<T>): List<T> =
+        runCatching { block() }.getOrElse { error ->
+            Log.e("ScanCoordinator", "$radioName phase failed, continuing scan without it", error)
+            emptyList()
+        }
 
     private fun isoNow(): String {
         val format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)

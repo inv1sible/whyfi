@@ -16,9 +16,19 @@ object ScanResultMapper {
         centerFreq1Mhz = result.centerFreq1.takeIf { it != 0 },
         wifiStandard = wifiStandardLabel(result),
         is80211mcResponder = result.is80211mcResponder,
-        operatorFriendlyName = result.operatorFriendlyName?.toString() ?: "",
-        venueName = result.venueName?.toString() ?: "",
+        operatorFriendlyName = passpointField(result) { it.operatorFriendlyName },
+        venueName = passpointField(result) { it.venueName },
     )
+
+    // operatorFriendlyName/venueName are Passpoint/Hotspot 2.0 fields added
+    // in API 30 (R), same generation as wifiStandard below — referencing
+    // them on an older OS build throws NoSuchFieldError (a LinkageError,
+    // not caught by a plain try/catch at the call site) since the field
+    // doesn't exist in that OS's ScanResult class at all.
+    private fun passpointField(result: ScanResult, field: (ScanResult) -> CharSequence?): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return ""
+        return field(result)?.toString() ?: ""
+    }
 
     private fun channelWidthMhz(channelWidth: Int): Int? = when (channelWidth) {
         ScanResult.CHANNEL_WIDTH_20MHZ -> 20
