@@ -114,6 +114,62 @@ data class CrashReportResponse(
     @SerializedName("id") val id: String,
 )
 
+/** Mirrors backend/scans/views.py's mission_wifi_observations() response.
+ * Fed to mission/Geo.kt's weightedCentroid/conePolygon to render the Mission
+ * view's gradient-cone map — see mission/MissionController.kt. */
+data class MissionWifiObservationsResponse(
+    @SerializedName("ssid") val ssid: String,
+    @SerializedName("points") val points: List<MissionWifiPointDto> = emptyList(),
+    @SerializedName("truncated") val truncated: Boolean = false,
+    @SerializedName("observation_limit") val observationLimit: Int = 0,
+)
+
+data class MissionWifiPointDto(
+    @SerializedName("bssid") val bssid: String,
+    @SerializedName("lat") val lat: Double,
+    @SerializedName("lng") val lng: Double,
+    @SerializedName("weight") val weight: Double,
+    @SerializedName("observed_at") val observedAt: String,
+    @SerializedName("scan_session_id") val scanSessionId: String,
+    @SerializedName("accuracy_meters") val accuracyMeters: Double? = null,
+)
+
+/** Mirrors backend/scans/views.py's mission_ble_observations() response —
+ * BLE sibling of MissionWifiObservationsResponse. */
+data class MissionBleObservationsResponse(
+    @SerializedName("identifier") val identifier: String,
+    @SerializedName("points") val points: List<MissionBlePointDto> = emptyList(),
+    @SerializedName("truncated") val truncated: Boolean = false,
+    @SerializedName("observation_limit") val observationLimit: Int = 0,
+)
+
+data class MissionBlePointDto(
+    @SerializedName("lat") val lat: Double,
+    @SerializedName("lng") val lng: Double,
+    @SerializedName("weight") val weight: Double,
+    @SerializedName("observed_at") val observedAt: String,
+    @SerializedName("scan_session_id") val scanSessionId: String,
+    @SerializedName("accuracy_meters") val accuracyMeters: Double? = null,
+)
+
+/** Mirrors backend/scans/views.py's mission_cell_observations() response —
+ * cellular sibling of MissionWifiObservationsResponse. */
+data class MissionCellObservationsResponse(
+    @SerializedName("tower_key") val towerKey: String,
+    @SerializedName("points") val points: List<MissionCellPointDto> = emptyList(),
+    @SerializedName("truncated") val truncated: Boolean = false,
+    @SerializedName("observation_limit") val observationLimit: Int = 0,
+)
+
+data class MissionCellPointDto(
+    @SerializedName("lat") val lat: Double,
+    @SerializedName("lng") val lng: Double,
+    @SerializedName("weight") val weight: Double,
+    @SerializedName("observed_at") val observedAt: String,
+    @SerializedName("scan_session_id") val scanSessionId: String,
+    @SerializedName("accuracy_meters") val accuracyMeters: Double? = null,
+)
+
 /**
  * What this device tells the backend it's actually doing, once per
  * heartbeat. Everything here is observed state — the backend refuses to let

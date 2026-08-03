@@ -16,11 +16,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.whyfi.app.mission.MissionController
 import com.whyfi.app.scan.RadioFormat
 import com.whyfi.app.scan.RadioKind
 import com.whyfi.app.scan.ScanDiff
@@ -38,6 +40,7 @@ private val CELL_COLOR = Color(0xFF60A5FA)
 private val BLE_COLOR = Color(0xFFA78BFA)
 private val SAT_COLOR = Color(0xFFFBBF24)
 private val LAN_COLOR = Color(0xFF34D399)
+private val MISSION_COLOR = Color(0xFFF472B6)
 
 /** Bands in a fixed order rather than whatever the map iterates in, so the
  * bars don't reshuffle between passes. */
@@ -47,7 +50,9 @@ private val BAND_ORDER = listOf(RadioFormat.BAND_24, RadioFormat.BAND_5, RadioFo
 fun DashboardScreen(
     service: ScanForegroundService?,
     uiState: ScanUiState,
+    missionController: MissionController,
     onOpenDetail: (RadioKind) -> Unit = {},
+    onOpenMission: () -> Unit = {},
 ) {
     val survey = uiState.survey
     val outbox = rememberOutboxStatus(uiState.completedScanCount)
@@ -99,8 +104,20 @@ fun DashboardScreen(
                 onClick = if (openable) ({ onOpenDetail(RadioKind.BLE) }) else null,
             )
             RadioStatChip(
-                "🛰️", "Satellites", survey.uniqueSatellites, false, SAT_COLOR,
+                "🛰️", "GPS", survey.uniqueSatellites, false, SAT_COLOR,
                 onClick = if (openable) ({ onOpenDetail(RadioKind.SATELLITE) }) else null,
+            )
+            // Not tied to uiState.latestPass like the radio chips above —
+            // Mission view talks to the backend directly, not to the last
+            // local pass, so it's always tappable. No count: this chip
+            // doesn't summarize a number, it opens a different screen. The
+            // spinner (isActivePhase) doubles as a live "still tracking"
+            // indicator even while you're looking at this tab, not Mission
+            // itself — see MissionController.uiState.isTracking.
+            val missionState by missionController.uiState.collectAsState()
+            RadioStatChip(
+                "🎯", "Mission", null, missionState.isTracking, MISSION_COLOR,
+                onClick = onOpenMission,
             )
         }
 

@@ -17,9 +17,13 @@ import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.local.PendingScanDao
 import com.whyfi.app.data.local.PendingScanEntity
 import com.whyfi.app.data.local.WhyfiDatabase
+import com.whyfi.app.data.remote.BleObservationDto
+import com.whyfi.app.data.remote.CellObservationDto
 import com.whyfi.app.data.remote.LanObservationDto
+import com.whyfi.app.data.remote.SatelliteObservationDto
 import com.whyfi.app.data.remote.ScanSessionUploadRequest
 import com.whyfi.app.data.remote.UploadWorker
+import com.whyfi.app.data.remote.WifiObservationDto
 import com.whyfi.app.gnss.GnssStatusManager
 import com.whyfi.app.lan.LanScanner
 import java.text.SimpleDateFormat
@@ -36,6 +40,19 @@ data class ScanOptions(
     val includeBle: Boolean = true,
     val includeGnss: Boolean = true,
 )
+
+/** A single radio phase's finished observation list, carried out through
+ * [ScanCoordinator.runScan]'s `onPartialResult` as soon as that phase
+ * completes — not just a count — so the caller (see
+ * ScanForegroundService.runOnePass) can fold each radio's results into the
+ * Dashboard's running survey immediately, rather than waiting for every
+ * phase in the pass to finish. */
+sealed interface PartialScanResult {
+    data class Wifi(val observations: List<WifiObservationDto>) : PartialScanResult
+    data class Cellular(val observations: List<CellObservationDto>) : PartialScanResult
+    data class Ble(val observations: List<BleObservationDto>) : PartialScanResult
+    data class Satellite(val observations: List<SatelliteObservationDto>) : PartialScanResult
+}
 
 /** Ties WiFi/cellular/BLE/GNSS together into one "Scan Now" pass, matching
  * the backend's single-endpoint, multi-radio ingest contract (see
@@ -54,16 +71,19 @@ class ScanCoordinator(private val context: Context) {
         options: ScanOptions = ScanOptions(),
         onPhaseChange: (ScanPhase) -> Unit = {},
         // Fired right after each radio's results are in, before moving to
-        // the next one — lets the UI fill counts in as the scan progresses
-        // instead of only showing anything once the whole pass is done.
-        onPartialResult: (ScanPhase, Int) -> Unit = { _, _ -> },
+        // the next one — lets the UI fold each radio's own results in as
+        // the scan progresses instead of only showing anything once the
+        // whole pass is done. Carries the actual observations, not just a
+        // count, so the caller can update per-device survey state (unique
+        // counts, strongest signal, etc.), not just a number on screen.
+        onPartialResult: (PartialScanResult) -> Unit = {},
     ): ScanSessionUploadRequest {
         val startedAt = isoNow()
         val location = resolveLocation()
 
         val wifiObservations = if (options.includeWifi) {
             onPhaseChange(ScanPhase.WIFI)
-            runPhaseCatching("WiFi") { wifiScanManager.scan() }.also { onPartialResult(ScanPhase.WIFI, it.size) }
+            runPhaseCatching("WiFi") { wifiScanManager.scan() }.also { onPartialResult(PartialScanResult.Wifi(it)) }
         } else {
             emptyList()
         }
@@ -71,14 +91,14 @@ class ScanCoordinator(private val context: Context) {
         val cellObservations = if (options.includeCellular) {
             onPhaseChange(ScanPhase.CELLULAR)
             runPhaseCatching("Cellular") { cellularManager.readCellObservations() }
-                .also { onPartialResult(ScanPhase.CELLULAR, it.size) }
+                .also { onPartialResult(PartialScanResult.Cellular(it)) }
         } else {
             emptyList()
         }
 
         val bleObservations = if (options.includeBle) {
             onPhaseChange(ScanPhase.BLE)
-            runPhaseCatching("BLE") { bleDeviceScanner.scan() }.also { onPartialResult(ScanPhase.BLE, it.size) }
+            runPhaseCatching("BLE") { bleDeviceScanner.scan() }.also { onPartialResult(PartialScanResult.Ble(it)) }
         } else {
             emptyList()
         }
@@ -86,7 +106,7 @@ class ScanCoordinator(private val context: Context) {
         val satelliteObservations = if (options.includeGnss) {
             onPhaseChange(ScanPhase.GNSS)
             runPhaseCatching("GNSS") { gnssStatusManager.captureSnapshot() }
-                .also { onPartialResult(ScanPhase.GNSS, it.size) }
+                .also { onPartialResult(PartialScanResult.Satellite(it)) }
         } else {
             emptyList()
         }
@@ -197,18 +217,7 @@ class ScanCoordinator(private val context: Context) {
         LocationSourcePreference.BOTH -> ResolvedLocation(primary = lastKnownLocation(), fused = fusedLocation())
     }
 
-    @SuppressLint("MissingPermission")
-    private fun lastKnownLocation(): Location? {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            return null
-        }
-        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        return listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-            .mapNotNull { provider -> runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull() }
-            .maxByOrNull { it.time }
-    }
+    private fun lastKnownLocation(): Location? = LocationSnapshot.lastKnown(context)
 
     // FUSED_PROVIDER was added in API 31 (S) — combines GPS/network/sensor
     // data via the platform's own fusion, no Play Services dependency

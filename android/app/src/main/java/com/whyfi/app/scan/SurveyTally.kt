@@ -1,6 +1,9 @@
 package com.whyfi.app.scan
 
-import com.whyfi.app.data.remote.ScanSessionUploadRequest
+import com.whyfi.app.data.remote.BleObservationDto
+import com.whyfi.app.data.remote.CellObservationDto
+import com.whyfi.app.data.remote.SatelliteObservationDto
+import com.whyfi.app.data.remote.WifiObservationDto
 
 /**
  * What the Dashboard shows: an immutable snapshot of everything this phone
@@ -55,11 +58,19 @@ class SurveyTally {
     private var passCount = 0
     private var startedAtMs = 0L
 
-    fun record(pass: ScanSessionUploadRequest) {
+    /** Marks the start of a new pass — bumps [passCount] and, on the very
+     * first pass, starts the clock [SurveyStats.startedAtMs] reads. Call
+     * this once per pass, before any of the four `recordXxx` methods below
+     * — those are called once per radio phase as each finishes (see
+     * ScanForegroundService.runOnePass), and must NOT themselves touch
+     * passCount, or one pass would count as up to four. */
+    fun beginPass() {
         if (passCount == 0) startedAtMs = System.currentTimeMillis()
         passCount++
+    }
 
-        for (ap in pass.wifiObservations) {
+    fun recordWifi(observations: List<WifiObservationDto>) {
+        for (ap in observations) {
             val existing = wifi[ap.bssid]
             // Keep the strongest reading ever taken of this AP, not the latest
             // — walking past a router and back shouldn't downgrade it.
@@ -71,8 +82,10 @@ class SurveyTally {
                 )
             }
         }
+    }
 
-        for (cell in pass.cellObservations) {
+    fun recordCellular(observations: List<CellObservationDto>) {
+        for (cell in observations) {
             val key = ScanDiff.cellKey(cell.mcc, cell.mnc, cell.tacOrLac, cell.cellId)
             val signal = cell.signalDbm ?: continue
             val existing = cellular[key]
@@ -84,8 +97,10 @@ class SurveyTally {
                 )
             }
         }
+    }
 
-        for (device in pass.bleObservations) {
+    fun recordBle(observations: List<BleObservationDto>) {
+        for (device in observations) {
             val existing = ble[device.bleMac]
             if (existing == null || device.rssi > existing.best) {
                 ble[device.bleMac] = SignalSeen(
@@ -95,8 +110,10 @@ class SurveyTally {
                 )
             }
         }
+    }
 
-        for (sat in pass.satelliteObservations) {
+    fun recordSatellite(observations: List<SatelliteObservationDto>) {
+        for (sat in observations) {
             satellites += "${sat.constellation}-${sat.svid}"
         }
     }

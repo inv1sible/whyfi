@@ -34,6 +34,15 @@ data class DeviceRow(
     /** Signal movement since the previous pass, in the metric's own unit.
      * Null when the device is new, gone, or had no reading to compare. */
     val signalDelta: Int? = null,
+    /** The identifier to favorite this row by, when it's favoritable at all —
+     * SSID for WIFI, MAC for BLE, tower key for CELLULAR (matching each
+     * backend mission_*_observations endpoint's own *_exact param), null for
+     * SATELLITE and for rows too anonymous to track (hidden/blank WiFi SSID,
+     * an unidentifiable neighbour cell — see isIdentifiable). Deliberately
+     * not [title], which is display-formatted (RadioFormat.ssidLabel
+     * substitutes a placeholder for hidden networks) and isn't safe to key
+     * by. See ui/ScanDetailScreen.kt's favorite wiring. */
+    val favoriteId: String? = null,
 )
 
 data class DiffSummary(
@@ -118,6 +127,7 @@ object ScanDiff {
                 ),
                 change = changeFor(compare, prior != null),
                 signalDelta = if (prior != null) ap.rssi - prior.rssi else null,
+                favoriteId = ap.ssid.takeIf { it.isNotBlank() },
             )
         }
 
@@ -137,6 +147,7 @@ object ScanDiff {
                         RadioFormat.securityLabel(old.capabilities),
                     ),
                     change = DeviceChange.GONE,
+                    favoriteId = old.ssid.takeIf { it.isNotBlank() },
                 )
             }
 
@@ -191,9 +202,12 @@ object ScanDiff {
                     subtitle = cell.cellId,
                     metric = cell.signalDbm?.let { "$it dBm" } ?: "—",
                     columns = cellColumns(cell),
-                    // An unidentifiable cell can't be said to be new or not.
+                    // An unidentifiable cell can't be said to be new or not,
+                    // and isn't favoritable either — the same key would be
+                    // shared by unrelated neighbours (see isIdentifiable).
                     change = if (identifiable) changeFor(compare, prior != null) else DeviceChange.UNKNOWN,
                     signalDelta = deltaOf(cell.signalDbm, prior?.signalDbm),
+                    favoriteId = if (identifiable) keyOf(cell) else null,
                 )
             }
 
@@ -208,6 +222,7 @@ object ScanDiff {
                     metric = old.signalDbm?.let { "$it dBm" } ?: "—",
                     columns = cellColumns(old),
                     change = DeviceChange.GONE,
+                    favoriteId = keyOf(old),
                 )
             }
 
@@ -256,6 +271,7 @@ object ScanDiff {
                 ),
                 change = changeFor(compare, prior != null),
                 signalDelta = if (prior != null) device.rssi - prior.rssi else null,
+                favoriteId = device.bleMac.takeIf { it.isNotBlank() },
             )
         }
 
@@ -274,6 +290,7 @@ object ScanDiff {
                         old.deviceTypeGuess,
                     ),
                     change = DeviceChange.GONE,
+                    favoriteId = old.bleMac.takeIf { it.isNotBlank() },
                 )
             }
 

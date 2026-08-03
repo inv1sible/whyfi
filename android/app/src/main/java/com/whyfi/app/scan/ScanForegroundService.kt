@@ -508,28 +508,41 @@ class ScanForegroundService : Service() {
                 wifiCount = null, cellularCount = null, bleCount = null, satelliteCount = null,
             )
         }
+        // One passCount bump for the whole pass — the four recordXxx calls
+        // below happen per radio phase, not per pass, so passCount must be
+        // incremented here rather than inside any of them. See
+        // SurveyTally.beginPass's own doc for why.
+        surveyTally.beginPass()
         val pass = scanCoordinator.runScan(
             options,
             onPhaseChange = { phase ->
                 _uiState.update { it.copy(currentPhase = phase) }
                 updateNotification(phaseNotificationLabel(phase))
             },
-            onPartialResult = { phase, count ->
+            // Dashboard's "unique devices heard"/band/strongest numbers used
+            // to only update once the *entire* pass (all four radios)
+            // finished. Recording each radio into surveyTally and refreshing
+            // uiState.survey the moment its own phase completes means the
+            // Dashboard reflects WiFi results while Cellular/BLE/GNSS are
+            // still running, instead of waiting for all four.
+            onPartialResult = { result ->
+                when (result) {
+                    is PartialScanResult.Wifi -> surveyTally.recordWifi(result.observations)
+                    is PartialScanResult.Cellular -> surveyTally.recordCellular(result.observations)
+                    is PartialScanResult.Ble -> surveyTally.recordBle(result.observations)
+                    is PartialScanResult.Satellite -> surveyTally.recordSatellite(result.observations)
+                }
                 _uiState.update { state ->
-                    when (phase) {
-                        ScanPhase.WIFI -> state.copy(wifiCount = count)
-                        ScanPhase.CELLULAR -> state.copy(cellularCount = count)
-                        ScanPhase.BLE -> state.copy(bleCount = count)
-                        ScanPhase.GNSS -> state.copy(satelliteCount = count)
-                        else -> state
+                    val counts = when (result) {
+                        is PartialScanResult.Wifi -> state.copy(wifiCount = result.observations.size)
+                        is PartialScanResult.Cellular -> state.copy(cellularCount = result.observations.size)
+                        is PartialScanResult.Ble -> state.copy(bleCount = result.observations.size)
+                        is PartialScanResult.Satellite -> state.copy(satelliteCount = result.observations.size)
                     }
+                    counts.copy(survey = surveyTally.snapshot())
                 }
             },
         )
-        // runScan's return value used to be discarded, which is why the app
-        // could say "41 WiFi" but never which 41. Keeping the last two shifts
-        // that from a count to a result set at no storage cost.
-        surveyTally.record(pass)
         // Speed for the walking/driving split, taken from a position the scan
         // already needed — never by waking the GPS just to ask.
         val lat = pass.latitude

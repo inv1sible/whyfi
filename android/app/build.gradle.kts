@@ -96,6 +96,14 @@ dependencies {
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
     implementation("com.squareup.retrofit2:converter-gson:2.11.0")
 
+    // Mission view's map (see mission/MissionScreen.kt) — plain OpenStreetMap
+    // tiles, same tile source the PWA's Leaflet map already uses, and no API
+    // key/billing account needed (unlike Google Maps SDK). Its tile cache is
+    // pointed at context.cacheDir rather than its external-storage default,
+    // specifically to avoid needing a storage permission on this app's
+    // minSdk 28 — see MissionScreen.kt's osmdroid Configuration setup.
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
+
     // Precision ranging enhancement tier — see ble/UwbLocateManager.kt for
     // the cross-vendor caveat (only works with Android-compatible ranging
     // profiles, not Apple AirTags). Pinned to 1.0.0-alpha07 rather than the

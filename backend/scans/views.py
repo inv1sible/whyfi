@@ -75,6 +75,11 @@ def recent_session_ids(n, radio_related_name=None):
 # silently changing the answer — see capped_take()/capped_response().
 COVERAGE_OBSERVATION_CAP = 20000
 HEATMAP_OBSERVATION_CAP = 5000
+# One SSID's worth of near-location-filtered readings for the Android Mission
+# view — smaller than COVERAGE_OBSERVATION_CAP since this is one network, not
+# the whole dataset. See mission_wifi_observations() for why this cap is
+# applied *after* the near-radius filter, not before.
+MISSION_OBSERVATION_CAP = 2000
 
 # Ceilings for caller-supplied row counts. Generous — these exist to keep a
 # hand-edited URL from turning into an unbounded read, not to constrain the UI.
@@ -1188,3 +1193,247 @@ def heatmap(request):
         points.append(point)
 
     return Response(capped_response(points, truncated, HEATMAP_OBSERVATION_CAP))
+
+
+def parse_required_near(request):
+    """near_lat/near_lng/near_radius_m — required, not the tolerant
+    all-or-nothing-silent-drop posture of parse_area(). Shared by the three
+    mission_*_observations views below: for each of them, this triple is the
+    entire reason the endpoint exists (excluding a favorited device/network's
+    sightings recorded somewhere else entirely — a travel router, a phone
+    that changed owners), so a missing/malformed one is a 400, not a
+    silently-unfiltered response.
+
+    Returns `((lat, lng, radius), None)` on success or `(None, error_response)`
+    on failure — callers `return error` immediately when it's not None.
+    """
+    near_lat = parse_float(request.query_params.get("near_lat"))
+    near_lng = parse_float(request.query_params.get("near_lng"))
+    near_radius_m = parse_float(request.query_params.get("near_radius_m"))
+    if near_lat is None or not (-90 <= near_lat <= 90):
+        return None, Response(
+            {"detail": "near_lat is required and must be a valid latitude"}, status=status.HTTP_400_BAD_REQUEST
+        )
+    if near_lng is None or not (-180 <= near_lng <= 180):
+        return None, Response(
+            {"detail": "near_lng is required and must be a valid longitude"}, status=status.HTTP_400_BAD_REQUEST
+        )
+    if near_radius_m is None or near_radius_m <= 0:
+        return None, Response(
+            {"detail": "near_radius_m is required and must be a positive number"}, status=status.HTTP_400_BAD_REQUEST
+        )
+    return (near_lat, near_lng, near_radius_m), None
+
+
+@api_view(["GET"])
+@authentication_classes([SensorTokenAuthentication])
+@permission_classes([IsAuthenticated])
+def mission_wifi_observations(request):
+    """All recent observations of one SSID, restricted to those recorded near
+    the caller's current position — feeds the Android app's Mission view,
+    where a favorited SSID's estimated access-point position is drawn as a
+    gradient cone (see mission/Geo.kt on the Android side, itself a port of
+    frontend/src/geo.ts).
+
+    Sensor-token-only, not session auth — the mirror image of every other
+    read endpoint in this file (AccessPointViewSet's list/coverage/
+    wifi_observations are all session-only). This is a phone-triggered
+    machine read, not a PWA/human one, so it gets its own dedicated endpoint
+    rather than an auth change to AccessPointViewSet.
+
+    near_lat/near_lng/near_radius_m exist specifically so a "travel router" —
+    an SSID seen from many unrelated physical locations over time (a mobile
+    hotspot, a router that moved) — doesn't corrupt the estimate: only
+    observations near where the phone is standing right now are returned.
+    Unlike parse_area()'s tolerant silent-drop posture (fine for a map UI
+    hint), these three params are the entire reason this endpoint exists, so
+    a missing/malformed one is a 400, not a silently-unfiltered response.
+    """
+    ssid_exact = request.query_params.get("ssid_exact")
+    if not ssid_exact:
+        return Response({"detail": "ssid_exact is required"}, status=status.HTTP_400_BAD_REQUEST)
+    near, error = parse_required_near(request)
+    if error:
+        return error
+    near_lat, near_lng, near_radius_m = near
+
+    since, until = parse_window(request)
+    qs = (
+        WiFiObservation.objects.select_related("access_point", "scan_session")
+        .filter(access_point__ssid=ssid_exact)
+        .exclude(scan_session__latitude__isnull=True)
+        .exclude(scan_session__longitude__isnull=True)
+    )
+    if since:
+        qs = qs.filter(observed_at__gte=since)
+    if until:
+        qs = qs.filter(observed_at__lte=until)
+    session_limit = parse_session_limit(request)
+    if session_limit:
+        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+
+    # The near-radius filter MUST see every window-filtered observation
+    # before any cap is applied — iterate the full queryset first, the same
+    # iterate-before-deciding posture area_device_ids() already uses. Capping
+    # first (as coverage()'s capped_take() does, which doesn't need this
+    # distinction) could let a travel router's many far-away sightings
+    # exhaust the cap before a single legitimate nearby reading is ever
+    # considered, silently defeating the whole point of this endpoint.
+    near_points = []
+    for obs in qs.iterator():
+        lat, lng = obs.scan_session.latitude, obs.scan_session.longitude
+        if haversine_m(near_lat, near_lng, lat, lng) > near_radius_m:
+            continue
+        near_points.append(
+            {
+                "bssid": obs.access_point.bssid,
+                "lat": lat,
+                "lng": lng,
+                "weight": obs.rssi,
+                "observed_at": obs.observed_at,
+                "scan_session_id": obs.scan_session_id,
+                "accuracy_meters": obs.scan_session.location_accuracy_meters,
+            }
+        )
+
+    truncated = len(near_points) > MISSION_OBSERVATION_CAP
+    return Response(
+        {
+            "ssid": ssid_exact,
+            "points": near_points[:MISSION_OBSERVATION_CAP],
+            "truncated": truncated,
+            "observation_limit": MISSION_OBSERVATION_CAP,
+        }
+    )
+
+
+@api_view(["GET"])
+@authentication_classes([SensorTokenAuthentication])
+@permission_classes([IsAuthenticated])
+def mission_ble_observations(request):
+    """BLE equivalent of mission_wifi_observations — see that function's
+    docstring for the shared reasoning (sensor-token-only, near-radius
+    required and validated before any cap).
+
+    device_key_exact matches BLEDevice.device_key exactly (ble_mac, falling
+    back to stable_identifier when no MAC was ever captured — see that
+    model's docstring), the same identifier the Android app already has for
+    a device from its own scan results, so no key recomputation is needed
+    on either side of the wire.
+    """
+    device_key = request.query_params.get("device_key_exact")
+    if not device_key:
+        return Response({"detail": "device_key_exact is required"}, status=status.HTTP_400_BAD_REQUEST)
+    near, error = parse_required_near(request)
+    if error:
+        return error
+    near_lat, near_lng, near_radius_m = near
+
+    since, until = parse_window(request)
+    qs = (
+        BLEObservation.objects.select_related("scan_session")
+        .filter(ble_device_id=device_key)
+        .exclude(scan_session__latitude__isnull=True)
+        .exclude(scan_session__longitude__isnull=True)
+    )
+    if since:
+        qs = qs.filter(observed_at__gte=since)
+    if until:
+        qs = qs.filter(observed_at__lte=until)
+    session_limit = parse_session_limit(request)
+    if session_limit:
+        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+
+    near_points = []
+    for obs in qs.iterator():
+        lat, lng = obs.scan_session.latitude, obs.scan_session.longitude
+        if haversine_m(near_lat, near_lng, lat, lng) > near_radius_m:
+            continue
+        near_points.append(
+            {
+                "identifier": obs.ble_mac or obs.stable_identifier,
+                "lat": lat,
+                "lng": lng,
+                "weight": obs.rssi,
+                "observed_at": obs.observed_at,
+                "scan_session_id": obs.scan_session_id,
+                "accuracy_meters": obs.scan_session.location_accuracy_meters,
+            }
+        )
+
+    truncated = len(near_points) > MISSION_OBSERVATION_CAP
+    return Response(
+        {
+            "identifier": device_key,
+            "points": near_points[:MISSION_OBSERVATION_CAP],
+            "truncated": truncated,
+            "observation_limit": MISSION_OBSERVATION_CAP,
+        }
+    )
+
+
+@api_view(["GET"])
+@authentication_classes([SensorTokenAuthentication])
+@permission_classes([IsAuthenticated])
+def mission_cell_observations(request):
+    """Cellular equivalent of mission_wifi_observations — see that
+    function's docstring for the shared reasoning.
+
+    tower_key_exact matches CellTower.tower_key exactly (the same
+    "{mcc}-{mnc}-{tac_or_lac}-{cell_id}" composite the Android app already
+    builds for its own rows — see ScanDiff.cellKey on that side), so no key
+    recomputation is needed here either. Readings with no signal_dbm are
+    excluded outright (not just skipped in aggregation) — a reading with no
+    signal strength can't be weighted, and dropping it beats guessing a
+    value that would distort the estimate, same posture as
+    area_device_ids()'s own weight_field handling.
+    """
+    tower_key = request.query_params.get("tower_key_exact")
+    if not tower_key:
+        return Response({"detail": "tower_key_exact is required"}, status=status.HTTP_400_BAD_REQUEST)
+    near, error = parse_required_near(request)
+    if error:
+        return error
+    near_lat, near_lng, near_radius_m = near
+
+    since, until = parse_window(request)
+    qs = (
+        CellObservation.objects.select_related("scan_session")
+        .filter(cell_tower_id=tower_key)
+        .exclude(scan_session__latitude__isnull=True)
+        .exclude(scan_session__longitude__isnull=True)
+        .exclude(signal_dbm__isnull=True)
+    )
+    if since:
+        qs = qs.filter(observed_at__gte=since)
+    if until:
+        qs = qs.filter(observed_at__lte=until)
+    session_limit = parse_session_limit(request)
+    if session_limit:
+        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+
+    near_points = []
+    for obs in qs.iterator():
+        lat, lng = obs.scan_session.latitude, obs.scan_session.longitude
+        if haversine_m(near_lat, near_lng, lat, lng) > near_radius_m:
+            continue
+        near_points.append(
+            {
+                "lat": lat,
+                "lng": lng,
+                "weight": obs.signal_dbm,
+                "observed_at": obs.observed_at,
+                "scan_session_id": obs.scan_session_id,
+                "accuracy_meters": obs.scan_session.location_accuracy_meters,
+            }
+        )
+
+    truncated = len(near_points) > MISSION_OBSERVATION_CAP
+    return Response(
+        {
+            "tower_key": tower_key,
+            "points": near_points[:MISSION_OBSERVATION_CAP],
+            "truncated": truncated,
+            "observation_limit": MISSION_OBSERVATION_CAP,
+        }
+    )

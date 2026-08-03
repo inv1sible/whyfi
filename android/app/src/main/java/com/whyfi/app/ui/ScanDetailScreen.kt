@@ -13,11 +13,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.whyfi.app.data.FavoritesRepository
 import com.whyfi.app.scan.DeviceChange
 import com.whyfi.app.scan.DeviceRow
 import com.whyfi.app.scan.RadioKind
@@ -72,11 +76,19 @@ fun ScanDetailScreen(
     kind: RadioKind,
     onKindChange: (RadioKind) -> Unit,
     onBack: () -> Unit,
+    favoritesRepository: FavoritesRepository,
 ) {
     val rows = remember(kind, uiState.latestPass, uiState.previousPass) {
         ScanDiff.rowsFor(kind, uiState.latestPass, uiState.previousPass)
     }
     val summary = remember(rows) { ScanDiff.summarize(rows) }
+    // SATELLITE has no favorites (see FavoritesRepository) — an empty,
+    // static set here means the map below just never wires a toggle for it.
+    val favorites by if (kind == RadioKind.SATELLITE) {
+        remember { mutableStateOf(emptySet<String>()) }
+    } else {
+        favoritesRepository.favorites(kind).collectAsState()
+    }
 
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -128,14 +140,24 @@ fun ScanDetailScreen(
         } else {
             DataTable(
                 columns = columnsFor(kind),
-                rows = rows.map { it.toTableRow() },
+                rows = rows.map { row ->
+                    val id = row.favoriteId
+                    row.toTableRow(
+                        isFavorite = id != null && favorites.contains(id),
+                        onFavoriteToggle = if (id != null) {
+                            { favoritesRepository.toggleFavorite(kind, id) }
+                        } else {
+                            null
+                        },
+                    )
+                },
                 showBadgeColumn = summary.comparable,
             )
         }
     }
 }
 
-private fun DeviceRow.toTableRow(): DataTableRow = DataTableRow(
+private fun DeviceRow.toTableRow(isFavorite: Boolean, onFavoriteToggle: (() -> Unit)?): DataTableRow = DataTableRow(
     key = key,
     cells = columns,
     badge = when (change) {
@@ -144,6 +166,8 @@ private fun DeviceRow.toTableRow(): DataTableRow = DataTableRow(
         DeviceChange.PRESENT, DeviceChange.UNKNOWN -> null
     },
     dimmed = change == DeviceChange.GONE,
+    isFavorite = isFavorite,
+    onFavoriteToggle = onFavoriteToggle,
 )
 
 private fun summaryLine(total: Int, new: Int, gone: Int, comparable: Boolean): String {

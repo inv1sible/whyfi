@@ -956,3 +956,274 @@ class HaversineTests(TestCase):
         from .views import haversine_m
 
         self.assertEqual(haversine_m(48.1351, 11.582, 48.1351, 11.582), 0.0)
+
+
+class MissionWifiObservationsTests(TestCase):
+    """/api/v1/mission/wifi-observations/ — feeds the Android app's Mission
+    view. Sensor-token-only (the reverse of every other read endpoint in this
+    file, which are session-only), and its near_lat/near_lng/near_radius_m
+    filter is the whole reason it exists: a "travel router" SSID seen from
+    many unrelated physical locations must not corrupt the position estimate,
+    so only observations near the caller's current position come back."""
+
+    NEAR_LAT = 48.1351
+    NEAR_LNG = 11.582
+    # Roughly 60km away — comfortably outside any plausible near_radius_m,
+    # simulating a travel router's SSID seen from a different city.
+    FAR_LAT = 48.6
+    FAR_LNG = 11.582
+
+    def setUp(self):
+        self.sensor = Sensor.objects.create(name="Test Phone")
+        self.ingest = APIClient()
+        self.ingest.credentials(HTTP_AUTHORIZATION=f"Token {self.sensor.token}")
+        self._ingest_scan("scan-near-1", self.NEAR_LAT, self.NEAR_LNG, "aa:bb:cc:dd:ee:01")
+        self._ingest_scan("scan-far-1", self.FAR_LAT, self.FAR_LNG, "aa:bb:cc:dd:ee:02")
+
+        # Real session login, not force_authenticate() — force_authenticate()
+        # bypasses get_authenticators() entirely (it sets request.user
+        # directly), so it can't prove SessionAuthentication is actually
+        # rejected here. A real logged-in session is the only way to test
+        # that this sensor-token-only endpoint really excludes it.
+        get_user_model().objects.create_user(username="operator", password="test-pass-123")
+        self.session_client = APIClient()
+        self.session_client.login(username="operator", password="test-pass-123")
+
+    def _ingest_scan(self, client_scan_id, lat, lng, bssid, ssid="MyNetwork"):
+        return self.ingest.post(
+            "/api/v1/scan-sessions/",
+            {
+                "client_scan_id": client_scan_id,
+                "started_at": "2026-07-16T10:00:00Z",
+                "completed_at": "2026-07-16T10:00:03Z",
+                "latitude": lat,
+                "longitude": lng,
+                "wifi_observations": [
+                    {"bssid": bssid, "ssid": ssid, "rssi": -55,
+                     "frequency_mhz": 2437, "capabilities": "[RSN-PSK-CCMP][ESS]"},
+                ],
+            },
+            format="json",
+        )
+
+    def _get(self, client, **params):
+        query = {
+            "ssid_exact": "MyNetwork",
+            "near_lat": self.NEAR_LAT,
+            "near_lng": self.NEAR_LNG,
+            "near_radius_m": 500,
+            **params,
+        }
+        qs = "&".join(f"{key}={value}" for key, value in query.items() if value is not None)
+        return client.get(f"/api/v1/mission/wifi-observations/?{qs}")
+
+    def test_sensor_token_is_required_not_session(self):
+        # The reverse of ReadEndpointTests.test_scan_sessions_list_requires_login_not_sensor_token —
+        # this endpoint is machine-to-machine, a real logged-in session must
+        # NOT work here. 401 (not 403): SensorTokenAuthentication is
+        # TokenAuthentication-based, which sets a WWW-Authenticate header,
+        # unlike the SessionAuthentication-only endpoints elsewhere in this
+        # file that report anonymous/wrong-auth as 403 — see MEMORY.md.
+        response = self._get(self.session_client)
+        self.assertEqual(response.status_code, 401)
+
+    def test_sensor_token_succeeds(self):
+        response = self._get(self.ingest)
+        self.assertEqual(response.status_code, 200)
+
+    def test_anonymous_is_rejected(self):
+        response = self._get(APIClient())
+        self.assertIn(response.status_code, (401, 403))
+
+    def test_inactive_sensor_token_is_rejected(self):
+        self.sensor.is_active = False
+        self.sensor.save(update_fields=["is_active"])
+        response = self._get(self.ingest)
+        self.assertEqual(response.status_code, 401)
+
+    def test_missing_ssid_exact_is_400(self):
+        response = self._get(self.ingest, ssid_exact=None)
+        self.assertEqual(response.status_code, 400)
+
+    def test_missing_near_lat_is_400(self):
+        response = self._get(self.ingest, near_lat=None)
+        self.assertEqual(response.status_code, 400)
+
+    def test_missing_near_lng_is_400(self):
+        response = self._get(self.ingest, near_lng=None)
+        self.assertEqual(response.status_code, 400)
+
+    def test_malformed_near_radius_m_is_400(self):
+        response = self._get(self.ingest, near_radius_m="not-a-number")
+        self.assertEqual(response.status_code, 400)
+
+    def test_negative_near_radius_m_is_400(self):
+        response = self._get(self.ingest, near_radius_m=-5)
+        self.assertEqual(response.status_code, 400)
+
+    def test_near_observation_included_far_one_excluded(self):
+        body = self._get(self.ingest).json()
+        self.assertEqual(body["ssid"], "MyNetwork")
+        bssids = {p["bssid"] for p in body["points"]}
+        self.assertIn("aa:bb:cc:dd:ee:01", bssids)
+        self.assertNotIn("aa:bb:cc:dd:ee:02", bssids)
+
+    def test_truncation_flag_when_near_points_exceed_cap(self):
+        with mock.patch("scans.views.MISSION_OBSERVATION_CAP", 0):
+            body = self._get(self.ingest).json()
+        self.assertTrue(body["truncated"])
+        self.assertEqual(body["points"], [])
+        self.assertEqual(body["observation_limit"], 0)
+
+    def test_cap_does_not_exclude_near_points_via_far_ones(self):
+        # The core correctness regression: many far-away observations must
+        # not be capped-away before the near filter even runs, which would
+        # let them silently starve the near ones out of a low cap.
+        for i in range(5):
+            self._ingest_scan(f"scan-far-extra-{i}", self.FAR_LAT, self.FAR_LNG, f"aa:bb:cc:dd:ff:{i:02x}")
+
+        with mock.patch("scans.views.MISSION_OBSERVATION_CAP", 1):
+            body = self._get(self.ingest).json()
+        self.assertEqual(len(body["points"]), 1)
+        self.assertEqual(body["points"][0]["bssid"], "aa:bb:cc:dd:ee:01")
+
+    def test_since_narrows_results(self):
+        response = self._get(self.ingest, since="2030-01-01T00:00:00Z")
+        body = response.json()
+        self.assertEqual(body["points"], [])
+
+
+class MissionBleObservationsTests(TestCase):
+    """/api/v1/mission/ble-observations/ — BLE sibling of
+    MissionWifiObservationsTests; see that class for the full reasoning.
+    Abbreviated here since parse_required_near() is already exercised there;
+    this focuses on what's specific to this endpoint."""
+
+    NEAR_LAT = 48.1351
+    NEAR_LNG = 11.582
+    FAR_LAT = 48.6
+    FAR_LNG = 11.582
+    DEVICE_KEY = "11:22:33:44:55:66"
+
+    def setUp(self):
+        self.sensor = Sensor.objects.create(name="Test Phone")
+        self.ingest = APIClient()
+        self.ingest.credentials(HTTP_AUTHORIZATION=f"Token {self.sensor.token}")
+        self._ingest_scan("scan-ble-near", self.NEAR_LAT, self.NEAR_LNG)
+        self._ingest_scan("scan-ble-far", self.FAR_LAT, self.FAR_LNG)
+        get_user_model().objects.create_user(username="operator", password="test-pass-123")
+        self.session_client = APIClient()
+        self.session_client.login(username="operator", password="test-pass-123")
+
+    def _ingest_scan(self, client_scan_id, lat, lng):
+        return self.ingest.post(
+            "/api/v1/scan-sessions/",
+            {
+                "client_scan_id": client_scan_id,
+                "started_at": "2026-07-16T10:00:00Z",
+                "completed_at": "2026-07-16T10:00:03Z",
+                "latitude": lat,
+                "longitude": lng,
+                "ble_observations": [
+                    {"ble_mac": self.DEVICE_KEY, "rssi": -60, "device_name": "Test Beacon"},
+                ],
+            },
+            format="json",
+        )
+
+    def _get(self, client, **params):
+        query = {
+            "device_key_exact": self.DEVICE_KEY,
+            "near_lat": self.NEAR_LAT,
+            "near_lng": self.NEAR_LNG,
+            "near_radius_m": 500,
+            **params,
+        }
+        qs = "&".join(f"{key}={value}" for key, value in query.items() if value is not None)
+        return client.get(f"/api/v1/mission/ble-observations/?{qs}")
+
+    def test_sensor_token_required_not_session(self):
+        self.assertEqual(self._get(self.session_client).status_code, 401)
+
+    def test_missing_device_key_exact_is_400(self):
+        self.assertEqual(self._get(self.ingest, device_key_exact=None).status_code, 400)
+
+    def test_near_observation_included_far_one_excluded(self):
+        body = self._get(self.ingest).json()
+        self.assertEqual(body["identifier"], self.DEVICE_KEY)
+        self.assertEqual(len(body["points"]), 1)
+        self.assertAlmostEqual(body["points"][0]["lat"], self.NEAR_LAT)
+
+    def test_truncation_flag_when_near_points_exceed_cap(self):
+        with mock.patch("scans.views.MISSION_OBSERVATION_CAP", 0):
+            body = self._get(self.ingest).json()
+        self.assertTrue(body["truncated"])
+        self.assertEqual(body["points"], [])
+
+
+class MissionCellObservationsTests(TestCase):
+    """/api/v1/mission/cell-observations/ — cellular sibling of
+    MissionWifiObservationsTests; see that class for the full reasoning."""
+
+    NEAR_LAT = 48.1351
+    NEAR_LNG = 11.582
+    FAR_LAT = 48.6
+    FAR_LNG = 11.582
+    TOWER_KEY = "262-01-678-12345"
+
+    def setUp(self):
+        self.sensor = Sensor.objects.create(name="Test Phone")
+        self.ingest = APIClient()
+        self.ingest.credentials(HTTP_AUTHORIZATION=f"Token {self.sensor.token}")
+        self._ingest_scan("scan-cell-near", self.NEAR_LAT, self.NEAR_LNG)
+        self._ingest_scan("scan-cell-far", self.FAR_LAT, self.FAR_LNG)
+        get_user_model().objects.create_user(username="operator", password="test-pass-123")
+        self.session_client = APIClient()
+        self.session_client.login(username="operator", password="test-pass-123")
+
+    def _ingest_scan(self, client_scan_id, lat, lng):
+        return self.ingest.post(
+            "/api/v1/scan-sessions/",
+            {
+                "client_scan_id": client_scan_id,
+                "started_at": "2026-07-16T10:00:00Z",
+                "completed_at": "2026-07-16T10:00:03Z",
+                "latitude": lat,
+                "longitude": lng,
+                "cell_observations": [
+                    {"mcc": "262", "mnc": "01", "radio_type": "LTE", "is_serving_cell": True,
+                     "cell_id": "12345", "tac_or_lac": "678", "signal_dbm": -85},
+                ],
+            },
+            format="json",
+        )
+
+    def _get(self, client, **params):
+        query = {
+            "tower_key_exact": self.TOWER_KEY,
+            "near_lat": self.NEAR_LAT,
+            "near_lng": self.NEAR_LNG,
+            "near_radius_m": 500,
+            **params,
+        }
+        qs = "&".join(f"{key}={value}" for key, value in query.items() if value is not None)
+        return client.get(f"/api/v1/mission/cell-observations/?{qs}")
+
+    def test_sensor_token_required_not_session(self):
+        self.assertEqual(self._get(self.session_client).status_code, 401)
+
+    def test_missing_tower_key_exact_is_400(self):
+        self.assertEqual(self._get(self.ingest, tower_key_exact=None).status_code, 400)
+
+    def test_near_observation_included_far_one_excluded(self):
+        body = self._get(self.ingest).json()
+        self.assertEqual(body["tower_key"], self.TOWER_KEY)
+        self.assertEqual(len(body["points"]), 1)
+        self.assertAlmostEqual(body["points"][0]["lat"], self.NEAR_LAT)
+        self.assertEqual(body["points"][0]["weight"], -85)
+
+    def test_truncation_flag_when_near_points_exceed_cap(self):
+        with mock.patch("scans.views.MISSION_OBSERVATION_CAP", 0):
+            body = self._get(self.ingest).json()
+        self.assertTrue(body["truncated"])
+        self.assertEqual(body["points"], [])

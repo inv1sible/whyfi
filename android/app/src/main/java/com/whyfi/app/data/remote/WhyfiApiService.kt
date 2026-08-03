@@ -4,8 +4,10 @@ import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
+import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
+import retrofit2.http.Query
 
 interface WhyfiApiService {
     @POST("scan-sessions/")
@@ -34,6 +36,35 @@ interface WhyfiApiService {
         @Header("Authorization") authorization: String,
         @Body report: CrashReportRequest,
     ): Response<CrashReportResponse>
+
+    /** Feeds the Mission view — see mission/MissionController.kt. The first
+     * GET this service has ever needed; every call above is a POST. */
+    @GET("mission/wifi-observations/")
+    suspend fun missionWifiObservations(
+        @Header("Authorization") authorization: String,
+        @Query("ssid_exact") ssidExact: String,
+        @Query("near_lat") nearLat: Double,
+        @Query("near_lng") nearLng: Double,
+        @Query("near_radius_m") nearRadiusM: Double,
+    ): Response<MissionWifiObservationsResponse>
+
+    @GET("mission/ble-observations/")
+    suspend fun missionBleObservations(
+        @Header("Authorization") authorization: String,
+        @Query("device_key_exact") deviceKeyExact: String,
+        @Query("near_lat") nearLat: Double,
+        @Query("near_lng") nearLng: Double,
+        @Query("near_radius_m") nearRadiusM: Double,
+    ): Response<MissionBleObservationsResponse>
+
+    @GET("mission/cell-observations/")
+    suspend fun missionCellObservations(
+        @Header("Authorization") authorization: String,
+        @Query("tower_key_exact") towerKeyExact: String,
+        @Query("near_lat") nearLat: Double,
+        @Query("near_lng") nearLng: Double,
+        @Query("near_radius_m") nearRadiusM: Double,
+    ): Response<MissionCellObservationsResponse>
 }
 
 object ApiClientFactory {

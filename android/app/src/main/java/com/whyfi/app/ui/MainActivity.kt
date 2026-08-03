@@ -19,18 +19,29 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.sp
+import com.whyfi.app.data.FavoritesRepository
 import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.ThemePreference
+import com.whyfi.app.mission.MissionController
+import com.whyfi.app.mission.MissionScreen
 import com.whyfi.app.scan.RadioKind
 import com.whyfi.app.ui.theme.WhyfiTheme
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var settingsRepository: SettingsRepository
+    private lateinit var favoritesRepository: FavoritesRepository
+    private lateinit var missionController: MissionController
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settingsRepository = SettingsRepository(applicationContext)
+        favoritesRepository = FavoritesRepository(applicationContext)
+        // Constructed here, not per-screen, so a tracking session (see
+        // MissionController.start) survives navigating back to Dashboard/
+        // Scan — those screens' stat chip reads its uiState too, for the
+        // live indicator dot.
+        missionController = MissionController(applicationContext, settingsRepository)
 
         setContent {
             var themePreference by remember { mutableStateOf(settingsRepository.themePreference) }
@@ -39,6 +50,8 @@ class MainActivity : ComponentActivity() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     WhyfiApp(
                         settingsRepository = settingsRepository,
+                        favoritesRepository = favoritesRepository,
+                        missionController = missionController,
                         themePreference = themePreference,
                         onThemePreferenceChange = {
                             settingsRepository.themePreference = it
@@ -62,6 +75,8 @@ private const val SETTINGS_ICON = "⚙️"
 @Composable
 private fun WhyfiApp(
     settingsRepository: SettingsRepository,
+    favoritesRepository: FavoritesRepository,
+    missionController: MissionController,
     themePreference: ThemePreference,
     onThemePreferenceChange: (ThemePreference) -> Unit,
 ) {
@@ -69,6 +84,7 @@ private fun WhyfiApp(
     // out of a results table back to the Scan tab.
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var detailRadio by rememberSaveable { mutableStateOf<String?>(null) }
+    var showMission by rememberSaveable { mutableStateOf(false) }
 
     // Bound once here for the life of the app rather than per screen — see
     // rememberScanService's KDoc for why that matters.
@@ -82,6 +98,11 @@ private fun WhyfiApp(
     // close it — without this it would leave the app instead, which reads as
     // a crash.
     BackHandler(enabled = detailRadio != null) { detailRadio = null }
+    // A separate, parallel drill-down, not nested inside the one above —
+    // the two are never open at once (the Mission chip only ever sets
+    // showMission, never alongside detailRadio), so either BackHandler
+    // closing its own screen is sufficient.
+    BackHandler(enabled = showMission) { showMission = false }
 
     val activeDetail = detailRadio?.let { name -> RadioKind.entries.firstOrNull { it.name == name } }
     if (activeDetail != null) {
@@ -90,6 +111,17 @@ private fun WhyfiApp(
             kind = activeDetail,
             onKindChange = { detailRadio = it.name },
             onBack = { detailRadio = null },
+            favoritesRepository = favoritesRepository,
+        )
+        return
+    }
+
+    if (showMission) {
+        MissionScreen(
+            favoritesRepository = favoritesRepository,
+            missionController = missionController,
+            service = service,
+            onBack = { showMission = false },
         )
         return
     }
@@ -102,9 +134,16 @@ private fun WhyfiApp(
             WhyfiTab(SETTINGS_ICON, "Settings", 3, selectedTab) { selectedTab = 3 }
         }
 
+        val openMission: () -> Unit = { showMission = true }
         when (selectedTab) {
-            0 -> DashboardScreen(service = service, uiState = uiState, onOpenDetail = openDetail)
-            1 -> ScanScreen(service = service, uiState = uiState, onOpenDetail = openDetail)
+            0 -> DashboardScreen(
+                service = service, uiState = uiState, onOpenDetail = openDetail,
+                onOpenMission = openMission, missionController = missionController,
+            )
+            1 -> ScanScreen(
+                service = service, uiState = uiState, onOpenDetail = openDetail,
+                onOpenMission = openMission, missionController = missionController,
+            )
             2 -> LanScreen(service = service, uiState = uiState)
             3 -> SettingsScreen(
                 settingsRepository = settingsRepository,

@@ -15,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -24,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.whyfi.app.mission.MissionController
 import com.whyfi.app.permissions.PermissionHelper
 import com.whyfi.app.scan.RadioKind
 import com.whyfi.app.scan.ScanForegroundService
@@ -61,7 +63,9 @@ private fun phaseLabel(phase: ScanPhase?): String = when (phase) {
 fun ScanScreen(
     service: ScanForegroundService?,
     uiState: ScanUiState,
+    missionController: MissionController,
     onOpenDetail: (RadioKind) -> Unit = {},
+    onOpenMission: () -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -116,47 +120,53 @@ fun ScanScreen(
     ) {
         Text("whyfi scanner", style = MaterialTheme.typography.headlineSmall)
 
-        // Results stay pinned here, above the controls, so they don't
-        // scroll out of view or get replaced by the options/buttons below.
-        if (uiState.isScanning || uiState.isContinuous) {
+        // One row, always — not three separate fragments that only
+        // sometimes render. Before any scan it shows zeros/dashes and
+        // untappable chips; mid-scan it shows live counts with a spinner on
+        // whichever phase is running; afterwards it's tappable through to
+        // each radio's detail table. Mission sits at the very right of the
+        // same row as the radio chips, matching Dashboard's layout, and is
+        // always tappable regardless of scan state — it talks to the
+        // backend directly, not to a local pass. Its own spinner doubles as
+        // a live "still tracking" indicator even while you're on this tab
+        // instead of Mission itself.
+        val missionState by missionController.uiState.collectAsState()
+        val scanning = uiState.isScanning || uiState.isContinuous
+        // Only tappable once a pass has actually been retained and nothing's
+        // actively running — the detail screen reads uiState.latestPass, so
+        // without one there'd be nothing behind the tap.
+        val openable = !scanning && uiState.latestPass != null
+
+        if (scanning) {
             Text(phaseLabel(uiState.currentPhase))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                RadioStatChip("📶", "WiFi", uiState.wifiCount, uiState.currentPhase == ScanPhase.WIFI, Color(0xFF2DD4BF))
-                RadioStatChip("📡", "Cellular", uiState.cellularCount, uiState.currentPhase == ScanPhase.CELLULAR, Color(0xFF60A5FA))
-                RadioStatChip("🔵", "BLE", uiState.bleCount, uiState.currentPhase == ScanPhase.BLE, Color(0xFFA78BFA))
-                RadioStatChip("🛰️", "Satellites", uiState.satelliteCount, uiState.currentPhase == ScanPhase.GNSS, Color(0xFFFBBF24))
-            }
         } else if (uiState.completedScanCount > 0) {
             Text("Last scan:")
-            // Only tappable once a pass has actually been retained — the
-            // detail screen reads uiState.latestPass, so without one there'd
-            // be nothing behind the tap.
-            val openable = uiState.latestPass != null
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                RadioStatChip(
-                    "📶", "WiFi", uiState.wifiCount, false, Color(0xFF2DD4BF),
-                    onClick = if (openable) ({ onOpenDetail(RadioKind.WIFI) }) else null,
-                )
-                RadioStatChip(
-                    "📡", "Cellular", uiState.cellularCount, false, Color(0xFF60A5FA),
-                    onClick = if (openable) ({ onOpenDetail(RadioKind.CELLULAR) }) else null,
-                )
-                RadioStatChip(
-                    "🔵", "BLE", uiState.bleCount, false, Color(0xFFA78BFA),
-                    onClick = if (openable) ({ onOpenDetail(RadioKind.BLE) }) else null,
-                )
-                RadioStatChip(
-                    "🛰️", "Satellites", uiState.satelliteCount, false, Color(0xFFFBBF24),
-                    onClick = if (openable) ({ onOpenDetail(RadioKind.SATELLITE) }) else null,
-                )
-            }
-            if (openable) {
-                Text(
-                    "Tap a radio to see what it found.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            RadioStatChip(
+                "📶", "WiFi", uiState.wifiCount, scanning && uiState.currentPhase == ScanPhase.WIFI, Color(0xFF2DD4BF),
+                onClick = if (openable) ({ onOpenDetail(RadioKind.WIFI) }) else null,
+            )
+            RadioStatChip(
+                "📡", "Cellular", uiState.cellularCount, scanning && uiState.currentPhase == ScanPhase.CELLULAR, Color(0xFF60A5FA),
+                onClick = if (openable) ({ onOpenDetail(RadioKind.CELLULAR) }) else null,
+            )
+            RadioStatChip(
+                "🔵", "BLE", uiState.bleCount, scanning && uiState.currentPhase == ScanPhase.BLE, Color(0xFFA78BFA),
+                onClick = if (openable) ({ onOpenDetail(RadioKind.BLE) }) else null,
+            )
+            RadioStatChip(
+                "🛰️", "GPS", uiState.satelliteCount, scanning && uiState.currentPhase == ScanPhase.GNSS, Color(0xFFFBBF24),
+                onClick = if (openable) ({ onOpenDetail(RadioKind.SATELLITE) }) else null,
+            )
+            RadioStatChip("🎯", "Mission", null, missionState.isTracking, Color(0xFFF472B6), onClick = onOpenMission)
+        }
+        if (openable) {
+            Text(
+                "Tap a radio to see what it found.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         if (!permissionsGranted) {

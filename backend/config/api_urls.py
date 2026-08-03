@@ -16,6 +16,9 @@ from scans.views import (
     channel_congestion,
     health,
     heatmap,
+    mission_ble_observations,
+    mission_cell_observations,
+    mission_wifi_observations,
 )
 from sensors.views import CrashReportViewSet, SensorViewSet, sensor_heartbeat
 
@@ -39,6 +42,9 @@ urlpatterns = [
     path("auth/session/", session_view),
     path("channel-congestion/", channel_congestion),
     path("heatmap/", heatmap),
+    path("mission/wifi-observations/", mission_wifi_observations),
+    path("mission/ble-observations/", mission_ble_observations),
+    path("mission/cell-observations/", mission_cell_observations),
     path("app/latest/", latest_release),
     path("android-build/trigger/", trigger_build_view),
     path("android-build/status/", build_status_view),
