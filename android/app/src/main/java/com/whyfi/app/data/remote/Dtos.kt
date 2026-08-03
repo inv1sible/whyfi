@@ -99,6 +99,21 @@ data class ScanSessionResponse(
     @SerializedName("id") val id: String,
 )
 
+/** Mirrors backend/sensors/serializers.py's CrashReportIngestSerializer. Sent
+ * from ui/SettingsScreen.kt's Diagnostics section — a manual, one-off action,
+ * not part of the continuous scan-upload pipeline. */
+data class CrashReportRequest(
+    @SerializedName("occurred_at") val occurredAt: String,
+    @SerializedName("app_version") val appVersion: String = "",
+    @SerializedName("device_model") val deviceModel: String = "",
+    @SerializedName("os_version") val osVersion: String = "",
+    @SerializedName("stack_trace") val stackTrace: String,
+)
+
+data class CrashReportResponse(
+    @SerializedName("id") val id: String,
+)
+
 /**
  * What this device tells the backend it's actually doing, once per
  * heartbeat. Everything here is observed state — the backend refuses to let

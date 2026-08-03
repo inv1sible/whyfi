@@ -9,12 +9,13 @@ interface RevealedToken {
   token: string;
 }
 
-/** Set once a delete attempt comes back 409 (this sensor has scan
- * sessions) — replaces the plain confirm/cancel step with a real choice
- * instead of a dead-end error message. */
+/** Set once a delete attempt comes back 409 (this sensor has scan sessions
+ * or crash reports) — replaces the plain confirm/cancel step with a real
+ * choice instead of a dead-end error message. */
 interface DeleteConflict {
   sensorId: string;
   scanSessionCount: number;
+  crashReportCount: number;
 }
 
 function describeError(err: unknown): string {
@@ -150,8 +151,12 @@ export function SensorsTab() {
       loadSensors();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && err.body && typeof err.body === "object") {
-        const count = (err.body as { scan_session_count?: number }).scan_session_count ?? 0;
-        setDeleteConflict({ sensorId: sensor.id, scanSessionCount: count });
+        const body = err.body as { scan_session_count?: number; crash_report_count?: number };
+        setDeleteConflict({
+          sensorId: sensor.id,
+          scanSessionCount: body.scan_session_count ?? 0,
+          crashReportCount: body.crash_report_count ?? 0,
+        });
       } else {
         setError(`Could not delete "${sensor.name}" — ${describeError(err)}`);
       }
@@ -166,12 +171,16 @@ export function SensorsTab() {
     const busy = busyId === sensor.id;
 
     if (deleteConflict?.sensorId === sensor.id) {
-      const count = deleteConflict.scanSessionCount;
+      const { scanSessionCount, crashReportCount } = deleteConflict;
+      const parts = [
+        scanSessionCount > 0 && `${scanSessionCount} scan session${scanSessionCount === 1 ? "" : "s"}`,
+        crashReportCount > 0 && `${crashReportCount} crash report${crashReportCount === 1 ? "" : "s"}`,
+      ].filter(Boolean);
       return (
         <div className="sensor-actions">
           <p className="page-hint">
-            "{sensor.name}" has {count} scan session{count === 1 ? "" : "s"}. Delete the sensor and that data
-            together, or delete the sensor but keep the data (its scans stay, just without a device attached)?
+            "{sensor.name}" has {parts.join(" and ")}. Delete the sensor and that data together, or delete the
+            sensor but keep the data (it stays, just without a device attached)?
           </p>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
             <button

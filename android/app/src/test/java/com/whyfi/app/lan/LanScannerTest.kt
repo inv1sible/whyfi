@@ -3,6 +3,7 @@ package com.whyfi.app.lan
 import java.net.Inet4Address
 import java.net.InetAddress
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -88,13 +89,19 @@ class LanScannerTest {
     }
 
     @Test
-    fun `an oversized subnet is refused with its size named`() {
-        val reason = LanScanner.skipReason(
-            up = true, loopback = false, kind = "WiFi",
-            address = v4("10.0.0.5"), prefixLength = 16,
+    fun `an oversized subnet is usable but flagged truncated, not refused`() {
+        // Changed from an outright refusal: a big office network is still a
+        // real LAN worth partial results from, so this is now just capped
+        // (see NetworkCandidate.truncated / resolveSubnet's hostCount), not
+        // rejected — skipReason must stay null for it.
+        assertNull(
+            LanScanner.skipReason(
+                up = true, loopback = false, kind = "WiFi",
+                address = v4("10.0.0.5"), prefixLength = 16,
+            ),
         )
-        assertTrue(reason!!, reason.contains("65534"))
-        assertTrue(reason, reason.contains("${LanScanner.MAX_HOSTS_TO_SCAN}"))
+        assertTrue(LanScanner.isTruncated(16))
+        assertFalse(LanScanner.isTruncated(24))
     }
 
     @Test

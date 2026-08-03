@@ -1,12 +1,15 @@
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import action, api_view, authentication_classes, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .authentication import SensorTokenAuthentication
-from .models import Sensor, SensorScanPolicy, generate_sensor_token
+from .models import CrashReport, Sensor, SensorScanPolicy, generate_sensor_token
 from .serializers import (
+    CrashReportIngestSerializer,
+    CrashReportSerializer,
     SensorHeartbeatSerializer,
     SensorScanPolicySerializer,
     SensorScanPolicyUpdateSerializer,
@@ -89,29 +92,36 @@ class SensorViewSet(
         payload (ErrorDetail wraps everything, ints included) — a plain
         Response here just returns the number as a number.
 
-        Deleting a sensor that has ever uploaded anything is ambiguous on
-        its own — does "delete this device" mean its scan history too, or
-        not? Bare DELETE stays guarded (409) so that's never assumed; the
-        caller has to say which via `on_conflict`:
+        Deleting a sensor that has ever uploaded anything (scan sessions,
+        crash reports) is ambiguous on its own — does "delete this device"
+        mean its history too, or not? Bare DELETE stays guarded (409) so
+        that's never assumed; the caller has to say which via `on_conflict`:
           - "delete_data": cascades — every scan session (and so every
-            WiFi/cellular/BLE/satellite/LAN observation) this sensor ever
-            contributed is deleted along with it.
-          - "keep_data": the sensor row is deleted, but its scan sessions
-            aren't touched. ScanSession.sensor is on_delete=SET_NULL (not
-            CASCADE) specifically so this is enforced at the DB level, not
-            just an application-layer promise — deleting the sensor here
-            just detaches its history, which then shows up with no sensor
-            name attached rather than disappearing.
+            WiFi/cellular/BLE/satellite/LAN observation) and every crash
+            report this sensor ever contributed is deleted along with it.
+          - "keep_data": the sensor row is deleted, but neither its scan
+            sessions nor its crash reports are touched. Both FKs are
+            on_delete=SET_NULL (not CASCADE) specifically so this is
+            enforced at the DB level, not just an application-layer
+            promise — deleting the sensor here just detaches its history,
+            which then shows up with no sensor name attached rather than
+            disappearing.
         """
         instance = self.get_object()
         scan_count = instance.scan_sessions.count()
-        if scan_count > 0:
+        crash_count = instance.crash_reports.count()
+        if scan_count > 0 or crash_count > 0:
             on_conflict = request.data.get("on_conflict")
             if on_conflict == "delete_data":
                 instance.scan_sessions.all().delete()
+                instance.crash_reports.all().delete()
             elif on_conflict != "keep_data":
                 return Response(
-                    {"detail": "This sensor has scan sessions.", "scan_session_count": scan_count},
+                    {
+                        "detail": "This sensor has scan sessions or crash reports.",
+                        "scan_session_count": scan_count,
+                        "crash_report_count": crash_count,
+                    },
                     status=status.HTTP_409_CONFLICT,
                 )
         instance.delete()
@@ -159,6 +169,66 @@ class SensorViewSet(
         policy.reset_counters_nonce += 1
         policy.save(update_fields=["reset_counters_nonce", "updated_at"])
         return Response(SensorScanPolicySerializer(policy).data)
+
+
+class CrashReportViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Create is machine-to-machine (the app's Settings > Diagnostics "Send
+    to server" button, authenticated with the same per-device sensor token
+    used for scan-session ingest); list/retrieve/destroy are human PWA
+    actions using the admin session. Mirrors ScanSessionViewSet's auth split
+    exactly, including the initialize_request/get_authenticators trick —
+    self.action isn't set yet when get_authenticators() runs, but
+    self.action_map already has the HTTP-method-to-action mapping DRF
+    resolved from the URL, which is what that trick relies on."""
+
+    serializer_class = CrashReportSerializer
+
+    def get_queryset(self):
+        # apply_search lives in scans.views — imported here rather than at
+        # module level to avoid sensors/scans forming an import cycle at
+        # load time (scans.views already imports sensors.authentication).
+        from scans.views import apply_search
+
+        qs = CrashReport.objects.select_related("sensor").all()
+        return apply_search(
+            qs,
+            self.request,
+            {
+                "device_model": "device_model",
+                "os_version": "os_version",
+                "app_version": "app_version",
+                "sensor_name": "sensor__name",
+            },
+        )
+
+    def initialize_request(self, request, *args, **kwargs):
+        self._resolved_action = self.action_map.get(request.method.lower())
+        return super().initialize_request(request, *args, **kwargs)
+
+    def get_authenticators(self):
+        if getattr(self, "_resolved_action", None) == "create":
+            return [SensorTokenAuthentication()]
+        return [SessionAuthentication()]
+
+    def get_permissions(self):
+        return [IsAuthenticated()]
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return CrashReportIngestSerializer
+        return CrashReportSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = CrashReportIngestSerializer(data=request.data, context={"sensor": request.user})
+        serializer.is_valid(raise_exception=True)
+        report = serializer.save()
+        return Response(CrashReportSerializer(report).data, status=status.HTTP_201_CREATED)
 
 
 @api_view(["POST"])

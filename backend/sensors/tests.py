@@ -150,7 +150,65 @@ class SensorDeactivateAndDeleteTests(TestCase):
         response = self.client.delete(f"/api/v1/sensors/{sensor.id}/")
         self.assertEqual(response.status_code, 409, response.content)
         self.assertEqual(response.json()["scan_session_count"], 1)
+        self.assertEqual(response.json()["crash_report_count"], 0)
         self.assertTrue(Sensor.objects.filter(id=sensor.id).exists())
+
+    def test_delete_a_sensor_with_only_crash_reports_is_blocked(self):
+        sensor = Sensor.objects.create(name="Crashes A Lot")
+        ingest = APIClient()
+        ingest.credentials(HTTP_AUTHORIZATION=f"Token {sensor.token}")
+        ingest.post(
+            "/api/v1/crash-reports/",
+            {"occurred_at": "2026-07-16T10:00:00Z", "stack_trace": "java.lang.IllegalStateException: boom"},
+            format="json",
+        )
+
+        response = self.client.delete(f"/api/v1/sensors/{sensor.id}/")
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(response.json()["scan_session_count"], 0)
+        self.assertEqual(response.json()["crash_report_count"], 1)
+        self.assertTrue(Sensor.objects.filter(id=sensor.id).exists())
+
+    def test_delete_with_delete_data_cascades_crash_reports(self):
+        from sensors.models import CrashReport
+
+        sensor = Sensor.objects.create(name="Crashes A Lot")
+        ingest = APIClient()
+        ingest.credentials(HTTP_AUTHORIZATION=f"Token {sensor.token}")
+        ingest.post(
+            "/api/v1/crash-reports/",
+            {"occurred_at": "2026-07-16T10:00:00Z", "stack_trace": "boom"},
+            format="json",
+        )
+
+        response = self.client.delete(
+            f"/api/v1/sensors/{sensor.id}/", data={"on_conflict": "delete_data"}, format="json"
+        )
+        self.assertEqual(response.status_code, 204, response.content)
+        self.assertEqual(CrashReport.objects.count(), 0)
+
+    def test_delete_with_keep_data_detaches_crash_reports(self):
+        from sensors.models import CrashReport
+
+        sensor = Sensor.objects.create(name="Crashes A Lot")
+        ingest = APIClient()
+        ingest.credentials(HTTP_AUTHORIZATION=f"Token {sensor.token}")
+        ingest.post(
+            "/api/v1/crash-reports/",
+            {"occurred_at": "2026-07-16T10:00:00Z", "stack_trace": "boom"},
+            format="json",
+        )
+
+        response = self.client.delete(
+            f"/api/v1/sensors/{sensor.id}/", data={"on_conflict": "keep_data"}, format="json"
+        )
+        self.assertEqual(response.status_code, 204, response.content)
+        report = CrashReport.objects.get()
+        self.assertIsNone(report.sensor)
+
+        list_response = self.client.get("/api/v1/crash-reports/")
+        self.assertEqual(list_response.status_code, 200)
+        self.assertIsNone(list_response.json()["results"][0]["sensor_name"])
 
     def test_delete_requires_auth(self):
         sensor = Sensor.objects.create(name="Phone")
@@ -245,6 +303,108 @@ class SensorDeactivateAndDeleteTests(TestCase):
         response = self.client.delete(f"/api/v1/sensors/{sensor.id}/")
         self.assertEqual(response.status_code, 409)
         self.assertTrue(Sensor.objects.filter(id=sensor.id).exists())
+
+
+class CrashReportTests(TestCase):
+    """Device-facing ingest (sensor token, mirrors ScanSessionIngestTests) vs
+    human list/retrieve/delete (admin session, mirrors ReadEndpointTests) —
+    see CrashReportViewSet."""
+
+    def setUp(self):
+        self.sensor = Sensor.objects.create(name="Test Phone")
+        self.ingest = APIClient()
+        self.ingest.credentials(HTTP_AUTHORIZATION=f"Token {self.sensor.token}")
+        self.user = get_user_model().objects.create_user(username="operator", password="test-pass-123")
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def _payload(self, **overrides):
+        payload = {
+            "occurred_at": "2026-08-02T09:28:55Z",
+            "app_version": "2026.08.02-1655",
+            "device_model": "Lenovo TB-X606F",
+            "os_version": "11",
+            "stack_trace": "java.lang.IllegalStateException: Telephony is null\n\tat ...",
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_ingest_requires_sensor_token(self):
+        response = APIClient().post("/api/v1/crash-reports/", self._payload(), format="json")
+        self.assertEqual(response.status_code, 401)
+
+    def test_ingest_creates_a_report_linked_to_the_sensor(self):
+        response = self.ingest.post("/api/v1/crash-reports/", self._payload(), format="json")
+        self.assertEqual(response.status_code, 201, response.content)
+        from sensors.models import CrashReport
+
+        report = CrashReport.objects.get()
+        self.assertEqual(report.sensor, self.sensor)
+        self.assertEqual(report.device_model, "Lenovo TB-X606F")
+        self.assertIn("Telephony is null", report.stack_trace)
+
+    def test_ingest_tolerates_missing_optional_fields(self):
+        # An older APK build might not send device_model/os_version/app_version —
+        # must not 400 on their absence (only stack_trace/occurred_at are required).
+        response = self.ingest.post(
+            "/api/v1/crash-reports/",
+            {"occurred_at": "2026-08-02T09:28:55Z", "stack_trace": "boom"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+
+    def test_ingest_rejects_invalid_token(self):
+        bad_client = APIClient()
+        bad_client.credentials(HTTP_AUTHORIZATION="Token not-a-real-token")
+        response = bad_client.post("/api/v1/crash-reports/", self._payload(), format="json")
+        self.assertEqual(response.status_code, 401)
+
+    def test_sensor_token_cannot_list_or_delete(self):
+        self.ingest.post("/api/v1/crash-reports/", self._payload(), format="json")
+        self.assertEqual(self.ingest.get("/api/v1/crash-reports/").status_code, 403)
+
+    def test_anonymous_list_is_rejected(self):
+        response = APIClient().get("/api/v1/crash-reports/")
+        self.assertEqual(response.status_code, 403)
+
+    def test_logged_in_list_sees_the_report(self):
+        self.ingest.post("/api/v1/crash-reports/", self._payload(), format="json")
+        response = self.client.get("/api/v1/crash-reports/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 1)
+        body = response.json()["results"][0]
+        self.assertEqual(body["sensor_name"], "Test Phone")
+        self.assertEqual(body["device_model"], "Lenovo TB-X606F")
+
+    def test_search_matches_device_model(self):
+        self.ingest.post("/api/v1/crash-reports/", self._payload(), format="json")
+        self.ingest.post(
+            "/api/v1/crash-reports/", self._payload(device_model="Pixel 8", stack_trace="other"), format="json"
+        )
+        response = self.client.get("/api/v1/crash-reports/?q=lenovo")
+        self.assertEqual(response.json()["count"], 1)
+
+    def test_operator_can_delete_a_report(self):
+        self.ingest.post("/api/v1/crash-reports/", self._payload(), format="json")
+        from sensors.models import CrashReport
+
+        report_id = CrashReport.objects.get().id
+        response = self.client.delete(f"/api/v1/crash-reports/{report_id}/")
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(CrashReport.objects.filter(id=report_id).exists())
+
+    def test_deleting_the_sensor_does_not_orphan_a_500(self):
+        # Belt-and-braces alongside SensorDeactivateAndDeleteTests' own
+        # coverage of this — confirms retrieving a single orphaned report
+        # (not just the list) survives a null sensor too.
+        self.ingest.post("/api/v1/crash-reports/", self._payload(), format="json")
+        from sensors.models import CrashReport
+
+        report = CrashReport.objects.get()
+        self.client.delete(f"/api/v1/sensors/{self.sensor.id}/", data={"on_conflict": "keep_data"}, format="json")
+        response = self.client.get(f"/api/v1/crash-reports/{report.id}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()["sensor_name"])
 
 
 class SensorCsrfProtectionTests(TestCase):

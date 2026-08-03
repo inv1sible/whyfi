@@ -1,6 +1,7 @@
 package com.whyfi.app.ui
 
 import android.content.Intent
+import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Arrangement
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -22,19 +24,26 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.whyfi.app.BuildConfig
 import com.whyfi.app.data.LocationSourcePreference
 import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.ThemePreference
+import com.whyfi.app.data.remote.ApiClientFactory
+import com.whyfi.app.data.remote.CrashReportRequest
+import com.whyfi.app.diagnostics.CrashLogReader
 import com.whyfi.app.permissions.PermissionHelper
 import com.whyfi.app.scan.ScanForegroundService
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import java.io.IOException
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 // Mirrors SETUP_QR_PREFIX in frontend/src/pages/settings/SensorsTab.tsx —
@@ -66,6 +75,7 @@ fun SettingsScreen(
     val outboxUsage = rememberOutboxUsage(quotaMb.toIntOrNull() ?: settingsRepository.outboxQuotaMb)
 
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     var remoteControlOn by remember { mutableStateOf(settingsRepository.remoteControlEnabled) }
     val permissionsGranted = PermissionHelper.hasAllRequiredPermissions(context)
@@ -292,6 +302,76 @@ fun SettingsScreen(
             },
         ) {
             Text("Save storage limit")
+        }
+
+        Text("Diagnostics", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "If whyfi crashes, the exception is written to this app's private storage before Android's normal " +
+                "crash handling takes over, so it can be read and sent from here afterward — no computer, adb, or " +
+                "root needed. Reviewed and acted on from the web UI's Crash Reports page.",
+        )
+
+        var crashLogVersion by remember { mutableStateOf(0) }
+        var crashLogMessage by remember { mutableStateOf<String?>(null) }
+        var sendingCrashLog by remember { mutableStateOf(false) }
+        val crashLogText = remember(crashLogVersion) { CrashLogReader.readCrashLog(context) }
+
+        if (crashLogText == null) {
+            Text("No crash recorded.", style = MaterialTheme.typography.bodyMedium)
+        } else {
+            SelectionContainer {
+                Text(crashLogText, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    enabled = !sendingCrashLog,
+                    onClick = {
+                        val parsed = CrashLogReader.parse(crashLogText)
+                        if (backendUrl.isBlank() || token.isBlank()) {
+                            crashLogMessage = "Configure a backend URL and sensor token above first."
+                        } else if (parsed == null) {
+                            crashLogMessage = "Could not parse the crash log."
+                        } else {
+                            sendingCrashLog = true
+                            crashLogMessage = null
+                            scope.launch {
+                                try {
+                                    val api = ApiClientFactory.create(backendUrl)
+                                    val response = api.uploadCrashReport(
+                                        "Token $token",
+                                        CrashReportRequest(
+                                            occurredAt = parsed.occurredAt,
+                                            appVersion = BuildConfig.VERSION_NAME,
+                                            deviceModel = Build.MODEL,
+                                            osVersion = Build.VERSION.RELEASE,
+                                            stackTrace = parsed.stackTrace,
+                                        ),
+                                    )
+                                    crashLogMessage = if (response.isSuccessful) {
+                                        "Sent — view it on the web UI's Crash Reports page."
+                                    } else {
+                                        "Send failed (HTTP ${response.code()})."
+                                    }
+                                } catch (e: IOException) {
+                                    crashLogMessage = "Could not reach the backend: ${e.message}"
+                                } finally {
+                                    sendingCrashLog = false
+                                }
+                            }
+                        }
+                    },
+                ) {
+                    Text(if (sendingCrashLog) "Sending…" else "Send to server")
+                }
+                TextButton(onClick = {
+                    CrashLogReader.clearCrashLog(context)
+                    crashLogVersion++
+                    crashLogMessage = "Crash log cleared."
+                }) {
+                    Text("Clear log")
+                }
+            }
+            crashLogMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         }
     }
 }

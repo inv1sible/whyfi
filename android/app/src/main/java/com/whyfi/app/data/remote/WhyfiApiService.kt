@@ -23,6 +23,17 @@ interface WhyfiApiService {
         @Header("Authorization") authorization: String,
         @Body report: SensorHeartbeatRequest,
     ): Response<ScanPolicyResponse>
+
+    /** Manual, one-off — see ui/SettingsScreen.kt's Diagnostics section.
+     * Deliberately not part of UploadWorker's durable outbox/retry pipeline:
+     * this is a rare, user-triggered action, and the source (the crash log
+     * file) isn't lost if the send fails, so there's nothing a retry queue
+     * would protect here that a "tap the button again" doesn't already. */
+    @POST("crash-reports/")
+    suspend fun uploadCrashReport(
+        @Header("Authorization") authorization: String,
+        @Body report: CrashReportRequest,
+    ): Response<CrashReportResponse>
 }
 
 object ApiClientFactory {

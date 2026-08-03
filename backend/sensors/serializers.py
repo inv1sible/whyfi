@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Sensor, SensorScanPolicy
+from .models import CrashReport, Sensor, SensorScanPolicy
 
 # Anything tighter than this trips Android's own WiFi scan throttle (4 scans
 # per 2 minutes), so the device would just sit in a back-off loop instead of
@@ -158,6 +158,39 @@ class SensorSerializer(serializers.ModelSerializer):
         if policy is None:
             policy = SensorScanPolicy(sensor=obj)
         return SensorScanPolicySerializer(policy).data
+
+
+class CrashReportIngestSerializer(serializers.Serializer):
+    """Device-facing write. Mirrors ScanSessionIngestSerializer's shape —
+    a plain Serializer (not ModelSerializer) since `sensor` comes from the
+    authenticated token via context, never from the request body."""
+
+    occurred_at = serializers.DateTimeField()
+    app_version = serializers.CharField(max_length=32, allow_blank=True, default="")
+    device_model = serializers.CharField(max_length=64, allow_blank=True, default="")
+    os_version = serializers.CharField(max_length=32, allow_blank=True, default="")
+    stack_trace = serializers.CharField()
+
+    def create(self, validated_data):
+        return CrashReport.objects.create(sensor=self.context["sensor"], **validated_data)
+
+
+class CrashReportSerializer(serializers.ModelSerializer):
+    # SerializerMethodField, not a plain source="sensor.name" CharField —
+    # same reasoning as ScanSessionSerializer.get_sensor_name: this must
+    # stay null-safe for a report whose sensor was deleted with
+    # on_conflict="keep_data".
+    sensor_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CrashReport
+        fields = [
+            "id", "sensor", "sensor_name", "occurred_at", "app_version",
+            "device_model", "os_version", "stack_trace", "created_at",
+        ]
+
+    def get_sensor_name(self, obj):
+        return obj.sensor.name if obj.sensor else None
 
 
 class SensorTokenRevealSerializer(serializers.ModelSerializer):

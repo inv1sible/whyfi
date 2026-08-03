@@ -93,6 +93,22 @@ export interface SensorWithToken extends Sensor {
   token: string;
 }
 
+/** Sent from the Android app's Settings > Diagnostics "Send to server"
+ * button — see WhyfiApplication.kt's crash logger. sensor/sensor_name are
+ * both null once the sensor that recorded this crash has been deleted with
+ * "keep data" (same reasoning as ScanSession). */
+export interface CrashReport {
+  id: string;
+  sensor: string | null;
+  sensor_name: string | null;
+  occurred_at: string;
+  app_version: string;
+  device_model: string;
+  os_version: string;
+  stack_trace: string;
+  created_at: string;
+}
+
 export interface AccessPoint {
   bssid: string;
   ssid: string;

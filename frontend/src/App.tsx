@@ -8,6 +8,7 @@ import { BLEDevicesPage } from "./pages/BLEDevicesPage";
 import { CellTowerDetailPage } from "./pages/CellTowerDetailPage";
 import { CellularPage } from "./pages/CellularPage";
 import { ChannelCongestionPage } from "./pages/ChannelCongestionPage";
+import { CrashReportsPage } from "./pages/CrashReportsPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DownloadPage } from "./pages/DownloadPage";
 import { HeatmapPage } from "./pages/HeatmapPage";
@@ -60,6 +61,7 @@ export function App() {
           <Route path="/download" element={<DownloadPage />} />
           <Route path="/remote" element={<RemoteScanPage />} />
           <Route path="/scans" element={<ManageScansPage />} />
+          <Route path="/crash-reports" element={<CrashReportsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </Layout>

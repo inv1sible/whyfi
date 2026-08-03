@@ -17,10 +17,11 @@ from scans.views import (
     health,
     heatmap,
 )
-from sensors.views import SensorViewSet, sensor_heartbeat
+from sensors.views import CrashReportViewSet, SensorViewSet, sensor_heartbeat
 
 router = DefaultRouter()
 router.register("sensors", SensorViewSet, basename="sensor")
+router.register("crash-reports", CrashReportViewSet, basename="crash-report")
 router.register("access-points", AccessPointViewSet, basename="access-point")
 router.register("scan-sessions", ScanSessionViewSet, basename="scan-session")
 router.register("cell-observations", CellObservationViewSet, basename="cell-observation")

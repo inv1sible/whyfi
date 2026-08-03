@@ -58,6 +58,38 @@ class Sensor(models.Model):
         return True
 
 
+class CrashReport(models.Model):
+    """An uncaught exception the Android app recorded and the operator chose
+    to send up (see ui/SettingsScreen.kt's Diagnostics section) — a
+    lightweight, self-hosted alternative to a third-party crash-reporting
+    SDK, matching this project's no-external-dependencies posture.
+
+    sensor is nullable/SET_NULL (not CASCADE), mirroring ScanSession's own
+    fix for the same reasoning: deleting a sensor with
+    on_conflict="keep_data" must not silently take its crash history with
+    it — the report is still useful for diagnosing a bug even once the
+    device that hit it is gone.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sensor = models.ForeignKey(Sensor, null=True, blank=True, on_delete=models.SET_NULL, related_name="crash_reports")
+    # The device's own clock at crash time — not when the backend received
+    # it (see created_at below for that). A device that crashed offline and
+    # sent this later would otherwise misreport when it actually happened.
+    occurred_at = models.DateTimeField()
+    app_version = models.CharField(max_length=32, blank=True)
+    device_model = models.CharField(max_length=64, blank=True)
+    os_version = models.CharField(max_length=32, blank=True)
+    stack_trace = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-occurred_at"]
+
+    def __str__(self):
+        return f"CrashReport {self.id} ({self.sensor.name if self.sensor else 'sensor deleted'})"
+
+
 class SensorScanPolicy(models.Model):
     """Remote scanning control for one device, as desired-state reconciliation
     rather than a command queue.

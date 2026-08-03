@@ -9,6 +9,7 @@ import type {
   CellObservation,
   CellTower,
   ChannelCongestionPoint,
+  CrashReport,
   HeatmapPoint,
   HeatmapSource,
   LANDevice,
@@ -264,6 +265,9 @@ export const api = {
     post<Sensor>(`/sensors/${id}/set-active/`, { is_active: isActive }),
   deleteSensor: (id: string, opts: { onConflict?: "delete_data" | "keep_data" } = {}) =>
     del<void>(`/sensors/${id}/`, opts.onConflict ? { on_conflict: opts.onConflict } : undefined),
+
+  crashReports: (query = "") => get<Paginated<CrashReport>>(`/crash-reports/${query}`),
+  deleteCrashReport: (id: string) => del<void>(`/crash-reports/${id}/`),
   setSensorScanPolicy: (id: string, patch: SensorScanPolicyUpdate) =>
     post<SensorScanPolicy>(`/sensors/${id}/scan-policy/`, patch),
   sensorScanNow: (id: string) => post<SensorScanPolicy>(`/sensors/${id}/scan-now/`),

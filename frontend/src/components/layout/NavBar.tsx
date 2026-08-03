@@ -13,6 +13,7 @@ const LINKS = [
   { to: "/download", label: "Download", icon: "download" as const },
   { to: "/remote", label: "Remote", icon: "remote" as const },
   { to: "/scans", label: "Manage Scans", icon: "scans" as const },
+  { to: "/crash-reports", label: "Crash Reports", icon: "crash" as const },
   { to: "/settings", label: "Settings", icon: "settings" as const },
 ];
 

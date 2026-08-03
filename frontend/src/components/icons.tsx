@@ -14,7 +14,8 @@ type IconName =
   | "download"
   | "scans"
   | "remote"
-  | "settings";
+  | "settings"
+  | "crash";
 
 const commonProps: SVGProps<SVGSVGElement> = {
   width: 18,
@@ -134,6 +135,16 @@ export function NavIcon({ name }: { name: IconName }) {
           <circle cx="7" cy="10.5" r="1.8" />
           <line x1="3" y1="15" x2="17" y2="15" />
           <circle cx="13" cy="15" r="1.8" />
+        </svg>
+      );
+    case "crash":
+      // A plain warning triangle — distinct from "scans" (a phone) even
+      // though both are diagnostic/housekeeping pages.
+      return (
+        <svg {...commonProps}>
+          <path d="M10 3 2.5 16.5h15Z" />
+          <line x1="10" y1="8.5" x2="10" y2="12.5" />
+          <circle cx="10" cy="14.7" r="0.9" fill="currentColor" stroke="none" />
         </svg>
       );
     default:
