@@ -23,19 +23,19 @@ Android app is the only thing that can actually scan. See
 
 <table>
 <tr>
-<td valign="top"><img src="screenshots/01-mobile_dashboard.png" width="200"/><br/>Mobile PWA</td>
-<td valign="top"><img src="screenshots/21-app_dashboard.png" width="200"/><br/>Android app</td>
+<td align="center" valign="top">Mobile PWA<br/><img src="screenshots/01-mobile_dashboard.png" width="200"/></td>
+<td align="center" valign="top">Android app<br/><img src="screenshots/21-app_dashboard.png" width="200"/></td>
 </tr>
 </table>
 
 <table>
 <tr>
-<td valign="top"><img src="screenshots/20260803054951-desktop_wifi.png" width="400"/><br/>WiFi</td>
-<td valign="top"><img src="screenshots/20260803055214-desktop_heatmap.png" width="400"/><br/>Heatmap</td>
+<td align="center" valign="top">WiFi<br/><img src="screenshots/20260803054951-desktop_wifi.png" width="400"/></td>
+<td align="center" valign="top">Heatmap<br/><img src="screenshots/20260803055214-desktop_heatmap.png" width="400"/></td>
 </tr>
 <tr>
-<td valign="top"><img src="screenshots/20260803055313-desktop-download-apk.png" width="400"/><br/>Download APK</td>
-<td valign="top"><img src="screenshots/20260803055520-desktop_remote-devices.png" width="400"/><br/>Remote devices</td>
+<td align="center" valign="top">Download APK<br/><img src="screenshots/20260803055313-desktop-download-apk.png" width="400"/></td>
+<td align="center" valign="top">Remote devices<br/><img src="screenshots/20260803055520-desktop_remote-devices.png" width="400"/></td>
 </tr>
 </table>
 
