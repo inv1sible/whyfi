@@ -19,14 +19,18 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.whyfi.app.data.FavoritesRepository
+import com.whyfi.app.scan.LocationSnapshot
 import com.whyfi.app.scan.RadioKind
 import com.whyfi.app.scan.ScanForegroundService
 import java.io.File
@@ -63,6 +67,27 @@ fun MissionScreen(
             .sortedBy { it.identifier }
     }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    // Off by default — the map centers on the estimated position (the
+    // weighted centroid of the currently loaded readings), which is what
+    // most people want to look at. But with a lot of near-location matches
+    // (BLE especially: plenty of separate devices/readings can legitimately
+    // sit within the near-radius of wherever you're standing), that
+    // estimate can land somewhere other than where you actually are. This
+    // only changes what the camera looks at — the cones/estimate itself are
+    // still always centroid-based, unaffected by this toggle.
+    var centerOnMyLocation by remember { mutableStateOf(false) }
+    val myLocationCenter = remember(centerOnMyLocation, uiState.livePosition) {
+        if (!centerOnMyLocation) {
+            null
+        } else {
+            // While tracking this updates live (see MissionController.start's
+            // location listener); otherwise it's a one-shot "last known"
+            // read, re-fetched only when the toggle itself is switched on.
+            uiState.livePosition ?: LocationSnapshot.lastKnown(context)?.let { LatLng(it.latitude, it.longitude) }
+        }
+    }
 
     fun selectOrRetarget(target: MissionTarget) {
         if (uiState.isTracking) {
@@ -106,6 +131,7 @@ fun MissionScreen(
                 else -> MissionMap(
                     points = uiState.points,
                     livePosition = uiState.livePosition,
+                    centerOverride = myLocationCenter,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -161,6 +187,27 @@ fun MissionScreen(
                         }
                     }
                 }
+
+                if (uiState.points.isNotEmpty()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    ) {
+                        // Off by default: the map centers on the estimated
+                        // position (weighted centroid of the loaded
+                        // readings). With a lot of near-location matches —
+                        // BLE especially, where plenty of separate devices
+                        // legitimately sit within the near-radius of
+                        // wherever you're standing — that estimate can land
+                        // somewhere other than where you actually are.
+                        Switch(checked = centerOnMyLocation, onCheckedChange = { centerOnMyLocation = it })
+                        Text(
+                            "Center on my location",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(start = 4.dp),
+                        )
+                    }
+                }
             }
         }
 
@@ -201,11 +248,19 @@ private fun statusBarText(uiState: MissionUiState): String = when {
 }
 
 @Composable
-private fun MissionMap(points: List<MissionPoint>, livePosition: LatLng?, modifier: Modifier = Modifier) {
+private fun MissionMap(
+    points: List<MissionPoint>,
+    livePosition: LatLng?,
+    centerOverride: LatLng?,
+    modifier: Modifier = Modifier,
+) {
     val density = LocalDensity.current.density
     val overlay = remember(points, livePosition) { buildOverlay(points, livePosition, density) }
-    val center = remember(points) {
-        Geo.weightedCentroid(points.map { WeightedLatLng(it.lat, it.lng, it.weight) })
+    // centerOverride only changes what the camera looks at — the cone
+    // estimate itself (buildOverlay's apex) always stays weighted-centroid-
+    // based, regardless of this toggle.
+    val center = remember(points, centerOverride) {
+        centerOverride ?: Geo.weightedCentroid(points.map { WeightedLatLng(it.lat, it.lng, it.weight) })
     }
 
     AndroidView(
