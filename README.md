@@ -21,21 +21,23 @@ Android app is the only thing that can actually scan. See
 
 ## Screenshots
 
-<details>
-<summary>whyfi is mobile-first — click to see desktop screenshots too</summary>
-
 <table>
 <tr>
-<td><img src="screenshots/20260803054951-desktop_wifi.png" width="400"/><br/>WiFi</td>
-<td><img src="screenshots/20260803055214-desktop_heatmap.png" width="400"/><br/>Heatmap</td>
-</tr>
-<tr>
-<td><img src="screenshots/20260803055313-desktop-download-apk.png" width="400"/><br/>Download APK</td>
-<td><img src="screenshots/20260803055520-desktop_remote-devices.png" width="400"/><br/>Remote devices</td>
+<td valign="top"><img src="screenshots/01-mobile_dashboard.png" width="200"/><br/>Mobile PWA</td>
+<td valign="top"><img src="screenshots/21-app_dashboard.png" width="200"/><br/>Android app</td>
 </tr>
 </table>
 
-</details>
+<table>
+<tr>
+<td valign="top"><img src="screenshots/20260803054951-desktop_wifi.png" width="400"/><br/>WiFi</td>
+<td valign="top"><img src="screenshots/20260803055214-desktop_heatmap.png" width="400"/><br/>Heatmap</td>
+</tr>
+<tr>
+<td valign="top"><img src="screenshots/20260803055313-desktop-download-apk.png" width="400"/><br/>Download APK</td>
+<td valign="top"><img src="screenshots/20260803055520-desktop_remote-devices.png" width="400"/><br/>Remote devices</td>
+</tr>
+</table>
 
 More screenshots (mobile PWA, desktop PWA, and the native Android app) in
 [`docs/screenshots.md`](docs/screenshots.md).
