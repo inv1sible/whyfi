@@ -750,3 +750,23 @@ the model and server exist, the integration does not.
 constants), NOT 0. Passing 0 throws `IllegalArgumentException: powerUsage
 is out of range of [1, 3] (too low)`. The 10th arg is `accuracy`, also
 1-3. This bit us during initial bring-up — don't reintroduce it.
+
+## Local dev APK signing: persistent keystore
+
+When testing the Android app on a physical device or emulator, always
+sign with the **persistent debug keystore** at `~/.android/whyfi-debug.keystore`
+(alias `whyfi-debug`, password `android`), NOT an ad-hoc `/tmp/debug.keystore`.
+A stable signature means `adb install -r` updates the app in place,
+preserving the user's backend URL + sensor token settings. A signature
+mismatch forces an uninstall, which wipes those settings — frustrating
+for the user who has to reconfigure every time.
+
+Sign command:
+```bash
+apksigner sign --ks ~/.android/whyfi-debug.keystore --ks-pass pass:android \
+  --ks-key-alias whyfi-debug --key-pass pass:android \
+  --out app-signed.apk app-aligned.apk
+```
+The keystore was generated once and lives outside the repo (it's a dev
+credential, not committed). If it's ever regenerated, every installed
+copy needs one final reinstall before updates work again.
