@@ -643,6 +643,39 @@ discard every scan forever. Sizes come from
 `LENGTH()` on TEXT counts characters, not bytes. No Room schema change, so no
 version bump.
 
+## Tab navigation: HorizontalPager (experimental API, opt-in)
+
+The four main tabs (Dashboard/Scan/LAN/Settings) use
+`HorizontalPager` from `androidx.compose.foundation.pager` for swipe-between-tabs.
+In Compose BOM 2024.06.00 (foundation 1.6.8) this API is still
+`@ExperimentalFoundationApi` — `WhyfiApp` carries `@OptIn(ExperimentalFoundationApi::class)`
+rather than waiting for a stable annotation, since the pager is the standard
+Compose approach and the API surface (`HorizontalPager`, `rememberPagerState`,
+`animateScrollToPage`) hasn't changed between 1.6 and 1.7. When the BOM is
+bumped past foundation 1.7 (where the API stabilised), the opt-in can be removed.
+
+The pager wraps only the four tab screens. Drill-downs (ScanDetailScreen,
+MissionScreen) early-return above the pager, so swipe never reaches them —
+the system back button closes those via their existing `BackHandler`s. This is
+load-bearing: a swipe that switched tabs while a detail screen was open would
+feel like the back button broke.
+
+Bidirectional sync between `pagerState.currentPage` and `selectedTab` uses two
+`LaunchedEffect`s (one per direction) rather than `derivedStateOf` or a single
+observer, because each side needs to call `animateScrollToPage` (tab tap) or
+write `selectedTab` (swipe) — the write direction differs, so collapsing them
+into one observer risks feedback loops.
+
+## Button label shortening on Scan tab
+
+"Scan once" and "Start continuous scanning" were stacked vertically as
+full-width buttons. They now share a row at equal width (`Modifier.weight(1f)`).
+Labels were shortened to "Scan once" / "Start" (idle) and "Scan once" / "Stop"
+(running) — "Throttled" replaces the longer "Scan throttled — try again shortly"
+when the WiFi throttle is active. The original labels would overflow a
+half-width button on narrow screens. The `enabled` and `onClick` logic is
+unchanged.
+
 ## Open/deferred (v-next, not forgotten, just not now)
 
 - Matter/Thread device discovery (via BLE commissioning adverts + mDNS) —

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -142,24 +143,31 @@ fun ScanScreen(
         } else if (uiState.completedScanCount > 0) {
             Text("Last scan:")
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             RadioStatChip(
                 "📶", "WiFi", uiState.wifiCount, scanning && uiState.currentPhase == ScanPhase.WIFI, Color(0xFF2DD4BF),
+                modifier = Modifier.weight(1f),
                 onClick = if (openable) ({ onOpenDetail(RadioKind.WIFI) }) else null,
             )
             RadioStatChip(
                 "📡", "Cellular", uiState.cellularCount, scanning && uiState.currentPhase == ScanPhase.CELLULAR, Color(0xFF60A5FA),
+                modifier = Modifier.weight(1f),
                 onClick = if (openable) ({ onOpenDetail(RadioKind.CELLULAR) }) else null,
             )
             RadioStatChip(
                 "🔵", "BLE", uiState.bleCount, scanning && uiState.currentPhase == ScanPhase.BLE, Color(0xFFA78BFA),
+                modifier = Modifier.weight(1f),
                 onClick = if (openable) ({ onOpenDetail(RadioKind.BLE) }) else null,
             )
             RadioStatChip(
                 "🛰️", "GPS", uiState.satelliteCount, scanning && uiState.currentPhase == ScanPhase.GNSS, Color(0xFFFBBF24),
+                modifier = Modifier.weight(1f),
                 onClick = if (openable) ({ onOpenDetail(RadioKind.SATELLITE) }) else null,
             )
-            RadioStatChip("🎯", "Mission", null, missionState.isTracking, Color(0xFFF472B6), onClick = onOpenMission)
+            RadioStatChip("🎯", "Mission", null, missionState.isTracking, Color(0xFFF472B6), modifier = Modifier.weight(1f), onClick = onOpenMission)
         }
         if (openable) {
             Text(
@@ -210,36 +218,46 @@ fun ScanScreen(
             Text("${uiState.gnssUnavailableReason} Satellite results will be empty until this is resolved.")
         }
 
-        Button(
-            enabled = canScanNow() && !uiState.isScanning && !uiState.isContinuous,
-            onClick = {
-                locationServicesOn = PermissionHelper.isLocationServicesEnabled(context)
-                ScanForegroundService.start(context)
-                service?.scanOnce(scanOptions())
-            },
+        // Side-by-side rather than stacked: the two primary actions share one
+        // row at equal width. Labels are shortened so both states (idle and
+        // continuous-running) fit without truncation on narrow screens.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(if (canScanNow()) "Scan once" else "Scan throttled — try again shortly")
-        }
-
-        Button(
-            enabled = permissionsGranted && service != null && !uiState.isScanning,
-            onClick = {
-                if (uiState.isContinuous) {
-                    // Doubles as the local kill switch while remote control is
-                    // on: whoever is physically holding the phone wins.
-                    if (remoteControlOn) {
-                        service?.setRemoteControlEnabled(false)
-                        remoteControlOn = false
-                    }
-                    service?.stopContinuous()
-                } else {
+            Button(
+                enabled = canScanNow() && !uiState.isScanning && !uiState.isContinuous,
+                modifier = Modifier.weight(1f),
+                onClick = {
                     locationServicesOn = PermissionHelper.isLocationServicesEnabled(context)
                     ScanForegroundService.start(context)
-                    service?.startContinuous(scanOptions(), CONTINUOUS_SCAN_INTERVAL_MS)
-                }
-            },
-        ) {
-            Text(if (uiState.isContinuous) "Stop continuous scanning" else "Start continuous scanning")
+                    service?.scanOnce(scanOptions())
+                },
+            ) {
+                Text(if (canScanNow()) "Scan once" else "Throttled")
+            }
+
+            Button(
+                enabled = permissionsGranted && service != null && !uiState.isScanning,
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    if (uiState.isContinuous) {
+                        // Doubles as the local kill switch while remote control is
+                        // on: whoever is physically holding the phone wins.
+                        if (remoteControlOn) {
+                            service?.setRemoteControlEnabled(false)
+                            remoteControlOn = false
+                        }
+                        service?.stopContinuous()
+                    } else {
+                        locationServicesOn = PermissionHelper.isLocationServicesEnabled(context)
+                        ScanForegroundService.start(context)
+                        service?.startContinuous(scanOptions(), CONTINUOUS_SCAN_INTERVAL_MS)
+                    }
+                },
+            ) {
+                Text(if (uiState.isContinuous) "Stop" else "Start")
+            }
         }
 
         if (uiState.isContinuous) {

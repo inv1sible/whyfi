@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -42,6 +43,7 @@ fun RadioStatChip(
 ) {
     Column(
         modifier = modifier
+            .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(accentColor.copy(alpha = 0.12f))
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
