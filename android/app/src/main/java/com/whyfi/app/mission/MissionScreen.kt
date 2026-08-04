@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -183,6 +184,26 @@ fun MissionScreen(
                                 selected = uiState.target == target,
                                 onClick = { selectOrRetarget(target) },
                                 label = { Text("${target.kind.icon} ${target.identifier}") },
+                                trailingIcon = {
+                                    // Separate tap target: the X unfavorites
+                                    // the target instead of selecting it. If the
+                                    // removed favorite was the active target,
+                                    // clear the selection so the map doesn't
+                                    // keep showing stale data for something
+                                    // that's no longer tracked.
+                                    Text(
+                                        "×",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        modifier = Modifier
+                                            .padding(start = 4.dp)
+                                            .clickable {
+                                                favoritesRepository.toggleFavorite(target.kind, target.identifier)
+                                                if (uiState.target == target) {
+                                                    missionController.clearSelection()
+                                                }
+                                            },
+                                    )
+                                },
                             )
                         }
                     }
