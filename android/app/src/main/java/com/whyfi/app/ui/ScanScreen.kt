@@ -1,5 +1,9 @@
 package com.whyfi.app.ui
 
+import android.bluetooth.BluetoothAdapter
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.rememberScrollState
@@ -88,6 +92,15 @@ fun ScanScreen(
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         permissionsGranted = PermissionHelper.hasAllRequiredPermissions(context)
     }
+
+    // Bluetooth can be enabled in-app via ACTION_REQUEST_ENABLE — the system
+    // shows a dialog overlay ("Allow whyfi to turn on Bluetooth?") and the app
+    // stays visible. Must be registered unconditionally (launchers cannot live
+    // inside conditionals). After the result returns, the 2-second polling
+    // loop below picks up the new adapter state automatically.
+    val bluetoothEnableLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { /* re-check happens via the availability polling loop */ }
 
     LaunchedEffect(Unit) {
         if (!permissionsGranted) {
@@ -195,6 +208,17 @@ fun ScanScreen(
         }
         if (includeWifi && uiState.wifiUnavailableReason != null) {
             Text("${uiState.wifiUnavailableReason} WiFi results will be empty until this is resolved.")
+            // WiFi cannot be enabled in-app on API 29+ — setWifiEnabled is
+            // restricted to system apps. Open the system WiFi settings
+            // instead; the user returns on back.
+            Button(onClick = {
+                val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                    Intent(Settings.ACTION_WIFI_SETTINGS) else
+                    Intent(Settings.ACTION_WIRELESS_SETTINGS)
+                context.startActivity(intent)
+            }) {
+                Text("Open WiFi settings")
+            }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = includeCellular, onCheckedChange = { includeCellular = it }, enabled = !uiState.isContinuous)
@@ -202,6 +226,13 @@ fun ScanScreen(
         }
         if (includeCellular && uiState.cellularUnavailableReason != null) {
             Text("${uiState.cellularUnavailableReason} Cellular results will be empty until this is resolved.")
+            // Airplane mode cannot be toggled in-app on modern Android.
+            // Open the system airplane-mode settings page.
+            Button(onClick = {
+                context.startActivity(Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS))
+            }) {
+                Text("Open airplane mode settings")
+            }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = includeBle, onCheckedChange = { includeBle = it }, enabled = !uiState.isContinuous)
@@ -209,6 +240,19 @@ fun ScanScreen(
         }
         if (includeBle && uiState.bleUnavailableReason != null) {
             Text("${uiState.bleUnavailableReason} BLE results will be empty until this is resolved.")
+            // Bluetooth is the one radio that CAN be enabled in-app —
+            // ACTION_REQUEST_ENABLE shows a system dialog overlay without
+            // leaving the app. "This device has no Bluetooth adapter" has
+            // no button because there's nothing to enable.
+            if (uiState.bleUnavailableReason == "Bluetooth is turned off.") {
+                Button(onClick = {
+                    bluetoothEnableLauncher.launch(
+                        Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+                    )
+                }) {
+                    Text("Turn on Bluetooth")
+                }
+            }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = includeGnss, onCheckedChange = { includeGnss = it }, enabled = !uiState.isContinuous)
@@ -216,6 +260,16 @@ fun ScanScreen(
         }
         if (includeGnss && uiState.gnssUnavailableReason != null) {
             Text("${uiState.gnssUnavailableReason} Satellite results will be empty until this is resolved.")
+            // Location services cannot be enabled in-app — open the system
+            // location settings page. "This device has no GPS hardware" has
+            // no button because there's nothing to enable.
+            if (uiState.gnssUnavailableReason == "Location services (GPS) are off.") {
+                Button(onClick = {
+                    context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                }) {
+                    Text("Open location settings")
+                }
+            }
         }
 
         // Side-by-side rather than stacked: the two primary actions share one

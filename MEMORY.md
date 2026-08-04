@@ -676,6 +676,35 @@ when the WiFi throttle is active. The original labels would overflow a
 half-width button on narrow screens. The `enabled` and `onClick` logic is
 unchanged.
 
+## In-app sensor enable: what can and can't be turned on without leaving the app
+
+The Scan tab shows a one-tap enable button below each radio's "turned off"
+unavailable-reason message. The enable paths differ per radio because Android
+restricts which settings a normal app can change:
+
+- **Bluetooth** — CAN enable in-app. `BluetoothAdapter.ACTION_REQUEST_ENABLE`
+  via `ActivityResultContracts.StartActivityForResult()` shows a system dialog
+  overlay ("Allow whyfi to turn on Bluetooth?"); the app stays visible. The
+  existing 2-second availability polling loop picks up the new state
+  automatically — no manual refresh needed.
+- **WiFi** — CANNOT enable in-app on API 29+. `WifiManager.setWifiEnabled()`
+  is restricted to system apps on Android 10+; calling it from a normal app
+  throws. The button opens `Settings.ACTION_WIFI_SETTINGS` (API 29+) or
+  `Settings.ACTION_WIRELESS_SETTINGS` (older), which leaves the app briefly
+  and returns on back. Don't try `setWifiEnabled()` — it will crash.
+- **GPS/Location** — CANNOT enable in-app. The button opens
+  `Settings.ACTION_LOCATION_SOURCE_SETTINGS`. Same leave-and-return pattern.
+- **Cellular (airplane mode)** — CANNOT toggle in-app on modern Android.
+  The button opens `Settings.ACTION_AIRPLANE_MODE_SETTINGS`.
+
+The Bluetooth launcher is registered unconditionally at the top of
+`ScanScreen` (launchers cannot live inside conditionals). The "no hardware"
+unavailable reasons ("This device has no Bluetooth adapter", "This device
+has no GPS hardware") intentionally show no button — there's nothing to
+enable. `PermissionHelper.isBluetoothEnabled()` and `isWifiEnabled()` were
+added alongside the existing `isLocationServicesEnabled()` as the central
+place for sensor-state checks.
+
 ## Open/deferred (v-next, not forgotten, just not now)
 
 - Matter/Thread device discovery (via BLE commissioning adverts + mDNS) —
