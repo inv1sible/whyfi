@@ -215,7 +215,7 @@ fun ScanScreen(
                 val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
                     Intent(Settings.ACTION_WIFI_SETTINGS) else
                     Intent(Settings.ACTION_WIRELESS_SETTINGS)
-                context.startActivity(intent)
+                runCatching { context.startActivity(intent) }
             }) {
                 Text("Open WiFi settings")
             }
@@ -229,7 +229,7 @@ fun ScanScreen(
             // Airplane mode cannot be toggled in-app on modern Android.
             // Open the system airplane-mode settings page.
             Button(onClick = {
-                context.startActivity(Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS))
+                runCatching { context.startActivity(Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS)) }
             }) {
                 Text("Open airplane mode settings")
             }
@@ -246,9 +246,16 @@ fun ScanScreen(
             // no button because there's nothing to enable.
             if (uiState.bleUnavailableReason == "Bluetooth is turned off.") {
                 Button(onClick = {
-                    bluetoothEnableLauncher.launch(
-                        Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-                    )
+                    // ACTION_REQUEST_ENABLE can throw ActivityNotFoundException
+                    // if the adapter state changed between the check and the
+                    // launch (e.g. Bluetooth turned on by another path), or
+                    // on devices where the intent isn't resolvable. Guard it
+                    // so a race doesn't crash the app on the second tap.
+                    runCatching {
+                        bluetoothEnableLauncher.launch(
+                            Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+                        )
+                    }
                 }) {
                     Text("Turn on Bluetooth")
                 }
@@ -265,7 +272,7 @@ fun ScanScreen(
             // no button because there's nothing to enable.
             if (uiState.gnssUnavailableReason == "Location services (GPS) are off.") {
                 Button(onClick = {
-                    context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                    runCatching { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
                 }) {
                     Text("Open location settings")
                 }

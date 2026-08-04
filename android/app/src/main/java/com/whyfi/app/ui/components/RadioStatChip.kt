@@ -2,6 +2,7 @@ package com.whyfi.app.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,6 +14,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -51,15 +53,21 @@ fun RadioStatChip(
     ) {
         Text(icon, fontSize = 18.sp)
         Spacer(Modifier.height(4.dp))
-        when {
-            isActivePhase -> CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = accentColor)
-            count != null -> Text(
-                count.toString(),
-                style = MaterialTheme.typography.titleLarge,
-                color = accentColor,
-                fontWeight = FontWeight.Bold,
-            )
-            else -> Text("—", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        // Fixed-height slot so the chip doesn't reflow when the spinner
+        // (18dp) replaces the count text (titleLarge, taller). Without
+        // this, the whole row visibly grows/shrinks as each radio's phase
+        // starts and ends — distracting mid-scan.
+        Box(modifier = Modifier.height(28.dp), contentAlignment = Alignment.Center) {
+            when {
+                isActivePhase -> CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = accentColor)
+                count != null -> Text(
+                    count.toString(),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = accentColor,
+                    fontWeight = FontWeight.Bold,
+                )
+                else -> Text("—", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
