@@ -14,6 +14,16 @@ looks missing; it may have been deliberately removed.
 - `android/` — Kotlin/Compose native app. Built headlessly via
   `android/Dockerfile` (Gradle + Android SDK cmdline-tools). No Android
   Studio or emulator in this repo's toolchain.
+- `mockloc/` — dev-only standalone Android app (Java) for emulator testing.
+  Spoofs GPS via a test location provider and models a directional RSSI
+  antenna pattern exposed over a local HTTP server, so the scanner can be
+  exercised without a physical device. Not part of the main build,
+  docker-compose, or the APK distribution — build and install it on demand
+  (see `mockloc/README.md`). The `ACCESS_MOCK_LOCATION` permission lives in
+  `app/src/debug/AndroidManifest.xml` (AGP rejects it in main) — keep it
+  there. mockloc cannot inject synthetic WiFi scan results (no Android API
+  for that); it only computes RSSI and exposes it via HTTP. Wiring that
+  into whyfi's scan path is a separate task.
 - `docs/` — architecture, API reference, deployment, Android setup, roadmap.
 
 ## Commands

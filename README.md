@@ -67,6 +67,11 @@ URL + token into the app's Settings screen to start scanning.
 - `android/` — native Kotlin scanning app, built via Docker (no emulator
   needed to produce an APK; a physical device is needed to exercise real
   radios).
+- `mockloc/` — dev-only Android app for emulator testing. Spoofs GPS
+  location along a configurable walk path and models a directional RSSI
+  antenna pattern, so the scanner can be exercised without a physical
+  device. Standalone — not part of the main build or docker-compose. See
+  [`mockloc/README.md`](mockloc/README.md).
 - `docs/` — architecture, API reference, deployment, and roadmap notes.
 
 ## Status

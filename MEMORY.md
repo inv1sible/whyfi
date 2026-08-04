@@ -656,4 +656,35 @@ version bump.
   on the viewing device).
 - Watching a *specific* WiFi/BLE/LAN device for online/offline transitions.
   Remote scanning control is a reasonable foundation, but it needs its own
-  watch-list model and a per-device "seen recently" notion.
+  watch-list model and a per-device "seen during this scan" notion.
+
+## mockloc: dev-only emulator GPS/RSSI spoofing tool
+
+`mockloc/` is a standalone dev-only Android app (Java, not Kotlin) for
+testing the scanner on an Android emulator without a physical device. It
+spoofs GPS via `LocationManager.addTestProvider()` along a configurable
+walk path (circle/oval/rectangle, live-adjustable) and models a
+directional RSSI antenna pattern (36-sector smoothed, per-session) exposed
+over a local HTTP server on port 8080.
+
+**Why standalone, not part of the main app:** it's a dev tool, not a
+feature. Keeping it separate means the main APK ships no mock-location
+code, no `ACCESS_MOCK_LOCATION` permission (which AGP rejects in release
+builds anyway — it lives in `mockloc/app/src/debug/AndroidManifest.xml`),
+and no test-provider registration that could accidentally ship to a real
+device. It's built on demand via the Gradle Docker image, not part of
+docker-compose or the APK distribution.
+
+**Why the RSSI is HTTP-only:** Android has no "test WiFi provider" API —
+the emulator's WiFi HAL always returns "AndroidWifi" at a fixed -50 dBm.
+mockloc can only *compute* synthetic RSSI; it cannot inject it into the
+emulator's scan results. The HTTP server is the bridge: whyfi can read it
+from a debug hook to overlay synthetic signal data on its own scans.
+**Wiring that into whyfi's scan path is a separate, not-yet-done task** —
+the model and server exist, the integration does not.
+
+**The `addTestProvider` powerRequirement gotcha:** the 9th arg to
+`addTestProvider` is `powerRequirement`, which must be 1-3 (Criteria
+constants), NOT 0. Passing 0 throws `IllegalArgumentException: powerUsage
+is out of range of [1, 3] (too low)`. The 10th arg is `accuracy`, also
+1-3. This bit us during initial bring-up — don't reintroduce it.
