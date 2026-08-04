@@ -19,6 +19,8 @@
 
     <!-- BLE device discovery (Android 12+) -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <!-- Enabling Bluetooth from the Scan tab (API 33+) -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <!-- Precision ranging enhancement tier (only used if both device and
          target support it; see ble/UwbLocateManager.kt) -->

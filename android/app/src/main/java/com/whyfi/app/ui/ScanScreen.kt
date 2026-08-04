@@ -1,6 +1,7 @@
 package com.whyfi.app.ui
 
 import android.bluetooth.BluetoothAdapter
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
@@ -240,15 +241,18 @@ fun ScanScreen(
         }
         if (includeBle && uiState.bleUnavailableReason != null) {
             Text("${uiState.bleUnavailableReason} BLE results will be empty until this is resolved.")
-            // Bluetooth is the one radio that CAN be enabled in-app —
-            // ACTION_REQUEST_ENABLE shows a system dialog overlay without
-            // leaving the app. "This device has no Bluetooth adapter" has
-            // no button because there's nothing to enable.
+            // Enable Bluetooth directly — no settings page, no dialog.
+            // BluetoothAdapter.enable() turns the adapter on immediately.
+            // Requires BLUETOOTH_CONNECT on API 33+ (added to the manifest).
+            // "This device has no Bluetooth adapter" has no button.
             if (uiState.bleUnavailableReason == "Bluetooth is turned off.") {
                 Button(onClick = {
-                    runCatching { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+                    runCatching {
+                        val btManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager
+                        btManager?.adapter?.enable()
+                    }
                 }) {
-                    Text("Open Bluetooth settings")
+                    Text("Turn on Bluetooth")
                 }
             }
         }
