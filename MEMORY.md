@@ -770,3 +770,24 @@ apksigner sign --ks ~/.android/whyfi-debug.keystore --ks-pass pass:android \
 The keystore was generated once and lives outside the repo (it's a dev
 credential, not committed). If it's ever regenerated, every installed
 copy needs one final reinstall before updates work again.
+
+## Favorites sort and mission chip remove
+
+Scan detail tables sort favorited rows to the top via a stable
+`sortedByDescending { it.isFavorite }` on the already-mapped `DataTableRow`
+list — the sort runs *after* `ScanDiff.rowsFor` returns (so signal order
+within each group is preserved) but *before* the rows are passed to
+`DataTable`. This is deliberately a post-map sort rather than changing
+`ScanDiff` itself: `ScanDiff.rowsFor` is shared and its sort order
+(serving-cell-first for cellular, signal-descending for WiFi/BLE) is
+load-bearing for the diff/summary logic, not just display.
+
+Mission view's favorite `FilterChip`s carry a `trailingIcon` with a "x"
+text that's a separate clickable tap target from the chip's own
+`onClick`. Tapping the x calls `favoritesRepository.toggleFavorite` to
+unfavorite, and if the removed favorite was the currently-selected
+target, also calls `missionController.clearSelection()` so the map
+doesn't keep showing stale data for something no longer tracked. Used
+`Text("x")` rather than `Icons.Filled.Close` to avoid pulling in the
+`material-icons-extended` dependency — the codebase had no prior Icon
+usage and the text glyph is sufficient for a chip remove control.

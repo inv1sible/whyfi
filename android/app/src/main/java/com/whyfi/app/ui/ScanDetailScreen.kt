@@ -150,7 +150,7 @@ fun ScanDetailScreen(
                             null
                         },
                     )
-                },
+                }.sortedByDescending { it.isFavorite }, // favorites to top; stable within each group
                 showBadgeColumn = summary.comparable,
             )
         }
