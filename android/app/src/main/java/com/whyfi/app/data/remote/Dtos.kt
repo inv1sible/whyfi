@@ -227,3 +227,152 @@ data class ScanPolicyResponse(
     @SerializedName("walking_interval_seconds") val walkingIntervalSeconds: Int = 60,
     @SerializedName("driving_interval_seconds") val drivingIntervalSeconds: Int = 30,
 )
+
+// --- Read-side DTOs (for backfilling the Dashboard from the backend) ---
+// These mirror the *read* serializers in backend/scans/serializers.py, not the
+// ingest serializers. The field names are snake_case in JSON and mapped via
+// @SerializedName so Gson deserializes them correctly. Used only by
+// LatestScanFetcher to reconstruct a display-only ScanSessionUploadRequest.
+
+/** Paginated response envelope from the scan-sessions list endpoint.
+ * DRF's LimitablePageNumberPagination wraps results in this shape.
+ * The detail actions (wifi-observations etc.) return bare arrays. */
+data class ScanSessionListResponse(
+    @SerializedName("count") val count: Int = 0,
+    @SerializedName("next") val next: String? = null,
+    @SerializedName("previous") val previous: String? = null,
+    @SerializedName("results") val results: List<ScanSessionSummaryDto> = emptyList(),
+)
+
+/** Mirrors ScanSessionSerializer — the list endpoint returns these. */
+data class ScanSessionSummaryDto(
+    @SerializedName("id") val id: String,
+    @SerializedName("sensor") val sensor: String? = null,
+    @SerializedName("sensor_name") val sensorName: String? = null,
+    @SerializedName("started_at") val startedAt: String,
+    @SerializedName("completed_at") val completedAt: String,
+    @SerializedName("latitude") val latitude: Double? = null,
+    @SerializedName("longitude") val longitude: Double? = null,
+    @SerializedName("location_accuracy_meters") val locationAccuracyMeters: Double? = null,
+    @SerializedName("location_provider") val locationProvider: String = "",
+    @SerializedName("fused_latitude") val fusedLatitude: Double? = null,
+    @SerializedName("fused_longitude") val fusedLongitude: Double? = null,
+    @SerializedName("fused_accuracy_meters") val fusedAccuracyMeters: Double? = null,
+    @SerializedName("created_at") val createdAt: String? = null,
+    @SerializedName("wifi_count") val wifiCount: Int = 0,
+    @SerializedName("cell_count") val cellCount: Int = 0,
+    @SerializedName("ble_count") val bleCount: Int = 0,
+    @SerializedName("satellite_count") val satelliteCount: Int = 0,
+    @SerializedName("lan_count") val lanCount: Int = 0,
+    @SerializedName("resolved_address") val resolvedAddress: String? = null,
+    @SerializedName("identifiers_summary") val identifiersSummary: String? = null,
+)
+
+/** Mirrors WiFiObservationSerializer — includes session-level lat/lon and
+ * the server-computed channel/band/security_type. We map back to the ingest
+ * DTO shape (which carries capabilities, not security_type) so the existing
+ * ScanDiff/RadioFormat display pipeline works unchanged. */
+data class WifiObservationResponseDto(
+    @SerializedName("id") val id: Int? = null,
+    @SerializedName("scan_session") val scanSession: String? = null,
+    @SerializedName("access_point") val accessPoint: String? = null,
+    @SerializedName("rssi") val rssi: Int,
+    @SerializedName("frequency_mhz") val frequencyMhz: Int,
+    @SerializedName("channel") val channel: Int? = null,
+    @SerializedName("band") val band: String? = null,
+    @SerializedName("security_type") val securityType: String? = null,
+    @SerializedName("observed_at") val observedAt: String? = null,
+    @SerializedName("channel_width_mhz") val channelWidthMhz: Int? = null,
+    @SerializedName("center_freq0_mhz") val centerFreq0Mhz: Int? = null,
+    @SerializedName("center_freq1_mhz") val centerFreq1Mhz: Int? = null,
+    @SerializedName("wifi_standard") val wifiStandard: String = "",
+    @SerializedName("is_80211mc_responder") val is80211mcResponder: Boolean = false,
+    @SerializedName("operator_friendly_name") val operatorFriendlyName: String = "",
+    @SerializedName("venue_name") val venueName: String = "",
+    @SerializedName("latitude") val latitude: Double? = null,
+    @SerializedName("longitude") val longitude: Double? = null,
+    @SerializedName("location_accuracy_meters") val locationAccuracyMeters: Double? = null,
+)
+
+/** Mirrors CellObservationSerializer (fields = "__all__"). */
+data class CellObservationResponseDto(
+    @SerializedName("id") val id: Int? = null,
+    @SerializedName("scan_session") val scanSession: String? = null,
+    @SerializedName("cell_tower") val cellTower: String? = null,
+    @SerializedName("mcc") val mcc: String = "",
+    @SerializedName("mnc") val mnc: String = "",
+    @SerializedName("carrier_name") val carrierName: String = "",
+    @SerializedName("radio_type") val radioType: String,
+    @SerializedName("cell_id") val cellId: String = "",
+    @SerializedName("tac_or_lac") val tacOrLac: String = "",
+    @SerializedName("band") val band: String = "",
+    @SerializedName("is_serving_cell") val isServingCell: Boolean = false,
+    @SerializedName("signal_dbm") val signalDbm: Int? = null,
+    @SerializedName("rsrp") val rsrp: Int? = null,
+    @SerializedName("rsrq") val rsrq: Int? = null,
+    @SerializedName("sinr") val sinr: Double? = null,
+    @SerializedName("physical_cell_id") val physicalCellId: Int? = null,
+    @SerializedName("arfcn") val arfcn: Int? = null,
+    @SerializedName("bandwidth_khz") val bandwidthKhz: Int? = null,
+    @SerializedName("timing_advance") val timingAdvance: Int? = null,
+    @SerializedName("observed_at") val observedAt: String? = null,
+    @SerializedName("latitude") val latitude: Double? = null,
+    @SerializedName("longitude") val longitude: Double? = null,
+    @SerializedName("location_accuracy_meters") val locationAccuracyMeters: Double? = null,
+)
+
+/** Mirrors BLEObservationSerializer (fields = "__all__"). */
+data class BleObservationResponseDto(
+    @SerializedName("id") val id: Int? = null,
+    @SerializedName("scan_session") val scanSession: String? = null,
+    @SerializedName("ble_device") val bleDevice: String? = null,
+    @SerializedName("ble_mac") val bleMac: String = "",
+    @SerializedName("stable_identifier") val stableIdentifier: String = "",
+    @SerializedName("rssi") val rssi: Int,
+    @SerializedName("tx_power") val txPower: Int? = null,
+    @SerializedName("manufacturer_data_raw") val manufacturerDataRaw: String = "",
+    @SerializedName("service_uuids") val serviceUuids: List<String> = emptyList(),
+    @SerializedName("device_type_guess") val deviceTypeGuess: String = "UNKNOWN",
+    @SerializedName("device_name") val deviceName: String = "",
+    @SerializedName("is_connectable") val isConnectable: Boolean = false,
+    @SerializedName("primary_phy") val primaryPhy: String = "",
+    @SerializedName("observed_at") val observedAt: String? = null,
+    @SerializedName("latitude") val latitude: Double? = null,
+    @SerializedName("longitude") val longitude: Double? = null,
+    @SerializedName("location_accuracy_meters") val locationAccuracyMeters: Double? = null,
+)
+
+/** Mirrors SatelliteObservationSerializer (fields = "__all__"). */
+data class SatelliteObservationResponseDto(
+    @SerializedName("id") val id: Int? = null,
+    @SerializedName("scan_session") val scanSession: String? = null,
+    @SerializedName("constellation") val constellation: String,
+    @SerializedName("svid") val svid: Int,
+    @SerializedName("cn0_db_hz") val cn0DbHz: Double,
+    @SerializedName("elevation_degrees") val elevationDegrees: Double? = null,
+    @SerializedName("azimuth_degrees") val azimuthDegrees: Double? = null,
+    @SerializedName("used_in_fix") val usedInFix: Boolean = false,
+    @SerializedName("carrier_frequency_hz") val carrierFrequencyHz: Double? = null,
+    @SerializedName("has_ephemeris_data") val hasEphemerisData: Boolean = false,
+    @SerializedName("has_almanac_data") val hasAlmanacData: Boolean = false,
+    @SerializedName("observed_at") val observedAt: String? = null,
+)
+
+/** Mirrors LANObservationSerializer (fields = "__all__"). */
+data class LanObservationResponseDto(
+    @SerializedName("id") val id: Int? = null,
+    @SerializedName("scan_session") val scanSession: String? = null,
+    @SerializedName("lan_device") val lanDevice: String? = null,
+    @SerializedName("ip_address") val ipAddress: String,
+    @SerializedName("mac_address") val macAddress: String = "",
+    @SerializedName("hostname") val hostname: String = "",
+    @SerializedName("vendor_oui") val vendorOui: String = "",
+    @SerializedName("open_ports") val openPorts: List<Int> = emptyList(),
+    @SerializedName("response_time_ms") val responseTimeMs: Double? = null,
+    @SerializedName("banner") val banner: String = "",
+    @SerializedName("device_type_guess") val deviceTypeGuess: String = "UNKNOWN",
+    @SerializedName("observed_at") val observedAt: String? = null,
+    @SerializedName("latitude") val latitude: Double? = null,
+    @SerializedName("longitude") val longitude: Double? = null,
+    @SerializedName("location_accuracy_meters") val locationAccuracyMeters: Double? = null,
+)

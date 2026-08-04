@@ -770,3 +770,30 @@ apksigner sign --ks ~/.android/whyfi-debug.keystore --ks-pass pass:android \
 The keystore was generated once and lives outside the repo (it's a dev
 credential, not committed). If it's ever regenerated, every installed
 copy needs one final reinstall before updates work again.
+
+## Dashboard backfill from backend on fresh install
+
+When `LastScanStore` has no local scan (fresh install, cleared file), and
+the app is configured (backend URL + token set), `ScanForegroundService.onCreate`
+fetches the latest scan session from the backend via `LatestScanFetcher`:
+`GET /api/v1/scan-sessions/?limit=1` for the session summary, then the
+per-radio detail endpoints (`wifi-observations/`, `cell-observations/`, etc.)
+for the observations. The observations are mapped back from the read-serializer
+DTOs to the ingest-serializer DTOs (`ScanSessionUploadRequest`) so the existing
+display pipeline (ScanDiff, RadioFormat, DashboardScreen) works unchanged.
+
+The reconstructed pass is **display-only**: it is never written to
+`LastScanStore` (that file is for locally-scanned passes only) and never
+enters the upload outbox (it already exists on the backend). The
+`client_scan_id` is set to the backend session's UUID for traceability.
+`completedScanCount` is set to 1 (we don't know the real count, just that
+there was at least one). The pass is ephemeral — it lives in `ScanUiState`
+until a real local scan replaces it. Re-fetching on every cold start is
+cheap and keeps the Dashboard fresh.
+
+This required adding `SensorTokenAuthentication` as an additional
+authenticator for the scan-session list/retrieve/detail actions in
+`ScanSessionViewSet.get_authenticators()` (session auth still works for
+the PWA; both are tried in order). The queryset is scoped to the
+sensor's own sessions when a sensor token is used, so a device only sees
+its own scans.
