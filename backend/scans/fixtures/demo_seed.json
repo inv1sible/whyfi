@@ -136,5 +136,275 @@
       "used_in_fix": true,
       "observed_at": "2026-07-16T09:00:02Z"
     }
+  },
+
+  {
+    "model": "scans.accesspoint",
+    "pk": "00:13:10:85:fe:01",
+    "fields": {
+      "ssid": "AndroidWifi",
+      "vendor_oui": "00:13:10",
+      "first_seen_at": "2026-07-20T10:00:00Z",
+      "last_seen_at": "2026-07-20T10:30:00Z"
+    }
+  },
+  {
+    "model": "scans.accesspoint",
+    "pk": "00:13:10:85:fe:02",
+    "fields": {
+      "ssid": "AndroidWifi",
+      "vendor_oui": "00:13:10",
+      "first_seen_at": "2026-07-20T10:00:00Z",
+      "last_seen_at": "2026-07-20T10:30:00Z"
+    }
+  },
+  {
+    "model": "scans.accesspoint",
+    "pk": "00:13:10:85:fe:03",
+    "fields": {
+      "ssid": "AndroidWifi",
+      "vendor_oui": "00:13:10",
+      "first_seen_at": "2026-07-20T10:00:00Z",
+      "last_seen_at": "2026-07-20T10:30:00Z"
+    }
+  },
+  {
+    "model": "scans.accesspoint",
+    "pk": "00:13:10:85:fe:04",
+    "fields": {
+      "ssid": "AndroidWifi",
+      "vendor_oui": "00:13:10",
+      "first_seen_at": "2026-07-20T10:00:00Z",
+      "last_seen_at": "2026-07-20T10:30:00Z"
+    }
+  },
+
+  {
+    "model": "scans.scansession",
+    "pk": "33333333-3333-3333-3333-333333333331",
+    "fields": {
+      "sensor": "11111111-1111-1111-1111-111111111111",
+      "client_scan_id": "demo-multi-ap-0001",
+      "started_at": "2026-07-20T10:00:00Z",
+      "completed_at": "2026-07-20T10:00:05Z",
+      "latitude": 48.13515,
+      "longitude": 11.58195,
+      "location_accuracy_meters": 5.0,
+      "location_provider": "gps",
+      "created_at": "2026-07-20T10:00:05Z"
+    }
+  },
+  {
+    "model": "scans.scansession",
+    "pk": "33333333-3333-3333-3333-333333333332",
+    "fields": {
+      "sensor": "11111111-1111-1111-1111-111111111111",
+      "client_scan_id": "demo-multi-ap-0002",
+      "started_at": "2026-07-20T10:10:00Z",
+      "completed_at": "2026-07-20T10:10:05Z",
+      "latitude": 48.13525,
+      "longitude": 11.58210,
+      "location_accuracy_meters": 5.0,
+      "location_provider": "gps",
+      "created_at": "2026-07-20T10:10:05Z"
+    }
+  },
+  {
+    "model": "scans.scansession",
+    "pk": "33333333-3333-3333-3333-333333333333",
+    "fields": {
+      "sensor": "11111111-1111-1111-1111-111111111111",
+      "client_scan_id": "demo-multi-ap-0003",
+      "started_at": "2026-07-20T10:20:00Z",
+      "completed_at": "2026-07-20T10:20:05Z",
+      "latitude": 48.13500,
+      "longitude": 11.58220,
+      "location_accuracy_meters": 5.0,
+      "location_provider": "gps",
+      "created_at": "2026-07-20T10:20:05Z"
+    }
+  },
+
+  {
+    "model": "scans.wifiobservation",
+    "pk": 3,
+    "fields": {
+      "scan_session": "33333333-3333-3333-3333-333333333331",
+      "access_point": "00:13:10:85:fe:01",
+      "rssi": -45,
+      "frequency_mhz": 2412,
+      "channel": 1,
+      "band": "2.4GHz",
+      "security_type": "OPEN",
+      "capabilities_raw": "[ESS]",
+      "observed_at": "2026-07-20T10:00:02Z"
+    }
+  },
+  {
+    "model": "scans.wifiobservation",
+    "pk": 4,
+    "fields": {
+      "scan_session": "33333333-3333-3333-3333-333333333331",
+      "access_point": "00:13:10:85:fe:02",
+      "rssi": -62,
+      "frequency_mhz": 2437,
+      "channel": 6,
+      "band": "2.4GHz",
+      "security_type": "OPEN",
+      "capabilities_raw": "[ESS]",
+      "observed_at": "2026-07-20T10:00:02Z"
+    }
+  },
+  {
+    "model": "scans.wifiobservation",
+    "pk": 5,
+    "fields": {
+      "scan_session": "33333333-3333-3333-3333-333333333331",
+      "access_point": "00:13:10:85:fe:03",
+      "rssi": -71,
+      "frequency_mhz": 2462,
+      "channel": 11,
+      "band": "2.4GHz",
+      "security_type": "OPEN",
+      "capabilities_raw": "[ESS]",
+      "observed_at": "2026-07-20T10:00:02Z"
+    }
+  },
+  {
+    "model": "scans.wifiobservation",
+    "pk": 6,
+    "fields": {
+      "scan_session": "33333333-3333-3333-3333-333333333331",
+      "access_point": "00:13:10:85:fe:04",
+      "rssi": -75,
+      "frequency_mhz": 5180,
+      "channel": 36,
+      "band": "5GHz",
+      "security_type": "OPEN",
+      "capabilities_raw": "[ESS]",
+      "observed_at": "2026-07-20T10:00:02Z"
+    }
+  },
+
+  {
+    "model": "scans.wifiobservation",
+    "pk": 7,
+    "fields": {
+      "scan_session": "33333333-3333-3333-3333-333333333332",
+      "access_point": "00:13:10:85:fe:01",
+      "rssi": -58,
+      "frequency_mhz": 2412,
+      "channel": 1,
+      "band": "2.4GHz",
+      "security_type": "OPEN",
+      "capabilities_raw": "[ESS]",
+      "observed_at": "2026-07-20T10:10:02Z"
+    }
+  },
+  {
+    "model": "scans.wifiobservation",
+    "pk": 8,
+    "fields": {
+      "scan_session": "33333333-3333-3333-3333-333333333332",
+      "access_point": "00:13:10:85:fe:02",
+      "rssi": -48,
+      "frequency_mhz": 2437,
+      "channel": 6,
+      "band": "2.4GHz",
+      "security_type": "OPEN",
+      "capabilities_raw": "[ESS]",
+      "observed_at": "2026-07-20T10:10:02Z"
+    }
+  },
+  {
+    "model": "scans.wifiobservation",
+    "pk": 9,
+    "fields": {
+      "scan_session": "33333333-3333-3333-3333-333333333332",
+      "access_point": "00:13:10:85:fe:03",
+      "rssi": -65,
+      "frequency_mhz": 2462,
+      "channel": 11,
+      "band": "2.4GHz",
+      "security_type": "OPEN",
+      "capabilities_raw": "[ESS]",
+      "observed_at": "2026-07-20T10:10:02Z"
+    }
+  },
+  {
+    "model": "scans.wifiobservation",
+    "pk": 10,
+    "fields": {
+      "scan_session": "33333333-3333-3333-3333-333333333332",
+      "access_point": "00:13:10:85:fe:04",
+      "rssi": -70,
+      "frequency_mhz": 5180,
+      "channel": 36,
+      "band": "5GHz",
+      "security_type": "OPEN",
+      "capabilities_raw": "[ESS]",
+      "observed_at": "2026-07-20T10:10:02Z"
+    }
+  },
+
+  {
+    "model": "scans.wifiobservation",
+    "pk": 11,
+    "fields": {
+      "scan_session": "33333333-3333-3333-3333-333333333333",
+      "access_point": "00:13:10:85:fe:01",
+      "rssi": -72,
+      "frequency_mhz": 2412,
+      "channel": 1,
+      "band": "2.4GHz",
+      "security_type": "OPEN",
+      "capabilities_raw": "[ESS]",
+      "observed_at": "2026-07-20T10:20:02Z"
+    }
+  },
+  {
+    "model": "scans.wifiobservation",
+    "pk": 12,
+    "fields": {
+      "scan_session": "33333333-3333-3333-3333-333333333333",
+      "access_point": "00:13:10:85:fe:02",
+      "rssi": -60,
+      "frequency_mhz": 2437,
+      "channel": 6,
+      "band": "2.4GHz",
+      "security_type": "OPEN",
+      "capabilities_raw": "[ESS]",
+      "observed_at": "2026-07-20T10:20:02Z"
+    }
+  },
+  {
+    "model": "scans.wifiobservation",
+    "pk": 13,
+    "fields": {
+      "scan_session": "33333333-3333-3333-3333-333333333333",
+      "access_point": "00:13:10:85:fe:03",
+      "rssi": -47,
+      "frequency_mhz": 2462,
+      "channel": 11,
+      "band": "2.4GHz",
+      "security_type": "OPEN",
+      "capabilities_raw": "[ESS]",
+      "observed_at": "2026-07-20T10:20:02Z"
+    }
+  },
+  {
+    "model": "scans.wifiobservation",
+    "pk": 14,
+    "fields": {
+      "scan_session": "33333333-3333-3333-3333-333333333333",
+      "access_point": "00:13:10:85:fe:04",
+      "rssi": -55,
+      "frequency_mhz": 5180,
+      "channel": 36,
+      "band": "5GHz",
+      "security_type": "OPEN",
+      "capabilities_raw": "[ESS]",
+      "observed_at": "2026-07-20T10:20:02Z"
+    }
   }
 ]
