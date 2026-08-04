@@ -163,9 +163,33 @@ class ScanForegroundService : Service() {
         // Restore the last completed pass so the Dashboard isn't blank after a
         // force-stop or reboot. Only latestPass + completedScanCount are
         // restored; SurveyStats and previousPass stay session-scoped.
-        LastScanStore.load(applicationContext)?.let { (count, pass) ->
+        val local = LastScanStore.load(applicationContext)
+        if (local != null) {
+            val (count, pass) = local
             _uiState.update {
                 it.copy(latestPass = pass, completedScanCount = count)
+            }
+        } else if (settingsRepository.isConfigured) {
+            // No local pass and the app is configured — best-effort fetch of
+            // the latest backend scan so the Dashboard isn't empty on a fresh
+            // install of a device that has already uploaded scans. The
+            // reconstructed pass is display-only (never re-uploaded); see
+            // LatestScanFetcher. Silently fails on any error.
+            serviceScope.launch {
+                runCatching {
+                    LatestScanFetcher.fetch(
+                        backendUrl = settingsRepository.backendUrl!!,
+                        token = settingsRepository.sensorToken!!,
+                    )
+                }.onSuccess { pass ->
+                    if (pass != null) {
+                        _uiState.update {
+                            it.copy(latestPass = pass, completedScanCount = 1)
+                        }
+                    }
+                }.onFailure { e ->
+                    android.util.Log.w("ScanForegroundService", "LatestScanFetcher failed", e)
+                }
             }
         }
     }

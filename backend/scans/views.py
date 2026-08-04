@@ -534,8 +534,18 @@ class ScanSessionViewSet(
         # resolve-addresses actions below — human PWA housekeeping actions,
         # not something a sensor should ever call) uses the same admin
         # session used for /admin/. See MEMORY.md.
-        if getattr(self, "_resolved_action", None) == "create":
+        #
+        # The per-session observation detail actions (wifi-observations,
+        # cell-observations, etc.) and the list endpoint also accept a
+        # sensor token — the Android app fetches the latest session on a
+        # fresh install to backfill the Dashboard (see LatestScanFetcher).
+        # Session auth still works for the PWA; both are tried in order.
+        action = getattr(self, "_resolved_action", None)
+        if action == "create":
             return [SensorTokenAuthentication()]
+        if action in ("list", "retrieve", "wifi_observations", "cell_observations",
+                       "ble_observations", "satellite_observations", "lan_observations"):
+            return [SessionAuthentication(), SensorTokenAuthentication()]
         return [SessionAuthentication()]
 
     def get_permissions(self):
@@ -543,6 +553,14 @@ class ScanSessionViewSet(
 
     def get_queryset(self):
         qs = super().get_queryset()
+        # A sensor token (from the Android app) is scoped to its own sessions
+        # only — the app backfills its Dashboard from its own latest scan, not
+        # every device's. Session auth (the PWA) sees everything.
+        # SensorTokenAuthentication returns a Sensor (not a Django User), so
+        # checking the model type is the cleanest way to tell the two apart.
+        from sensors.models import Sensor
+        if isinstance(self.request.user, Sensor):
+            qs = qs.filter(sensor=self.request.user)
         sensor_id = self.request.query_params.get("sensor")
         if sensor_id:
             qs = qs.filter(sensor_id=sensor_id)
