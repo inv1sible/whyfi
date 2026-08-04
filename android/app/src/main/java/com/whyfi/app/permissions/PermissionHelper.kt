@@ -1,9 +1,12 @@
 package com.whyfi.app.permissions
 
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.net.wifi.WifiManager
 import android.os.Build
 import androidx.core.content.ContextCompat
 
@@ -40,5 +43,22 @@ object PermissionHelper {
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         return locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
             locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+    }
+
+    /** True if the Bluetooth adapter exists and is currently powered on.
+     * Uses BluetoothManager (not the deprecated static getDefaultAdapter)
+     * for the same reason as BleDeviceScanner — the static getter is
+     * unreliable on hardened ROMs. */
+    fun isBluetoothEnabled(context: Context): Boolean {
+        val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        return manager?.adapter?.isEnabled == true
+    }
+
+    /** True if the WiFi radio is currently enabled. On API 29+ a normal
+     * app can read this state but cannot *change* it (setWifiEnabled is
+     * restricted to system apps) — see MEMORY.md. */
+    fun isWifiEnabled(context: Context): Boolean {
+        val wifiManager = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        return wifiManager?.isWifiEnabled == true
     }
 }
