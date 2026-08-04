@@ -19,6 +19,7 @@ object PermissionHelper {
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             permissions += Manifest.permission.BLUETOOTH_SCAN
+            permissions += Manifest.permission.BLUETOOTH_CONNECT
             permissions += Manifest.permission.UWB_RANGING
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

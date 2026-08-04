@@ -241,15 +241,17 @@ fun ScanScreen(
         }
         if (includeBle && uiState.bleUnavailableReason != null) {
             Text("${uiState.bleUnavailableReason} BLE results will be empty until this is resolved.")
-            // Enable Bluetooth directly — no settings page, no dialog.
-            // BluetoothAdapter.enable() turns the adapter on immediately.
-            // Requires BLUETOOTH_CONNECT on API 33+ (added to the manifest).
+            // Turn Bluetooth on via the system "Allow whyfi to turn on
+            // Bluetooth?" dialog (ACTION_REQUEST_ENABLE). This works without
+            // BLUETOOTH_CONNECT runtime permission — the system handles the
+            // enable. The dialog stays in-app (doesn't leave to settings).
             // "This device has no Bluetooth adapter" has no button.
             if (uiState.bleUnavailableReason == "Bluetooth is turned off.") {
                 Button(onClick = {
                     runCatching {
-                        val btManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager
-                        btManager?.adapter?.enable()
+                        bluetoothEnableLauncher.launch(
+                            Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+                        )
                     }
                 }) {
                     Text("Turn on Bluetooth")
