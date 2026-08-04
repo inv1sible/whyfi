@@ -643,6 +643,23 @@ discard every scan forever. Sizes come from
 `LENGTH()` on TEXT counts characters, not bytes. No Room schema change, so no
 version bump.
 
+## Settings screen: Card-per-section layout
+
+The Settings screen wraps each configuration section (Appearance, Location
+source, Remote control, Backend connection, Scan cadence, Offline storage,
+Diagnostics) in a Material 3 `Card` rather than using bare `Text` headers in a
+flat `Column`. Section headers use `headlineSmall` (was `titleMedium`) so they
+read as headers, not body text.
+
+Why Cards over `HorizontalDivider` + bold headers: Cards give each section a
+self-contained visual block with built-in elevation/border, which is cleaner
+than a thin divider line that can get lost between dense controls. The
+backend URL/token fields (which had no header before) now sit under a
+"Backend connection" card header, giving them a labeled home.
+
+No logic, state, or behavior changed — this is a visual restructure only.
+The screen still scrolls via `verticalScroll`.
+
 ## Open/deferred (v-next, not forgotten, just not now)
 
 - Matter/Thread device discovery (via BLE commissioning adverts + mDNS) —
