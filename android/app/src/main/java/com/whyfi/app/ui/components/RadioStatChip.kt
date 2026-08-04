@@ -2,6 +2,7 @@ package com.whyfi.app.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -43,20 +44,23 @@ fun RadioStatChip(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
 ) {
+    // Fixed height so all chips in a row align regardless of whether they
+    // show a count, a spinner, or a dash — and so the row doesn't reflow
+    // when a phase starts/stops and swaps count↔spinner. The icon sits at
+    // top, the count/spinner in a fixed-height centered slot, the label
+    // at the bottom; the outer Column fills the fixed height so every chip
+    // in the row is exactly the same size.
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .height(96.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(accentColor.copy(alpha = 0.12f))
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.SpaceBetween,
     ) {
         Text(icon, fontSize = 18.sp)
-        Spacer(Modifier.height(4.dp))
-        // Fixed-height slot so the chip doesn't reflow when the spinner
-        // (18dp) replaces the count text (titleLarge, taller). Without
-        // this, the whole row visibly grows/shrinks as each radio's phase
-        // starts and ends — distracting mid-scan.
         Box(modifier = Modifier.height(28.dp), contentAlignment = Alignment.Center) {
             when {
                 isActivePhase -> CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = accentColor)

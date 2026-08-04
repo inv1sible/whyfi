@@ -12,7 +12,6 @@ import androidx.core.content.ContextCompat
 import com.google.gson.Gson
 import com.whyfi.app.ble.BleDeviceScanner
 import com.whyfi.app.cellular.CellularManager
-import com.whyfi.app.data.LocationSourcePreference
 import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.local.PendingScanDao
 import com.whyfi.app.data.local.PendingScanEntity
@@ -211,11 +210,8 @@ class ScanCoordinator(private val context: Context) {
      * only ever recording whichever one "won". FUSED mode reports the
      * fused reading as primary, falling back to the GPS/network pick if
      * fused is unavailable (older API level, or no fix yet). */
-    private fun resolveLocation(): ResolvedLocation = when (settingsRepository.locationSourcePreference) {
-        LocationSourcePreference.GPS -> ResolvedLocation(primary = lastKnownLocation(), fused = null)
-        LocationSourcePreference.FUSED -> ResolvedLocation(primary = fusedLocation() ?: lastKnownLocation(), fused = null)
-        LocationSourcePreference.BOTH -> ResolvedLocation(primary = lastKnownLocation(), fused = fusedLocation())
-    }
+    private fun resolveLocation(): ResolvedLocation =
+        ResolvedLocation(primary = lastKnownLocation(), fused = fusedLocation())
 
     private fun lastKnownLocation(): Location? = LocationSnapshot.lastKnown(context)
 

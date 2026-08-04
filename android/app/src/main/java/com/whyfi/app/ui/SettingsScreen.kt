@@ -33,7 +33,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.whyfi.app.BuildConfig
-import com.whyfi.app.data.LocationSourcePreference
 import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.ThemePreference
 import com.whyfi.app.data.remote.ApiClientFactory
@@ -67,7 +66,6 @@ fun SettingsScreen(
     }
     var token by remember { mutableStateOf(settingsRepository.sensorToken ?: "") }
     var savedMessage by remember { mutableStateOf<String?>(null) }
-    var locationSource by remember { mutableStateOf(settingsRepository.locationSourcePreference) }
     var quotaMb by remember { mutableStateOf(settingsRepository.outboxQuotaMb.toString()) }
     var adaptiveScan by remember { mutableStateOf(settingsRepository.adaptiveScanEnabled) }
     var stationaryInterval by remember { mutableStateOf(settingsRepository.stationaryIntervalSeconds.toString()) }
@@ -105,24 +103,12 @@ fun SettingsScreen(
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Location source", style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    "GPS is the original behavior (best of GPS/network) and stays the default. Fused uses Android's " +
-                        "combined location (API 31+); Both records the GPS/network reading as usual plus a separate fused " +
-                        "reading alongside it, for comparing the two.",
+                    "Each scan records both the GPS/network reading and Android's fused location " +
+                        "(API 31+) side by side, so the two can be compared on the backend. The " +
+                        "device picks whichever fix is freshest; no manual selection needed.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    LocationSourceOption("GPS", LocationSourcePreference.GPS, locationSource) {
-                        locationSource = it
-                        settingsRepository.locationSourcePreference = it
-                    }
-                    LocationSourceOption("Fused", LocationSourcePreference.FUSED, locationSource) {
-                        locationSource = it
-                        settingsRepository.locationSourcePreference = it
-                    }
-                    LocationSourceOption("Both", LocationSourcePreference.BOTH, locationSource) {
-                        locationSource = it
-                        settingsRepository.locationSourcePreference = it
-                    }
-                }
             }
         }
 
@@ -444,12 +430,3 @@ private fun ThemeOption(
     FilterChip(selected = current == value, onClick = { onSelect(value) }, label = { Text(label) })
 }
 
-@Composable
-private fun LocationSourceOption(
-    label: String,
-    value: LocationSourcePreference,
-    current: LocationSourcePreference,
-    onSelect: (LocationSourcePreference) -> Unit,
-) {
-    FilterChip(selected = current == value, onClick = { onSelect(value) }, label = { Text(label) })
-}

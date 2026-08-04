@@ -157,7 +157,10 @@ private fun WhyfiApp(
         }
 
         val openMission: () -> Unit = { showMission = true }
-        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize(),
+        ) { page ->
             when (page) {
                 0 -> DashboardScreen(
                     service = service, uiState = uiState, onOpenDetail = openDetail,
