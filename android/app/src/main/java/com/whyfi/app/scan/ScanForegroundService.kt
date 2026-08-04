@@ -160,6 +160,14 @@ class ScanForegroundService : Service() {
         scanCoordinator = ScanCoordinator(applicationContext)
         settingsRepository = SettingsRepository(applicationContext)
         createNotificationChannel()
+        // Restore the last completed pass so the Dashboard isn't blank after a
+        // force-stop or reboot. Only latestPass + completedScanCount are
+        // restored; SurveyStats and previousPass stay session-scoped.
+        LastScanStore.load(applicationContext)?.let { (count, pass) ->
+            _uiState.update {
+                it.copy(latestPass = pass, completedScanCount = count)
+            }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -233,6 +241,7 @@ class ScanForegroundService : Service() {
                 survey = surveyTally.snapshot(),
             )
         }
+        LastScanStore.clear(applicationContext)
     }
 
     private fun startRemoteAgentIfNeeded() {
@@ -560,6 +569,9 @@ class ScanForegroundService : Service() {
                 survey = surveyTally.snapshot(),
             )
         }
+        // Persist only the last pass + count so the Dashboard survives a
+        // restart. SurveyStats and previousPass are deliberately not persisted.
+        LastScanStore.save(applicationContext, _uiState.value.completedScanCount, pass)
     }
 
     /** Drops the persistent notification once nothing needs us alive.
