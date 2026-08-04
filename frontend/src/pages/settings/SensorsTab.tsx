@@ -68,6 +68,7 @@ export function SensorsTab() {
   const [error, setError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [revealed, setRevealed] = useState<RevealedToken | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -249,7 +250,33 @@ export function SensorsTab() {
           </p>
           <pre className="build-log">{revealed.token}</pre>
           <SetupQrCode sensor={revealed} />
-          <button onClick={() => setRevealed(null)}>Done</button>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
+            <button
+              onClick={() => {
+                const payload = setupQrPayload(revealed);
+                navigator.clipboard.writeText(payload).then(() => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                });
+              }}
+            >
+              {copied ? "Copied!" : "Copy setup link"}
+            </button>
+            <a
+              href={setupQrPayload(revealed)}
+              onClick={(e) => {
+                // whyfi-setup: isn't a real URL scheme browsers recognize —
+                // construct it as a clickable link that the OS will offer to
+                // open in the whyfi app. Prevent default so the browser
+                // doesn't try to navigate to it as http.
+                e.preventDefault();
+                window.location.href = setupQrPayload(revealed);
+              }}
+            >
+              <button type="button">Open in whyfi app</button>
+            </a>
+            <button onClick={() => setRevealed(null)}>Done</button>
+          </div>
         </div>
       )}
 
