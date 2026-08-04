@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Must live in the debug source set, not main. AGP rejects
+         ACCESS_MOCK_LOCATION in main with "should only be done in
+         debug builds." -->
+    <uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION" />
+</manifest>
