@@ -10,17 +10,27 @@ whyfi passive radio scanner on an Android emulator without a physical device.
    a new GPS fix so whyfi's `getLastKnownLocation()` returns a different
    position on every scan.
 
-2. **Geocoded position entry**: type a street address or place name, the app
-   geocodes it via Android's `Geocoder` (works on emulator with google_apis
-   system image), and that becomes the center point. Manual lat/lng entry is
-   also available as a fallback. The last-used position persists across
-   launches via SharedPreferences.
+2. **Map view for AP position**: an osmdroid (OpenStreetMap) map fills the
+   upper half of the screen.  After geocoding an address or entering lat/lng,
+   the map centers on the resolved point.  Tap anywhere on the map to move
+   the AP marker — the tapped point wins over the geocoded/typed position.
+   Pan and zoom are supported via multi-touch.  No Google Maps, no API key
+   (matches whyfi's Play-Services-free posture).
 
-3. **Walk shape control**: circle, oval, or rectangle. Adjust the size(s) in
+3. **Live-adjustable walk**: the walk shape (circle/oval/rectangle) and size
+   parameters are editable while the walk is running — the walker reads the
+   current config every tick, so changing shape or size updates the path in
+   real time without restarting.  Moving the AP marker while walking also
+   takes effect immediately.  The map shows:
+   - Green polyline: the path outline (shape boundary)
+   - Orange polyline: the trail the walker has actually followed
+   - AP marker and walker marker (updated each tick)
+
+4. **Walk shape control**: circle, oval, or rectangle. Adjust the size(s) in
    meters via text fields. The walk loosely follows the outline with random
    wander, varied dwell times (1-5s), and occasional pace changes.
 
-4. **Directional RSSI model**: models an AP at the geocoded position with a
+5. **Directional RSSI model**: models an AP at the geocoded position with a
    directional radiation pattern (36 sectors of 10 degrees, smoothed into a
    lumpy fixed-per-session antenna gain). As the walker moves around the AP,
    the observed RSSI = pattern_gain(bearing) - path_loss(distance) + noise.
@@ -44,7 +54,8 @@ own scan data. **Wiring that into whyfi's scan path is a separate task.**
 ## Build
 
 No JDK on the host — use the same Gradle Docker image as the whyfi
-android-builder:
+android-builder.  osmdroid is added as a dependency (same version as the
+whyfi Mission view — `org.osmdroid:osmdroid-android:6.1.20`).
 
 ```bash
 sudo docker run --rm -v /path/to/mockloc:/workspace -v /opt/android-sdk:/opt/android-sdk \
