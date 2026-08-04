@@ -253,19 +253,24 @@ fun MissionScreen(
     }
 }
 
-private fun statusBarText(uiState: MissionUiState): String = when {
-    uiState.isLoading -> "Locating…"
-    uiState.error != null -> uiState.error
-    uiState.truncated && uiState.isTracking -> {
-        "Showing ${uiState.points.size} readings (more exist) — tracking, outlined cone is your position."
+private fun statusBarText(uiState: MissionUiState): String {
+    val bssidCount = uiState.points.mapNotNull { it.bssid }.distinct().size
+    val multiAp = bssidCount > 1
+    fun apPhrase() = if (multiAp) " across $bssidCount access points" else ""
+    return when {
+        uiState.isLoading -> "Locating…"
+        uiState.error != null -> uiState.error
+        uiState.truncated && uiState.isTracking -> {
+            "Showing ${uiState.points.size} readings (more exist)${apPhrase()} — tracking, outlined cone is your position."
+        }
+        uiState.truncated -> "Showing ${uiState.points.size} readings${apPhrase()} — more exist near here."
+        uiState.isTracking && uiState.livePosition != null -> "Tracking — the outlined cone is your current position."
+        uiState.isTracking -> "Tracking — waiting for a GPS/network fix…"
+        uiState.points.isNotEmpty() -> {
+            "${uiState.points.size} reading${if (uiState.points.size == 1) "" else "s"}${apPhrase()} near your current location."
+        }
+        else -> ""
     }
-    uiState.truncated -> "Showing ${uiState.points.size} readings — more exist near here."
-    uiState.isTracking && uiState.livePosition != null -> "Tracking — the outlined cone is your current position."
-    uiState.isTracking -> "Tracking — waiting for a GPS/network fix…"
-    uiState.points.isNotEmpty() -> {
-        "${uiState.points.size} reading${if (uiState.points.size == 1) "" else "s"} near your current location."
-    }
-    else -> ""
 }
 
 @Composable
@@ -278,10 +283,23 @@ private fun MissionMap(
     val density = LocalDensity.current.density
     val overlay = remember(points, livePosition) { buildOverlay(points, livePosition, density) }
     // centerOverride only changes what the camera looks at — the cone
-    // estimate itself (buildOverlay's apex) always stays weighted-centroid-
-    // based, regardless of this toggle.
+    // estimate itself (buildOverlay's apexes) always stays weighted-centroid-
+    // based per BSSID group, regardless of this toggle.
     val center = remember(points, centerOverride) {
-        centerOverride ?: Geo.weightedCentroid(points.map { WeightedLatLng(it.lat, it.lng, it.weight) })
+        centerOverride ?: run {
+            // Center on the midpoint of all BSSID-group centroids so every
+            // AP position is visible; falls back to the overall centroid
+            // when there's only one group (the common single-AP case).
+            val groups = points.groupBy { it.bssid ?: SINGLE_GROUP_KEY }
+            if (groups.size > 1) {
+                val centroids = groups.values.map { group ->
+                    Geo.weightedCentroid(group.map { WeightedLatLng(it.lat, it.lng, it.weight) })
+                }
+                LatLng(centroids.map { it.lat }.average(), centroids.map { it.lng }.average())
+            } else {
+                Geo.weightedCentroid(points.map { WeightedLatLng(it.lat, it.lng, it.weight) })
+            }
+        }
     }
 
     AndroidView(
@@ -313,35 +331,76 @@ private fun MissionMap(
     )
 }
 
+private const val SINGLE_GROUP_KEY = "__single__"
+
+private data class BssidGroup(
+    val bssid: String?,
+    val apex: LatLng,
+    val points: List<MissionPoint>,
+)
+
 private fun buildOverlay(points: List<MissionPoint>, livePosition: LatLng?, density: Float): ConeOverlay {
-    val apex = Geo.weightedCentroid(points.map { WeightedLatLng(it.lat, it.lng, it.weight) })
-    val historicalShapes = points.map { point ->
-        val target = LatLng(point.lat, point.lng)
-        val color = SignalColor.signalStrengthColorArgb(point.weight)
-        val cone = Geo.conePolygon(apex, target)
-        if (cone != null) {
-            MissionShape.Cone(Geo.smoothPolygon(cone, 1), color)
+    // Group by BSSID so each AP gets its own estimated position. Points
+    // without a BSSID (BLE/cell, or legacy WiFi with a missing field) all
+    // land in one group keyed by SINGLE_GROUP_KEY — they render as before,
+    // from a single centroid.
+    val groups = points.groupBy { it.bssid ?: SINGLE_GROUP_KEY }
+        .map { (key, pts) ->
+            BssidGroup(
+                bssid = if (key == SINGLE_GROUP_KEY) null else key,
+                apex = Geo.weightedCentroid(pts.map { WeightedLatLng(it.lat, it.lng, it.weight) }),
+                points = pts,
+            )
+        }
+
+    val multiAp = groups.size > 1
+
+    val historicalShapes = mutableListOf<MissionShape>()
+    val apexes = mutableListOf<LatLng>()
+
+    groups.forEach { group ->
+        apexes.add(group.apex)
+        // Color by BSSID group when multiple APs are present (so the user
+        // can visually distinguish them); fall back to signal-strength
+        // coloring for the single-group case (preserves the prior look).
+        val groupColor = if (multiAp && group.bssid != null) {
+            SignalColor.bssidColorArgb(group.bssid)
         } else {
-            val circle = Geo.circlePolygon(target, MissionController.FALLBACK_CIRCLE_RADIUS_M)
-            MissionShape.Circle(Geo.smoothPolygon(circle, 1), color)
+            null
+        }
+        group.points.forEach { point ->
+            val target = LatLng(point.lat, point.lng)
+            val color = groupColor ?: SignalColor.signalStrengthColorArgb(point.weight)
+            val cone = Geo.conePolygon(group.apex, target)
+            if (cone != null) {
+                historicalShapes.add(MissionShape.Cone(Geo.smoothPolygon(cone, 1), color))
+            } else {
+                val circle = Geo.circlePolygon(target, MissionController.FALLBACK_CIRCLE_RADIUS_M)
+                historicalShapes.add(MissionShape.Circle(Geo.smoothPolygon(circle, 1), color))
+            }
         }
     }
 
-    // The live "you are here" shape — always emphasized, which is also what
-    // tells ConeOverlay to fade every shape above. Falls back to a small
-    // circle at the live position itself when a cone can't be drawn (too
-    // close to the apex, or the apex/live position coincide).
+    // The live "you are here" cone: drawn from the user's position toward
+    // the nearest BSSID group's apex — the AP you're currently closest to,
+    // which is the most useful "which way to walk" signal. Falls back to a
+    // small circle at the live position when a cone can't be drawn.
     val liveShape = livePosition?.let { live ->
-        val cone = Geo.conePolygon(apex, live)
-        if (cone != null) {
-            MissionShape.Cone(Geo.smoothPolygon(cone, 1), ConeOverlay.EMPHASIS_STROKE_ARGB, emphasized = true)
+        val nearestApex = apexes.minByOrNull { Geo.haversineDistanceMeters(live.lat, live.lng, it.lat, it.lng) }
+        if (nearestApex != null) {
+            val cone = Geo.conePolygon(nearestApex, live)
+            if (cone != null) {
+                MissionShape.Cone(Geo.smoothPolygon(cone, 1), ConeOverlay.EMPHASIS_STROKE_ARGB, emphasized = true)
+            } else {
+                val circle = Geo.circlePolygon(live, MissionController.FALLBACK_CIRCLE_RADIUS_M)
+                MissionShape.Circle(Geo.smoothPolygon(circle, 1), ConeOverlay.ESTIMATED_POSITION_GREEN_ARGB, emphasized = true)
+            }
         } else {
-            val circle = Geo.circlePolygon(live, MissionController.FALLBACK_CIRCLE_RADIUS_M)
-            MissionShape.Circle(Geo.smoothPolygon(circle, 1), ConeOverlay.ESTIMATED_POSITION_GREEN_ARGB, emphasized = true)
+            null
         }
     }
 
     val shapes = if (liveShape != null) historicalShapes + liveShape else historicalShapes
     val readingPoints = points.map { LatLng(it.lat, it.lng) } + listOfNotNull(livePosition)
-    return ConeOverlay(shapes, apex, readingPoints, fadeNonEmphasized = liveShape != null, strokeWidthPx = 3f * density)
+    return ConeOverlay(shapes, apexes, readingPoints, fadeNonEmphasized = liveShape != null, strokeWidthPx = 3f * density)
 }

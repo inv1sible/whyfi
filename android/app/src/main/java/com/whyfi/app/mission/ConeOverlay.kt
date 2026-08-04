@@ -51,7 +51,7 @@ sealed interface MissionShape {
  */
 class ConeOverlay(
     private val shapes: List<MissionShape>,
-    private val apex: LatLng?,
+    private val apexes: List<LatLng>,
     private val readingPoints: List<LatLng>,
     /** True while live tracking has a position fix — fades every
      * non-emphasized shape so the live "you are here" cone (the one
@@ -72,6 +72,13 @@ class ConeOverlay(
         style = Paint.Style.FILL
         isAntiAlias = true
         color = ESTIMATED_POSITION_GREEN_ARGB
+    }
+
+    private val apexRingPaint = Paint().apply {
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+        color = 0xFFFFFFFF.toInt()
+        strokeWidth = 3f
     }
 
     // Slate — a plain reading dot, not signal-colored (the shape it feeds
@@ -131,9 +138,10 @@ class ConeOverlay(
             canvas.drawCircle(px.x.toFloat(), px.y.toFloat(), 5f, readingPaint)
         }
 
-        apex?.let {
-            val px = projection.toPixels(GeoPoint(it.lat, it.lng), null)
+        apexes.forEach { apex ->
+            val px = projection.toPixels(GeoPoint(apex.lat, apex.lng), null)
             canvas.drawCircle(px.x.toFloat(), px.y.toFloat(), 10f, apexPaint)
+            canvas.drawCircle(px.x.toFloat(), px.y.toFloat(), 10f, apexRingPaint)
         }
     }
 

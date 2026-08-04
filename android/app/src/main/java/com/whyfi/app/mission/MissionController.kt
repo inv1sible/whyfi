@@ -29,8 +29,10 @@ data class MissionTarget(val kind: RadioKind, val identifier: String)
 /** Radio-agnostic point Mission view actually renders — the three backend
  * responses carry a few kind-specific fields (bssid, scan_session_id, …)
  * that nothing here uses; MissionController flattens all three down to just
- * what Geo.kt/ConeOverlay need. */
-data class MissionPoint(val lat: Double, val lng: Double, val weight: Double)
+ * what Geo.kt/ConeOverlay need. [bssid] is carried for WiFi so MissionScreen
+ * can group readings by AP (multi-AP deployments broadcasting the same
+ * SSID); null for BLE/cell, which have no BSSID and collapse to one group. */
+data class MissionPoint(val lat: Double, val lng: Double, val weight: Double, val bssid: String? = null)
 
 data class MissionUiState(
     val target: MissionTarget? = null,
@@ -192,7 +194,7 @@ class MissionController(
                         _uiState.value = _uiState.value.copy(isLoading = false, error = "Fetch failed (HTTP ${response.code()}).")
                         return
                     }
-                    body.points.map { MissionPoint(it.lat, it.lng, it.weight) } to body.truncated
+                    body.points.map { MissionPoint(it.lat, it.lng, it.weight, it.bssid) } to body.truncated
                 }
                 RadioKind.BLE -> {
                     val response = api.missionBleObservations(

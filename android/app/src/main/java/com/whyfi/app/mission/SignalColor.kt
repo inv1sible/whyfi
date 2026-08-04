@@ -24,4 +24,37 @@ object SignalColor {
 
     fun signalStrengthColorArgb(dbm: Double): Int =
         (STEPS.firstOrNull { dbm >= it.min } ?: STEPS.last()).color
+
+    /** Per-BSSID hue for multi-AP deployments: hashes the BSSID string to a
+     * stable hue on the color wheel, then returns a full-alpha ARGB int at
+     * fixed saturation/value so groups are visually distinct on the map.
+     * Used as the cone's edge color (replacing signal-strength coloring)
+     * when more than one BSSID group is present — see MissionScreen. */
+    fun bssidColorArgb(bssid: String): Int {
+        var hash = 0
+        for (c in bssid) hash = hash * 31 + c.code
+        val hue = ((hash and 0xFFFF).toFloat() / 0xFFFF) * 360f
+        return hsvToArgb(hue, 0.65f, 0.85f)
+    }
+
+    /** HSV → ARGB. Pure Kotlin (no android.graphics.Color) so this stays
+     * unit-testable — see the class doc. */
+    private fun hsvToArgb(hue: Float, saturation: Float, value: Float): Int {
+        val c = value * saturation
+        val x = c * (1f - kotlin.math.abs((hue / 60f) % 2f - 1f))
+        val m = value - c
+        val (r, g, b) = when {
+            hue < 60f -> Triple(c, x, 0f)
+            hue < 120f -> Triple(x, c, 0f)
+            hue < 180f -> Triple(0f, c, x)
+            hue < 240f -> Triple(0f, x, c)
+            hue < 300f -> Triple(x, 0f, c)
+            else -> Triple(c, 0f, x)
+        }
+        val ri = ((r + m) * 255).toInt().coerceIn(0, 255)
+        val gi = ((g + m) * 255).toInt().coerceIn(0, 255)
+        val bi = ((b + m) * 255).toInt().coerceIn(0, 255)
+        return (0xFF shl 24) or (ri shl 16) or (gi shl 8) or bi
+    }
 }
+

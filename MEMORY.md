@@ -817,3 +817,33 @@ authenticator for the scan-session list/retrieve/detail actions in
 the PWA; both are tried in order). The queryset is scoped to the
 sensor's own sessions when a sensor token is used, so a device only sees
 its own scans.
+
+## Mission view: per-BSSID AP position estimation
+
+Mission view used to collapse all WiFi readings for a favorited SSID into
+a single weighted centroid — one estimated AP position. For a multi-AP
+deployment (e.g. a hotel with many APs broadcasting the same SSID), that
+was wrong: it averaged physically separate APs into one point.
+
+Now `MissionPoint` carries `bssid` (populated from the WiFi backend
+response; null for BLE/cell which have no BSSID). `buildOverlay` groups
+points by BSSID, computes a separate `weightedCentroid` per group, and
+renders one cone cluster per AP — each with its own apex marker. The
+map camera centers on the midpoint of all group centroids when more than
+one group is present, so every AP position is visible.
+
+Coloring: when only one BSSID group exists (the common single-AP case),
+cones keep the original signal-strength gradient (green to red by RSSI).
+When multiple groups are present, each group gets a distinct hue derived
+from a hash of its BSSID string (`SignalColor.bssidColorArgb`), so the
+user can visually distinguish which readings belong to which AP. The
+function is pure Kotlin (no `android.graphics.Color`) to stay
+unit-testable.
+
+The live "you are here" cone is drawn from the user position toward the
+nearest BSSID group apex — the AP you are currently closest to, which is
+the most useful "which way to walk" signal.
+
+Status bar text now mentions the number of distinct APs when more than
+one is found, e.g. "18 readings across 4 access points near your current
+location."
