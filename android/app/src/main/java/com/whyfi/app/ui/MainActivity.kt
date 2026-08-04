@@ -1,6 +1,8 @@
 package com.whyfi.app.ui
 
+import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -47,6 +49,12 @@ class MainActivity : ComponentActivity() {
         // live indicator dot.
         missionController = MissionController(applicationContext, settingsRepository)
 
+        // Handle a deep link or shared text containing a whyfi-setup:{json}
+        // payload — auto-configures backend URL + sensor token so the user
+        // doesn't have to type them. Works from a whyfi-setup:// link (web
+        // UI) or a text-share (clipboard paste → share to whyfi).
+        handleSetupIntent(intent)
+
         setContent {
             var themePreference by remember { mutableStateOf(settingsRepository.themePreference) }
 
@@ -65,6 +73,43 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleSetupIntent(intent)
+    }
+
+    /** Extracts a whyfi-setup:{json} payload from a deep link or shared text
+     * and applies the backend URL + sensor token. The same payload format
+     * the QR code uses (see SettingsScreen's SETUP_QR_PREFIX) — a clickable
+     * link from the web UI or a shared text both work. */
+    private fun handleSetupIntent(intent: Intent?) {
+        val raw = extractSetupPayload(intent) ?: return
+        if (!raw.startsWith("whyfi-setup:")) return
+        runCatching {
+            val payload = org.json.JSONObject(raw.removePrefix("whyfi-setup:"))
+            val backend = payload.getString("backend")
+            val token = payload.getString("token")
+            settingsRepository.backendUrl = backend
+            settingsRepository.sensorToken = token
+            Log.i("MainActivity", "Auto-configured from setup link")
+        }.onFailure { e ->
+            Log.e("MainActivity", "Could not parse setup payload", e)
+        }
+    }
+
+    private fun extractSetupPayload(intent: Intent?): String? {
+        intent ?: return null
+        // Deep link: whyfi-setup://{json} or whyfi-setup:{json} as data
+        val data = intent.dataString
+        if (data != null && data.startsWith("whyfi-setup:")) return data
+        // Shared text (SEND intent, text/plain)
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+        if (text != null && text.contains("whyfi-setup:")) {
+            return text.substring(text.indexOf("whyfi-setup:"))
+        }
+        return null
     }
 }
 

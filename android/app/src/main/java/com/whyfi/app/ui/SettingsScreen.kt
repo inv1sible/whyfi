@@ -193,6 +193,40 @@ fun SettingsScreen(
                     Text("Scan QR to configure")
                 }
 
+                // Paste alternative for devices without a camera (emulator)
+                // or when copying the setup string from the web UI is easier.
+                // Accepts the same whyfi-setup:{...} payload the QR encodes.
+                var pasteField by remember { mutableStateOf("") }
+                OutlinedTextField(
+                    value = pasteField,
+                    onValueChange = { pasteField = it },
+                    label = { Text("Or paste setup code") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Button(onClick = {
+                    val raw = pasteField.trim()
+                    when {
+                        raw.isEmpty() -> savedMessage = "Paste a setup code first."
+                        !raw.startsWith(SETUP_QR_PREFIX) -> savedMessage = "That isn't a whyfi setup code."
+                        else -> runCatching {
+                            val payload = JSONObject(raw.removePrefix(SETUP_QR_PREFIX))
+                            val newBackend = payload.getString("backend")
+                            val newToken = payload.getString("token")
+                            val name = payload.optString("name", "")
+                            backendUrl = newBackend
+                            token = newToken
+                            settingsRepository.backendUrl = newBackend
+                            settingsRepository.sensorToken = newToken
+                            pasteField = ""
+                            savedMessage = if (name.isNotBlank()) "Configured for \"$name\" and saved." else "Configured and saved."
+                        }.onFailure { e ->
+                            savedMessage = "Could not read that setup code: ${e.message}"
+                        }
+                    }
+                }) {
+                    Text("Apply pasted code")
+                }
+
                 OutlinedTextField(
                     value = backendUrl,
                     onValueChange = { backendUrl = it },
