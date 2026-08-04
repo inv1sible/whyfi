@@ -246,18 +246,9 @@ fun ScanScreen(
             // no button because there's nothing to enable.
             if (uiState.bleUnavailableReason == "Bluetooth is turned off.") {
                 Button(onClick = {
-                    // ACTION_REQUEST_ENABLE can throw ActivityNotFoundException
-                    // if the adapter state changed between the check and the
-                    // launch (e.g. Bluetooth turned on by another path), or
-                    // on devices where the intent isn't resolvable. Guard it
-                    // so a race doesn't crash the app on the second tap.
-                    runCatching {
-                        bluetoothEnableLauncher.launch(
-                            Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-                        )
-                    }
+                    runCatching { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
                 }) {
-                    Text("Turn on Bluetooth")
+                    Text("Open Bluetooth settings")
                 }
             }
         }
