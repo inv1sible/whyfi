@@ -157,6 +157,7 @@ class ScanForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        android.util.Log.i("ScanForegroundService", "onCreate")
         scanCoordinator = ScanCoordinator(applicationContext)
         settingsRepository = SettingsRepository(applicationContext)
         createNotificationChannel()
@@ -164,6 +165,7 @@ class ScanForegroundService : Service() {
         // force-stop or reboot. Only latestPass + completedScanCount are
         // restored; SurveyStats and previousPass stay session-scoped.
         val local = LastScanStore.load(applicationContext)
+        android.util.Log.i("ScanForegroundService", "local=$local isConfigured=${settingsRepository.isConfigured} url=${settingsRepository.backendUrl}")
         if (local != null) {
             val (count, pass) = local
             _uiState.update {
@@ -176,12 +178,14 @@ class ScanForegroundService : Service() {
             // reconstructed pass is display-only (never re-uploaded); see
             // LatestScanFetcher. Silently fails on any error.
             serviceScope.launch {
+                android.util.Log.i("ScanForegroundService", "launching LatestScanFetcher")
                 runCatching {
                     LatestScanFetcher.fetch(
                         backendUrl = settingsRepository.backendUrl!!,
                         token = settingsRepository.sensorToken!!,
                     )
                 }.onSuccess { pass ->
+                    android.util.Log.i("ScanForegroundService", "LatestScanFetcher returned: $pass")
                     if (pass != null) {
                         _uiState.update {
                             it.copy(latestPass = pass, completedScanCount = 1)

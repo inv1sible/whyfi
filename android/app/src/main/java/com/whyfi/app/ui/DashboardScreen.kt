@@ -62,7 +62,11 @@ fun DashboardScreen(
     ) {
         Text("Dashboard", style = MaterialTheme.typography.headlineSmall)
 
-        if (!survey.hasData) {
+        // survey.hasData tracks the session-scoped tally (passCount), which
+        // stays 0 when the Dashboard is backfilled from the backend rather
+        // than from a local scan. Also check latestPass so a backfilled
+        // Dashboard isn't blank even though the survey tally is empty.
+        if (!survey.hasData && uiState.latestPass == null) {
             Text(
                 "Nothing scanned yet. Run a scan on the Scan tab and everything this phone " +
                     "hears will be totalled up here.",
