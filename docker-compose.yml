@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-whyfi}
       POSTGRES_USER: ${POSTGRES_USER:-whyfi}
@@ -14,6 +15,7 @@ services:
       retries: 10
 
   backend:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: backend/Dockerfile
