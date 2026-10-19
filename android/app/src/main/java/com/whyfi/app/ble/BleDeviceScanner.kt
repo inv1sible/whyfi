@@ -26,14 +26,28 @@ class BleDeviceScanner(private val context: Context) {
      * the scan just silently ended early. */
     fun unavailableReason(): String? {
         val bluetoothAdapter = adapter ?: return "This device has no Bluetooth adapter."
-        if (!bluetoothAdapter.isEnabled) return "Bluetooth is turned off."
-        return null
+        return when (bluetoothAdapter.isEnabledOrNull()) {
+            true -> null
+            false -> "Bluetooth is turned off."
+            null -> "Bluetooth permission not granted."
+        }
     }
+
+    /** Reading adapter state throws SecurityException rather than returning
+     * false when the Bluetooth permissions aren't held — and below API 31
+     * the one that matters is the legacy BLUETOOTH permission, not
+     * BLUETOOTH_SCAN. The manifest declares both tiers, so this is defence
+     * in depth: an *availability probe* must never be able to take the app
+     * down, which is exactly what it did here (the Scan tab calls this on
+     * composition, so the crash landed before any scan ran). Same
+     * discipline as LanScanner — a refusal is a reason, not a failure. */
+    private fun BluetoothAdapter.isEnabledOrNull(): Boolean? =
+        runCatching { isEnabled }.getOrNull()
 
     @SuppressLint("MissingPermission")
     suspend fun scan(durationMs: Long = 6000): List<BleObservationDto> {
         val bluetoothAdapter = adapter ?: return emptyList()
-        if (!bluetoothAdapter.isEnabled) return emptyList()
+        if (bluetoothAdapter.isEnabledOrNull() != true) return emptyList()
         val scanner = bluetoothAdapter.bluetoothLeScanner ?: return emptyList()
 
         val seenByAddress = LinkedHashMap<String, BleObservationDto>()

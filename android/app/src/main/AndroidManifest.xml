@@ -22,7 +22,15 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
-    <!-- BLE device discovery (Android 12+) -->
+    <!-- BLE device discovery. Two tiers, because BLUETOOTH_SCAN/_CONNECT
+         only exist from API 31 — below that the adapter is gated by the
+         legacy install-time permissions, and without them even reading
+         BluetoothAdapter.isEnabled throws SecurityException. minSdk is 28,
+         so dropping these crashes every pre-Android-12 device the moment
+         the Scan tab probes BLE availability. maxSdkVersion keeps them off
+         API 31+, where the runtime pair below supersedes them. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <!-- Enabling Bluetooth from the Scan tab (API 33+) -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />

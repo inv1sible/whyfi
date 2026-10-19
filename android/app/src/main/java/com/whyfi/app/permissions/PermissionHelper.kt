@@ -52,7 +52,9 @@ object PermissionHelper {
      * unreliable on hardened ROMs. */
     fun isBluetoothEnabled(context: Context): Boolean {
         val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-        return manager?.adapter?.isEnabled == true
+        // Throws SecurityException without the Bluetooth permissions rather
+        // than reporting false — see BleDeviceScanner.isEnabledOrNull.
+        return runCatching { manager?.adapter?.isEnabled == true }.getOrDefault(false)
     }
 
     /** True if the WiFi radio is currently enabled. On API 29+ a normal
