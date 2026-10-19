@@ -43,7 +43,8 @@ Android **native** apps can:
   ICMP/root needed — see `docs/android-setup.md`'s LAN scanner notes).
 
 All of the above require `ACCESS_FINE_LOCATION` (Android ties WiFi/BLE/GNSS
-data to location permission) and, for BLE on Android 12+, `BLUETOOTH_SCAN`.
+data to location permission) and, for BLE, `BLUETOOTH_SCAN` on Android 12+
+or the legacy install-time `BLUETOOTH`/`BLUETOOTH_ADMIN` on Android 9–11.
 
 Because of this, the Android app is a first-class native scanning client
 (not a WebView wrapper around the PWA) that POSTs to the same REST API any

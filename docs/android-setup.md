@@ -46,7 +46,10 @@ WiFi scan-throttle path):
 2. Grant location permission when prompted; confirm the app warns you if
    device location services are off (WiFi/BLE/GNSS results are empty or
    stale without it).
-3. Grant Bluetooth permission (Android 12+: `BLUETOOTH_SCAN`).
+3. Grant Bluetooth permission (Android 12+: `BLUETOOTH_SCAN`). On Android
+   9–11 there is no prompt — the legacy `BLUETOOTH`/`BLUETOOTH_ADMIN`
+   permissions are granted at install; confirm the Scan tab opens without
+   crashing.
 4. Enter the sensor token in Settings (backend URL is pre-filled from
    `WHYFI_PUBLIC_URL` in `.env` at build time if set — still editable, and
    never pre-filled with a token, since a token baked into a shared APK
@@ -66,7 +69,13 @@ WiFi scan-throttle path):
 ## Permissions this app requests
 
 `ACCESS_FINE_LOCATION`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_STATE`,
-`READ_PHONE_STATE`, `BLUETOOTH_SCAN`, `UWB_RANGING` (only if a "locate this
-device" action is used), `INTERNET`, `ACCESS_NETWORK_STATE`. The LAN
+`READ_PHONE_STATE`, `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, `UWB_RANGING`
+(only if a "locate this device" action is used), `INTERNET`,
+`ACCESS_NETWORK_STATE`. On Android 9–11 (API 28–30) Bluetooth is instead
+gated by the install-time `BLUETOOTH` and `BLUETOOTH_ADMIN` permissions,
+declared with `maxSdkVersion="30"` — without them even reading
+`BluetoothAdapter.isEnabled` throws `SecurityException`, which crashed the
+Scan tab on those versions until PR #1. Don't drop them while `minSdk` is
+below 31. The LAN
 scanner needs no additional permission beyond `INTERNET`/`ACCESS_NETWORK_STATE`
 already listed — it's plain TCP sockets, not a privileged API.
