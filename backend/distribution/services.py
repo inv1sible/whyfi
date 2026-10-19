@@ -4,6 +4,8 @@ Instead, the backend and the always-running `android-builder` watcher
 service talk exclusively through plain files on their shared `build_output`
 volume:
 
+  backend writes  build_output/<release-id>.version_code -> "<int>"
+  backend writes  build_output/<release-id>.version_name -> "<text>"
   backend writes  build_output/request.txt        -> "<release-id>"
   builder writes  build_output/<release-id>.state  -> "BUILDING" | "SUCCESS" | "FAILED"
   builder writes  build_output/<release-id>.log    -> full gradle output
@@ -45,6 +47,13 @@ def trigger_build(version_name: str = "", notes: str = "") -> AppRelease:
     )
 
     BUILD_SIGNAL_DIR.mkdir(parents=True, exist_ok=True)
+    # The APK's own versionCode/versionName come from these, not from the
+    # release row — without them every APK was versionCode 1, so Android
+    # refused to install a release over any build with a real version.
+    # Written before request.txt so the watcher never sees a request
+    # without its version.
+    (BUILD_SIGNAL_DIR / f"{release.id}.version_code").write_text(str(release.version_code))
+    (BUILD_SIGNAL_DIR / f"{release.id}.version_name").write_text(release.version_name)
     (BUILD_SIGNAL_DIR / "request.txt").write_text(str(release.id))
     return release
 

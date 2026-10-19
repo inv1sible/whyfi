@@ -95,6 +95,13 @@ class TriggerBuildTests(TestCase):
         self.assertTrue(signal_file.exists())
         self.assertEqual(signal_file.read_text(), str(release.id))
 
+    def test_trigger_writes_version_for_the_apk(self):
+        AppRelease.objects.create(version_code=45, version_name="old", build_status=AppRelease.BuildStatus.SUCCESS)
+        release = trigger_build(version_name="bt-fix")
+        signal_dir = Path(self.signal_dir.name)
+        self.assertEqual((signal_dir / f"{release.id}.version_code").read_text(), "46")
+        self.assertEqual((signal_dir / f"{release.id}.version_name").read_text(), "bt-fix")
+
     def test_version_code_auto_increments(self):
         AppRelease.objects.create(version_code=5, version_name="old", build_status=AppRelease.BuildStatus.SUCCESS)
         release = trigger_build()

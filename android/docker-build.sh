@@ -20,6 +20,16 @@ while true; do
 
     echo "BUILDING" > "$SIGNAL_DIR/$BUILD_ID.state"
 
+    # The APK's versionCode/versionName (read by app/build.gradle.kts).
+    # Plain `cat`, never sourced: the name is free text from the PWA.
+    unset WHYFI_VERSION_CODE WHYFI_VERSION_NAME
+    if [ -s "$SIGNAL_DIR/$BUILD_ID.version_code" ]; then
+      export WHYFI_VERSION_CODE="$(cat "$SIGNAL_DIR/$BUILD_ID.version_code")"
+    fi
+    if [ -s "$SIGNAL_DIR/$BUILD_ID.version_name" ]; then
+      export WHYFI_VERSION_NAME="$(cat "$SIGNAL_DIR/$BUILD_ID.version_name")"
+    fi
+
     if gradle assembleRelease --no-daemon --console=plain > "$SIGNAL_DIR/$BUILD_ID.log" 2>&1; then
       APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n1)
       if [ -n "$APK_PATH" ]; then
