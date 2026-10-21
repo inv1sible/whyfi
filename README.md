@@ -45,8 +45,19 @@ More screenshots (mobile PWA, desktop PWA, and the native Android app) in
 ## Quickstart
 
 ```bash
+git clone --recurse-submodules https://github.com/inv1sible/whyfi.git
+cd whyfi
 cp .env.example .env
 docker compose up
+```
+
+The Android app's native USB monitor-mode library builds from two git
+submodules (`devourer`, `libusb` under `android/app/src/main/cpp/`). Without
+them the Android build fails. If you already cloned without
+`--recurse-submodules`, fetch them with:
+
+```bash
+git submodule update --init
 ```
 
 Then open `http://localhost:8000` (or wherever you point your own reverse
