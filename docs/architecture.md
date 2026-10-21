@@ -51,6 +51,35 @@ Because of this, the Android app is a first-class native scanning client
 browser/PWA client reads from. See `docs/android-setup.md` for permission and
 build details.
 
+## USB monitor mode on Android
+
+The built-in phone WiFi API provides scan results, not raw 802.11 frames. A
+supported USB WiFi adapter connected over OTG supplies monitor-mode reception
+instead. Android grants the app access to the selected USB device; the native
+`devourer`/`libusb` library uses that device descriptor to receive frames.
+The Android Monitor tab groups observed APs and clients, including clients
+that send probe requests without an observed AP association. Channel selection
+covers the listed 2.4/5 GHz channels; the adapter has no 6 GHz radio.
+
+The current session runs in `ScanForegroundService` with a visible notification
+and a ten-minute limit. The Monitor tab is visible from first launch and its
+controls unlock after a successful USB monitor test. Its collapsible channel
+panel can use observed per-channel frame totals for the next session.
+Observations and device-type guesses remain in memory
+on the phone; they do not enter `ScanSession`, the outbox, or the PWA. A
+missing association in sampled traffic does not prove a client is unassociated,
+and a randomized MAC must not be linked to a physical device without evidence.
+Persistent evidence and WebUI analysis need a separate data model.
+
+Monitor missions are durable local records, distinct from the in-memory
+device view: each owns a PDF report, append-only JSONL log, and optional
+200 MB-capped PCAP. Starting another capture creates a new UUID directory
+without replacing earlier artifacts. The Missions tab lists file presence
+and sizes, can open the PDF or export the PCAP, and uploads only after an
+explicit tap. The backend stores each file under that UUID and exposes
+authenticated downloads in the WebUI's Monitor Missions page. Successful
+upload marks the phone's copy but does not delete it.
+
 ## Sighting tables
 
 Every page with a "Sighting history" table renders `components/SightingTable`.

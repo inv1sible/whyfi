@@ -26,6 +26,7 @@ import type {
   LANDevice,
   LANObservation,
   MeshHypothesis,
+  MonitorMission,
   Paginated,
   PositionComparison,
   ProbabilityGrid,
@@ -302,6 +303,7 @@ function positionQuery(opts: PositionOpts): string {
 }
 
 export const api = {
+  monitorMissions: () => get<MonitorMission[]>("/monitor-missions/"),
   health: () => get<{ status: string }>("/health/"),
 
   session: () => get<{ authenticated: boolean; username?: string }>("/auth/session/"),

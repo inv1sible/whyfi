@@ -56,6 +56,7 @@ fun SettingsScreen(
     themePreference: ThemePreference,
     onThemePreferenceChange: (ThemePreference) -> Unit,
     service: ScanForegroundService?,
+    onAdvancedModeChange: (Boolean) -> Unit,
 ) {
     // Pre-filled from the build (WHYFI_PUBLIC_URL, set when this APK was
     // built) if nothing's been saved yet — still just a starting point,
@@ -76,6 +77,7 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
 
     var remoteControlOn by remember { mutableStateOf(settingsRepository.remoteControlEnabled) }
+    var monitorTestPassed by remember { mutableStateOf(settingsRepository.monitorTestPassed) }
     val permissionsGranted = PermissionHelper.hasAllRequiredPermissions(context)
 
     Column(
@@ -412,12 +414,26 @@ fun SettingsScreen(
                 }
 
                 // SPIKE: USB monitor-mode feasibility test (usbmon/).
+                Text("Monitor unlock", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (monitorTestPassed) "USB monitor test passed. The Monitor tab is enabled."
+                    else "The Monitor tab is visible but locked. Run a USB monitor test that receives frames to enable it.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 var showUsbMonitorTest by remember { mutableStateOf(false) }
                 OutlinedButton(onClick = { showUsbMonitorTest = true }) {
                     Text("USB monitor test (experimental)")
                 }
                 if (showUsbMonitorTest) {
-                    UsbMonitorTestDialog(backendUrl, token, onDismiss = { showUsbMonitorTest = false })
+                    UsbMonitorTestDialog(
+                        backendUrl, token, onDismiss = { showUsbMonitorTest = false },
+                        onSuccessfulTest = {
+                            settingsRepository.monitorTestPassed = true
+                            settingsRepository.advancedModeEnabled = true
+                            monitorTestPassed = true
+                            onAdvancedModeChange(true)
+                        },
+                    )
                 }
             }
         }

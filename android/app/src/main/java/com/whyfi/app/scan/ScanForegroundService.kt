@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.hardware.usb.UsbDeviceConnection
 import android.os.BatteryManager
 import android.os.Binder
 import android.os.Build
@@ -25,10 +26,15 @@ import com.whyfi.app.motion.MotionDetector
 import com.whyfi.app.motion.MotionState
 import com.whyfi.app.permissions.PermissionHelper
 import com.whyfi.app.ui.MainActivity
+import com.whyfi.app.usbmon.OuiTable
+import com.whyfi.app.usbmon.MonitorMission
+import com.whyfi.app.usbmon.SniffedDevices
+import com.whyfi.app.usbmon.UsbMonitorNative
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -36,6 +42,21 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+data class MonitorUiState(
+    val running: Boolean = false,
+    val status: String = "Ready",
+    val device: String = "",
+    val frames: Long = 0,
+    val pcapPath: String? = null,
+    val reportPath: String? = null,
+    val pcapBytes: Long = 0,
+    val pcapTruncated: Boolean = false,
+    /** Frame totals reported by the adapter for each channel heard so far. */
+    val channelFrames: Map<Int, Long> = emptyMap(),
+    val devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>> = emptyList(),
+)
 
 data class ScanUiState(
     val isScanning: Boolean = false,
@@ -106,6 +127,9 @@ class ScanForegroundService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob())
     private var continuousJob: Job? = null
     private var remoteAgentJob: Job? = null
+    private val _monitorState = MutableStateFlow(MonitorUiState())
+    val monitorState: StateFlow<MonitorUiState> = _monitorState.asStateFlow()
+    private var monitorMission: MonitorMission.Files? = null
 
     /** Read at the top of every continuous iteration rather than captured
      * when the loop starts, so changing the interval or radio selection
@@ -538,6 +562,88 @@ class ScanForegroundService : Service() {
         }
     }
 
+    /** One bounded, user-started receive session. The service owns and closes
+     * the USB connection so changing tabs cannot end the capture. */
+    fun startMonitor(connection: UsbDeviceConnection, device: String, channels: IntArray, durationMs: Int, recordPcap: Boolean) {
+        if (!settingsRepository.advancedModeEnabled || _monitorState.value.running || channels.isEmpty() ||
+            channels.any { it !in UsbMonitorNative.DEFAULT_CHANNELS } || durationMs !in 1..600_000
+        ) {
+            connection.close()
+            return
+        }
+        if (UsbMonitorNative.loadError != null) {
+            connection.close()
+            _monitorState.value = MonitorUiState(status = "Native library unavailable: ${UsbMonitorNative.loadError}")
+            return
+        }
+        val mission = MonitorMission.create(applicationContext, recordPcap)
+        monitorMission = mission
+        MonitorMission.append(mission, "monitor_started", "adapter=${device} channels=${channels.joinToString()} pcap=${recordPcap}")
+        _monitorState.value = MonitorUiState(running = true, status = "Starting…", device = device, pcapPath = mission.pcap?.absolutePath)
+        updateNotification("Monitoring WiFi on ${channels.size} channels…")
+        serviceScope.launch {
+            val vendorTable = withContext(Dispatchers.IO) {
+                runCatching { assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
+            }
+            suspend fun snapshot() {
+                val raw = withContext(Dispatchers.Default) {
+                    SniffedDevices.parse(UsbMonitorNative.devices()).map { d ->
+                        d to SniffedDevices.guess(d) { vendorTable?.vendorOf(it) }
+                    }
+                }
+                val frames = UsbMonitorNative.stats().getOrElse(UsbMonitorNative.Stat.TOTAL.ordinal) { 0 }
+                val nativeStats = UsbMonitorNative.stats()
+                val channelFrames = UsbMonitorNative.perChannel().asList().chunked(2)
+                    .filter { it.size == 2 }
+                    .associate { (channel, count) -> channel.toInt() to count }
+                _monitorState.update {
+                    it.copy(frames = frames, channelFrames = channelFrames, devices = raw,
+                        pcapBytes = nativeStats.getOrElse(UsbMonitorNative.Stat.PCAP_BYTES.ordinal) { 0 },
+                        pcapTruncated = nativeStats.getOrElse(UsbMonitorNative.Stat.PCAP_TRUNCATED.ordinal) { 0 } != 0L,
+                        status = if (it.status == "Stopping…") it.status else "Receiving…")
+                }
+            }
+            val poller = launch {
+                while (isActive) {
+                    delay(2_000)
+                    snapshot()
+                }
+            }
+            var result = ""
+            try {
+                result = withContext(Dispatchers.IO) {
+                    UsbMonitorNative.run(
+                        connection.fileDescriptor, cacheDir.absolutePath, "", mission.pcap?.absolutePath.orEmpty(), channels, 400, durationMs,
+                    )
+                }
+                snapshot()
+            } catch (e: Exception) {
+                result = e.message ?: e.javaClass.simpleName
+            } finally {
+                poller.cancel()
+                connection.close()
+                val finished = _monitorState.value.copy(running = false, status = if (result.isEmpty()) "Finished" else "Failed: $result")
+                runCatching { MonitorMission.writeReport(mission, finished) }
+                MonitorMission.append(mission, "monitor_finished", "status=${finished.status} frames=${finished.frames}")
+                _monitorState.value = finished.copy(reportPath = mission.report.absolutePath)
+                monitorMission = null
+                stopIfNothingKeepsUsAlive()
+            }
+        }
+    }
+
+    fun stopMonitor() {
+        if (_monitorState.value.running) {
+            _monitorState.update { it.copy(status = "Stopping…") }
+            UsbMonitorNative.stop()
+        }
+    }
+
+    /** Records an operator decision for later mission replay; never uploads it here. */
+    fun logMonitorEvent(event: String, details: String = "") {
+        monitorMission?.let { MonitorMission.append(it, event, details) }
+    }
+
     private suspend fun runOnePass(options: ScanOptions) {
         _uiState.update {
             it.copy(
@@ -611,7 +717,7 @@ class ScanForegroundService : Service() {
      * the phone really is standing by to scan on command. */
     private fun stopIfNothingKeepsUsAlive() {
         val state = _uiState.value
-        val busy = state.isScanning || state.isContinuous || state.isLanScanning
+        val busy = state.isScanning || state.isContinuous || state.isLanScanning || _monitorState.value.running
         if (busy || settingsRepository.remoteControlEnabled) {
             if (!busy) updateNotification(idleNotificationText())
             return
@@ -669,6 +775,7 @@ class ScanForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        stopMonitor()
         serviceScope.cancel()
         super.onDestroy()
     }

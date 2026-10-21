@@ -5,16 +5,17 @@
 Forward whyfi's already-collected WiFi observations into a running Kismet
 instance, so the same scan data shows up in Kismet's device tracker/UI
 alongside whatever Kismet is capturing itself. Raised as "can we send our WiFi
-data to Kismet" — the question below is whether that's even possible without
-whyfi growing into a packet-capture tool, which it deliberately isn't (see
-`DISCLAIMER.md`).
+data to Kismet" — this note addresses the existing parsed `WifiManager`
+observations, not the newer USB Monitor session.
 
 ## Findings
 
 Kismet is built around real 802.11 frames arriving from a datasource (a radio
 in monitor mode, or its remote-capture protocol), which looked at first like a
-poor fit — whyfi only has already-parsed scan results (BSSID/SSID/RSSI/...),
-never raw frames. Two paths exist for pre-parsed data:
+poor fit for the regular scan pipeline: it has already-parsed scan results
+(BSSID/SSID/RSSI/...), not raw frames. The USB Monitor prototype receives
+802.11 frames locally but does not yet store or export them. Two paths exist
+for the regular pre-parsed data:
 
 1. **Custom PHY + `KDSDATAREPORT`** (datasource framework). A datasource can
    submit a JSON blob via the Kismet External protocol instead of raw packet

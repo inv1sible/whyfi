@@ -5,6 +5,18 @@ export interface Paginated<T> {
   results: T[];
 }
 
+export interface MonitorMission {
+  id: string;
+  sensor: string;
+  uploaded_at: string;
+  report_url: string;
+  log_url: string;
+  pcap_url: string | null;
+  report_bytes: number;
+  log_bytes: number;
+  pcap_bytes: number;
+}
+
 /** Remote scanning control for one device.
  *
  * Split into what the device *should* be doing (set from this UI) and what it

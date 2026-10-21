@@ -1,0 +1,423 @@
+package com.whyfi.app.usbmon
+
+import android.content.Context
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import com.whyfi.app.data.SettingsRepository
+import com.whyfi.app.scan.MonitorUiState
+import com.whyfi.app.scan.ScanForegroundService
+import com.whyfi.app.ui.components.DataTable
+import com.whyfi.app.ui.components.DataTableRow
+import com.whyfi.app.ui.components.TableColumn
+import kotlinx.coroutines.launch
+
+/** Local receive session; completed missions can be uploaded explicitly. */
+@Composable
+fun MonitorScreen(service: ScanForegroundService?, settingsRepository: SettingsRepository, unlocked: Boolean) {
+    if (!unlocked) {
+        Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Monitor", style = MaterialTheme.typography.headlineSmall)
+            Text("Monitor is locked until this phone has received frames during the USB monitor test.")
+            Text("Connect the supported adapter through OTG, then run USB monitor test in Settings. A successful test enables this tab.",
+                style = MaterialTheme.typography.bodySmall)
+        }
+    } else MonitorWorkspace(service, settingsRepository)
+}
+
+private enum class MonitorTab(val label: String) {
+    NEARBY("Nearby"), ACCESS_POINTS("APs"), UNASSOCIATED("Unassociated"),
+    IOT("IoT"), CAMERAS("Cameras"), PHONES_LAPTOPS("Phones / laptops"), CLIENTS("Other clients"),
+    MISSIONS("Missions"),
+}
+
+private enum class NearbySort { RSSI, LAST_SEEN }
+
+@Composable
+private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository: SettingsRepository) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val usbManager = remember { context.getSystemService(Context.USB_SERVICE) as UsbManager }
+    val emptyState = remember { kotlinx.coroutines.flow.MutableStateFlow(MonitorUiState()) }
+    val state by (service?.monitorState ?: emptyState).collectAsState()
+    var usbDevices by remember { mutableStateOf(usbManager.deviceList.values.toList()) }
+    var selectedDevice by remember { mutableStateOf(usbDevices.firstOrNull()) }
+    val allChannels = remember { UsbMonitorNative.DEFAULT_CHANNELS.toSet() }
+    var channels by remember { mutableStateOf(settingsRepository.monitorChannels.intersect(allChannels).ifEmpty { allChannels }) }
+    var allMode by rememberSaveable { mutableStateOf(true) }
+    var showChannels by rememberSaveable { mutableStateOf(false) }
+    var showUsb by rememberSaveable { mutableStateOf(selectedDevice == null) }
+    var favorites by remember { mutableStateOf(settingsRepository.monitorFavoriteMacs) }
+    var visibleKinds by remember { mutableStateOf(SniffedDevices.Kind.entries.toSet()) }
+    var autoUpdate by rememberSaveable { mutableStateOf(true) }
+    var sortName by rememberSaveable { mutableStateOf(NearbySort.RSSI.name) }
+    val nearbySort = NearbySort.entries.firstOrNull { it.name == sortName } ?: NearbySort.RSSI
+    var displayDevices by remember { mutableStateOf(state.devices) }
+    LaunchedEffect(state.devices, autoUpdate) {
+        if (autoUpdate) displayDevices = state.devices
+    }
+    var starting by remember { mutableStateOf(false) }
+    var recordPcap by rememberSaveable { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var selectedName by rememberSaveable { mutableStateOf(MonitorTab.NEARBY.name) }
+    val selected = MonitorTab.entries.firstOrNull { it.name == selectedName } ?: MonitorTab.NEARBY
+    val tabs = MonitorTab.entries.toList()
+    val visibleDevices = displayDevices.filter { it.second.kind in visibleKinds }
+    val newDevices = state.devices.count { incoming -> displayDevices.none { it.first.mac == incoming.first.mac } }
+
+    val setChannels: (Set<Int>) -> Unit = {
+        channels = it
+        settingsRepository.monitorChannels = it
+        if (state.running) service?.logMonitorEvent("channels_selected", it.sorted().joinToString())
+    }
+    val toggleFavorite: (String) -> Unit = { mac ->
+        favorites = if (mac in favorites) favorites - mac else favorites + mac
+        settingsRepository.monitorFavoriteMacs = favorites
+        if (state.running) service?.logMonitorEvent("favorite", "$mac:${mac in favorites}")
+    }
+    val startMonitor: () -> Unit = start@{
+        val device = selectedDevice ?: run { showUsb = true; return@start }
+        val currentService = service ?: return@start
+        val selectedChannels = if (allMode) allChannels else channels
+        if (selectedChannels.isEmpty()) {
+            error = "Select at least one channel"
+            showChannels = true
+            return@start
+        }
+        starting = true
+        error = null
+        displayDevices = emptyList()
+        scope.launch {
+            try {
+                if (!usbManager.hasPermission(device) && !requestPermission(context, usbManager, device)) {
+                    error = "USB permission denied"
+                    showUsb = true
+                } else {
+                    val connection = usbManager.openDevice(device)
+                    if (connection == null) {
+                        error = "Could not open USB adapter"
+                        showUsb = true
+                    } else try {
+                        ScanForegroundService.start(context)
+                        currentService.startMonitor(connection, describe(device), selectedChannels.sorted().toIntArray(), 600_000, recordPcap)
+                        showUsb = false
+                    } catch (e: Exception) { connection.close(); throw e }
+                }
+            } catch (e: Exception) { error = e.message ?: "Could not start USB monitor" }
+            finally { starting = false }
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        ScrollableTabRow(tabs.indexOf(selected).coerceAtLeast(0), edgePadding = 0.dp) {
+            tabs.forEach { tab ->
+                val count = when (tab) {
+                    MonitorTab.NEARBY -> visibleDevices.size
+                    MonitorTab.MISSIONS -> MonitorMission.list(context).size
+                    else -> monitorRows(tab, visibleDevices).size
+                }
+                Tab(tab == selected, { selectedName = tab.name }, text = { Text("${tab.label} ($count)") })
+            }
+        }
+        if (selected == MonitorTab.NEARBY) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Updates", style = MaterialTheme.typography.bodySmall)
+                TextButton({
+                    autoUpdate = !autoUpdate
+                    if (state.running) service?.logMonitorEvent("update_mode", if (autoUpdate) "auto" else "manual")
+                }) { Text(if (autoUpdate) "Auto" else "Manual") }
+                Text("Sort", style = MaterialTheme.typography.bodySmall)
+                TextButton({
+                    sortName = if (nearbySort == NearbySort.RSSI) NearbySort.LAST_SEEN.name else NearbySort.RSSI.name
+                    if (state.running) service?.logMonitorEvent("nearby_sort", sortName)
+                }) { Text(if (nearbySort == NearbySort.RSSI) "RSSI ↓" else "Latest ↓") }
+            }
+            if (!autoUpdate) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.End) {
+                    TextButton({
+                        displayDevices = state.devices
+                        if (state.running) service?.logMonitorEvent("display_refresh")
+                    }) { Text(if (newDevices > 0) "Refresh (+$newDevices)" else "Refresh") }
+                }
+            }
+        }
+        if (selected == MonitorTab.NEARBY) {
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (showUsb || selectedDevice == null) {
+                    UsbPanel(usbDevices, selectedDevice, state.running,
+                        {
+                            usbDevices = usbManager.deviceList.values.toList()
+                            if (selectedDevice !in usbDevices) selectedDevice = usbDevices.firstOrNull()
+                        },
+                        { selectedDevice = it; showUsb = false })
+                }
+                if (showChannels) ChannelPanel(state, allChannels, channels, allMode,
+                    { allMode = it; if (state.running) service?.logMonitorEvent("channel_mode", if (it) "all" else "selected") },
+                    setChannels)
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                state.reportPath?.let { Text("Capture saved. Open Missions to inspect or upload it.",
+                    style = MaterialTheme.typography.bodySmall) }
+                if (state.pcapTruncated) Text("PCAP recording stopped at the 200 MB limit.", color = MaterialTheme.colorScheme.error)
+                NearbyView(visibleDevices, favorites, toggleFavorite, nearbySort)
+            }
+        } else if (selected == MonitorTab.MISSIONS) {
+            MissionView(context, settingsRepository, state.reportPath, Modifier.weight(1f))
+        } else {
+            MonitorTable(selected, visibleDevices, Modifier.weight(1f).padding(12.dp))
+        }
+        Surface(Modifier.fillMaxWidth(), tonalElevation = 5.dp, shadowElevation = 5.dp) {
+            Column(Modifier.padding(horizontal = 10.dp, vertical = 5.dp)) {
+                Text("${state.status} · ${state.frames} frames", style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton({
+                        usbDevices = usbManager.deviceList.values.toList()
+                        if (selectedDevice !in usbDevices) selectedDevice = usbDevices.firstOrNull()
+                        showUsb = !showUsb
+                        selectedName = MonitorTab.NEARBY.name
+                    }, modifier = Modifier.semantics { contentDescription = "USB adapter" }) { Text("🔌") }
+                    if (state.running) Button({ service?.stopMonitor() },
+                        enabled = state.status != "Starting…" && state.status != "Stopping…") { Text("Stop") }
+                    else Button(startMonitor, enabled = !starting && selectedDevice != null) {
+                        Text(if (starting) "Starting…" else "Start")
+                    }
+                    Checkbox(recordPcap, { recordPcap = it }, enabled = !state.running)
+                    Text("PCAP", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.weight(1f))
+                    TextButton({ showChannels = !showChannels; selectedName = MonitorTab.NEARBY.name }) {
+                        Text(if (showChannels) "Channels ▼" else "Channels ▲")
+                    }
+                }
+            }
+        }
+        if (selected != MonitorTab.MISSIONS) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                SniffedDevices.Kind.entries.forEach { kind ->
+                    FilterChip(kind in visibleKinds, {
+                        visibleKinds = if (kind in visibleKinds) visibleKinds - kind else visibleKinds + kind
+                        if (state.running) service?.logMonitorEvent("filter", "${kind.name}:${kind in visibleKinds}")
+                    }, label = { Text("${kindIcon(kind)} ${kind.label}") })
+                }
+            }
+        }
+
+    }
+}
+
+@Composable
+private fun UsbPanel(
+    usbDevices: List<UsbDevice>, selectedDevice: UsbDevice?, running: Boolean,
+    onRefresh: () -> Unit, onDevice: (UsbDevice) -> Unit,
+) {
+    Text("USB adapter", style = MaterialTheme.typography.titleMedium)
+    if (usbDevices.isEmpty()) Text("Connect an RTL8812AU/8821AU adapter via USB OTG, then refresh.")
+    usbDevices.forEach { device ->
+        FilterChip(selectedDevice == device, { onDevice(device) }, enabled = !running, label = { Text(describe(device)) })
+    }
+    OutlinedButton(onRefresh, enabled = !running) { Text("Refresh adapters") }
+}
+
+@Composable
+private fun ChannelPanel(
+    state: MonitorUiState, allChannels: Set<Int>, channels: Set<Int>, allMode: Boolean,
+    onAllMode: (Boolean) -> Unit, onChannels: (Set<Int>) -> Unit,
+) {
+    Text("Channels", style = MaterialTheme.typography.titleMedium)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        FilterChip(allMode, { onAllMode(true) }, label = { Text("All") })
+        FilterChip(!allMode, { onAllMode(false) }, label = { Text("Selected (${channels.size})") })
+    }
+    Text("Select channels for the next 10-minute session. Counts are received frames.", style = MaterialTheme.typography.bodySmall)
+    UsbMonitorNative.DEFAULT_CHANNELS.toList().chunked(3).forEach { row ->
+        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            row.forEach { channel ->
+                val frames = state.channelFrames[channel] ?: 0
+                FilterChip(allMode || channel in channels, {
+                    if (allMode) { onChannels(allChannels - channel); onAllMode(false) }
+                    else onChannels(if (channel in channels) channels - channel else channels + channel)
+                }, label = { Text("ch $channel ($frames)") })
+            }
+        }
+    }
+    OutlinedButton({ onChannels(state.channelFrames.keys.intersect(allChannels)); onAllMode(false) },
+        enabled = state.channelFrames.isNotEmpty()) { Text("Use observed channels") }
+    if (state.running) Text("Changes apply to the next session.", style = MaterialTheme.typography.bodySmall)
+}
+
+private fun monitorRows(
+    tab: MonitorTab,
+    devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>>,
+): List<Pair<SniffedDevices.Device, SniffedDevices.Guess>> = devices.filter { (device, guess) -> when (tab) {
+        MonitorTab.ACCESS_POINTS -> device.isAp
+        MonitorTab.UNASSOCIATED -> device.isClient && device.probeRequests > 0 && device.bssids.isEmpty()
+        MonitorTab.IOT -> guess.kind == SniffedDevices.Kind.IOT
+        MonitorTab.CAMERAS -> guess.kind == SniffedDevices.Kind.CAMERA
+        MonitorTab.PHONES_LAPTOPS -> guess.kind == SniffedDevices.Kind.PHONE_LAPTOP
+        MonitorTab.CLIENTS -> device.isClient && guess.kind == SniffedDevices.Kind.CLIENT
+        MonitorTab.NEARBY, MonitorTab.MISSIONS -> false
+    } }.sortedWith(
+        compareByDescending<Pair<SniffedDevices.Device, SniffedDevices.Guess>> { it.first.lastMs }
+            .thenByDescending { it.first.bestRssi ?: -1000 },
+    )
+
+@Composable
+private fun MonitorTable(
+    tab: MonitorTab,
+    devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>>,
+    modifier: Modifier,
+) {
+    val rows = monitorRows(tab, devices)
+    val newest = rows.maxOfOrNull { it.first.lastMs } ?: 0
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (tab == MonitorTab.PHONES_LAPTOPS) {
+            Text("Current frame metadata cannot reliably distinguish phones from laptops.", style = MaterialTheme.typography.bodySmall)
+        }
+        DataTable(
+            columns = listOf(
+                TableColumn("Device", 150.dp),
+                TableColumn("MAC", 150.dp),
+                TableColumn("RSSI", 70.dp),
+                TableColumn("Channel", 80.dp),
+                TableColumn("Seen", 76.dp),
+                TableColumn("Activity", 190.dp),
+            ),
+            rows = rows.map { (device, guess) ->
+                DataTableRow(
+                    key = device.mac,
+                    cells = listOf(
+                        device.ssid.takeIf { it.isNotEmpty() } ?: guess.vendor ?: if (device.randomized) "private MAC" else "unknown",
+                        device.mac,
+                        device.bestRssi?.let { "$it dBm" } ?: "—",
+                        device.channels.joinToString().ifBlank { "—" },
+                        relativeSeen(newest - device.lastMs),
+                        SniffedDevices.activity(device).ifBlank { guess.kind.label },
+                    ),
+                )
+            },
+            modifier = Modifier.weight(1f),
+            showBadgeColumn = false,
+        )
+    }
+}
+
+private fun relativeSeen(ageMs: Long): String = when {
+    ageMs < 1_000 -> "now"
+    ageMs < 60_000 -> "${ageMs / 1_000}s ago"
+    else -> "${ageMs / 60_000}m ago"
+}
+
+/** Relationship view for use in the field. Its parent scrolls while the command bar stays fixed. */
+private fun nearbyOrder(sort: NearbySort): Comparator<Pair<SniffedDevices.Device, SniffedDevices.Guess>> =
+    if (sort == NearbySort.RSSI) {
+        compareByDescending<Pair<SniffedDevices.Device, SniffedDevices.Guess>> { it.first.bestRssi ?: Int.MIN_VALUE }
+            .thenByDescending { it.first.lastMs }
+            .thenBy { it.first.mac }
+    } else {
+        compareByDescending<Pair<SniffedDevices.Device, SniffedDevices.Guess>> { it.first.lastMs }
+            .thenByDescending { it.first.bestRssi ?: Int.MIN_VALUE }
+            .thenBy { it.first.mac }
+    }
+
+@Composable
+private fun NearbyView(
+    devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>>,
+    favorites: Set<String>,
+    onFavorite: (String) -> Unit,
+    sort: NearbySort,
+) {
+    val newest = devices.maxOfOrNull { it.first.lastMs } ?: 0
+    val order = nearbyOrder(sort)
+    val pinned = devices.filter { it.first.mac in favorites }.sortedWith(order)
+    val unassociated = devices.filter {
+        it.first.mac !in favorites && it.first.isClient && it.first.probeRequests > 0 && it.first.bssids.isEmpty()
+    }.sortedWith(order)
+    val aps = devices.filter { it.first.mac !in favorites && it.first.isAp }.sortedWith(order)
+    val byBssid = devices.filter { it.first.isClient }.flatMap { row -> row.first.bssids.map { it to row } }.groupBy(
+        { it.first }, { it.second },
+    )
+    if (pinned.isNotEmpty()) {
+        Text("Favorites (${pinned.size})", style = MaterialTheme.typography.titleMedium)
+        pinned.forEach { row ->
+            DeviceCard(row, newest, true, onFavorite, if (row.first.isAp) byBssid[row.first.mac].orEmpty() else emptyList(), favorites, sort)
+        }
+        HorizontalDivider()
+    }
+    Text("Unassociated (${unassociated.size})", style = MaterialTheme.typography.titleMedium)
+    if (unassociated.isEmpty()) Text("No probing stations without an observed AP association.")
+    unassociated.forEach { DeviceCard(it, newest, false, onFavorite, sort = sort) }
+    HorizontalDivider()
+    Text("Access points (${aps.size})", style = MaterialTheme.typography.titleMedium)
+    if (aps.isEmpty()) Text("No access points received yet.")
+    aps.forEach { ap ->
+        DeviceCard(ap, newest, false, onFavorite, byBssid[ap.first.mac].orEmpty(), favorites, sort)
+    }
+}
+
+private fun kindIcon(kind: SniffedDevices.Kind): String = when (kind) {
+    SniffedDevices.Kind.ACCESS_POINT -> "📡"
+    SniffedDevices.Kind.CAMERA -> "📷"
+    SniffedDevices.Kind.IOT -> "⌂"
+    SniffedDevices.Kind.PHONE_LAPTOP -> "▣"
+    SniffedDevices.Kind.CLIENT -> "●"
+}
+
+@Composable
+private fun DeviceCard(
+    row: Pair<SniffedDevices.Device, SniffedDevices.Guess>,
+    newest: Long,
+    favorite: Boolean,
+    onFavorite: (String) -> Unit,
+    stations: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>> = emptyList(),
+    favorites: Set<String> = emptySet(),
+    sort: NearbySort = NearbySort.RSSI,
+) {
+    var expanded by rememberSaveable(row.first.mac) { mutableStateOf(false) }
+    val (device, guess) = row
+    Card(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(kindIcon(guess.kind))
+                Spacer(Modifier.width(6.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(device.ssid.takeIf { it.isNotBlank() } ?: guess.vendor ?: "unknown device",
+                        style = MaterialTheme.typography.titleSmall)
+                    val channel = if (device.isAp) " · ch ${device.channels.joinToString("/").ifBlank { "?" }}" else ""
+                    Text("${device.bestRssi?.let { "$it dBm" } ?: "RSSI ?"}$channel · ${relativeSeen(newest - device.lastMs)}",
+                        style = MaterialTheme.typography.bodySmall)
+                }
+                TextButton({ onFavorite(device.mac) }) { Text(if (favorite) "★" else "☆") }
+            }
+            if (expanded) {
+                Text("${device.mac} · ${guess.kind.label}", style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace)
+                SniffedDevices.activity(device).takeIf { it.isNotBlank() }?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall)
+                }
+                if (stations.isNotEmpty()) {
+                    HorizontalDivider()
+                    Text("Associated stations (${stations.size})", style = MaterialTheme.typography.labelLarge)
+                    stations.sortedWith(nearbyOrder(sort)).forEach {
+                        DeviceCard(it, newest, it.first.mac in favorites, onFavorite, sort = sort)
+                    }
+                }
+            } else if (stations.isNotEmpty()) {
+                Text("${stations.size} associated stations · tap to expand", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}

@@ -46,6 +46,17 @@ Frontend is built as part of `backend/Dockerfile`; there is no standalone
 `npm run dev` server checked in as the primary workflow — if you add one for
 local iteration, keep the production path as "build into the backend image."
 
+## Delivery authority
+
+The maintainer explicitly authorizes routine deployment of completed whyfi
+changes to this self-hosted instance and non-force pushes to the configured
+GitHub origin. After the relevant tests and artifact checks pass, rebuild and
+restart the affected service, apply required migrations, publish a test APK
+for Android changes, and verify the live result. Push the finished changes
+without asking for another permission confirmation. Preserve existing data
+and uncommitted user work; do not force-push, delete production data, rotate
+credentials, or publish secrets.
+
 ## Conventions
 
 - **Naming**: every radio-type table is `<Radio>Observation` —
@@ -168,6 +179,12 @@ local iteration, keep the production path as "build into the backend image."
   code is in the artifact, grep the dex:
   `unzip -o <build>.apk 'classes*.dex' && grep -a <NewClassName> classes*.dex`.
   See MEMORY.md.
+- **Publish a test APK after Android changes.** Once the relevant Android
+  checks pass, trigger the normal distribution build so the maintainer can
+  install and test the change. Treat this as the default delivery step for
+  Android UI or behavior work; only skip it when the maintainer explicitly
+  asks for source-only work. Report the published version and Download-page
+  availability, and verify that the built APK contains the new code.
 - **Generate migrations against a real Postgres, then copy the file to the
   host immediately.** `backend/` is not bind-mounted into the `backend`
   container, so `docker compose exec backend python manage.py
@@ -177,15 +194,25 @@ local iteration, keep the production path as "build into the backend image."
   container is recreated even though the database itself already has the
   change. See MEMORY.md — this has already happened once.
 
+## USB Monitor and assessment direction
+
+The Android USB Monitor feature currently receives frames only. It is
+explicitly started on the phone and available after a successful adapter
+test. The live device list stays local to the app session; each completed
+mission keeps a PDF, JSONL log, and optional PCAP locally until the operator
+explicitly uploads that mission to the self-hosted backend.
+The maintainer has changed the project's direction toward authorized
+pentesting now that an external monitor-mode adapter works. The older blanket
+ban on active RF features is superseded; scope and design each new active
+test explicitly before implementing it. The current priority is monitoring,
+evidence, and analysis; active WiFi tests are a later option.
+
 ## Things not to reintroduce
 
 - No anti-stalking/tracker-alert correlation logic (`SuspectedTracker`,
   sighting-clustering, "mark as mine"/dismiss workflows). BLE detection is a
   plain passive observation log like every other radio type — nothing more.
   This was explicitly scoped out; see `MEMORY.md`.
-- No offensive capability (deauth, injection, monitor-mode capture) in this
-  codebase. That's an explicit v-next, external-hardware-sensor track, not
-  something to add to the Android app directly.
 - No internal reverse-proxy container (nginx/Caddy). The maintainer fronts
   this with their own Nginx Proxy Manager instance; the backend just needs to
   expose one plain port.

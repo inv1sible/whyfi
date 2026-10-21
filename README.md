@@ -1,14 +1,18 @@
 # whyfi
 
-A self-hosted, open-source multi-radio scanner and visualizer. An Android app
-scans WiFi, cellular, Bluetooth, GNSS, and your local LAN around you and
-reports to a Dockerized Django backend; an installable PWA visualizes the
-results (dashboards, signal history, channel congestion, and maps/heatmaps)
+A self-hosted, open-source wireless survey and authorized pentesting tool in
+development. The Android app scans WiFi, cellular, Bluetooth, GNSS, and your
+local LAN and reports to a Dockerized Django backend; an installable PWA
+visualizes the results (dashboards, signal history, channel congestion, and maps/heatmaps)
 on any device, including iOS.
 
-See [`docs/architecture.md`](docs/architecture.md) for the full design
-rationale. Read [`DISCLAIMER.md`](DISCLAIMER.md) before scanning anything you
-don't own.
+With a supported USB WiFi adapter, the Android app can also receive 802.11
+frames in monitor mode and show nearby APs and clients locally. The Monitor
+tab is always visible and becomes usable after a successful USB monitor test
+in Settings. See [current capabilities and next steps](docs/roadmap.md).
+
+See [`docs/architecture.md`](docs/architecture.md) for the design and
+[`DISCLAIMER.md`](DISCLAIMER.md) for authorized-use requirements.
 
 ## Why a native Android app at all, if there's a PWA?
 
@@ -87,5 +91,9 @@ URL + token into the app's Settings screen to start scanning.
 
 ## Status
 
-v1: passive scanning only (WiFi, cellular, Bluetooth device discovery, GNSS,
-LAN device discovery). No offensive capability. See [`docs/roadmap.md`](docs/roadmap.md).
+The existing survey features and USB Monitor tab support reconnaissance for
+an authorized assessment. Monitor keeps its live device view on the phone;
+completed missions retain a PDF, event log, and optional PCAP for explicit
+upload to the private backend. The PWA lists uploaded files for download,
+while packet injection, deauthentication, and packet crafting remain
+unimplemented. The roadmap separates current capabilities from future work.

@@ -102,6 +102,25 @@ class SettingsRepository(context: Context) {
         get() = prefs.getBoolean(KEY_REMOTE_CONTROL, false)
         set(value) = prefs.edit { putBoolean(KEY_REMOTE_CONTROL, value) }
 
+    var monitorTestPassed: Boolean
+        get() = prefs.getBoolean(KEY_MONITOR_TEST_PASSED, false)
+        set(value) = prefs.edit { putBoolean(KEY_MONITOR_TEST_PASSED, value) }
+
+    var advancedModeEnabled: Boolean
+        get() = monitorTestPassed
+        set(value) {
+            if (value) monitorTestPassed = true
+        }
+
+    var monitorChannels: Set<Int>
+        get() = prefs.getString(KEY_MONITOR_CHANNELS, null)
+            ?.split(',')?.mapNotNull { it.toIntOrNull() }?.toSet().orEmpty()
+        set(value) = prefs.edit { putString(KEY_MONITOR_CHANNELS, value.sorted().joinToString(",")) }
+
+    var monitorFavoriteMacs: Set<String>
+        get() = prefs.getStringSet(KEY_MONITOR_FAVORITES, emptySet()).orEmpty().toSet()
+        set(value) = prefs.edit { putStringSet(KEY_MONITOR_FAVORITES, value) }
+
     /** How much storage the offline outbox may use before the oldest queued
      * scans are dropped. Only bites while uploads are failing — a reachable
      * backend drains the queue continuously, so steady-state usage is ~0. */
@@ -169,6 +188,9 @@ class SettingsRepository(context: Context) {
         private const val KEY_LOCATION_SOURCE = "location_source_preference"
         private const val KEY_POSITION_ESTIMATOR = "position_estimator"
         private const val KEY_REMOTE_CONTROL = "remote_control_enabled"
+        private const val KEY_MONITOR_TEST_PASSED = "monitor_test_passed"
+        private const val KEY_MONITOR_CHANNELS = "monitor_channels"
+        private const val KEY_MONITOR_FAVORITES = "monitor_favorite_macs"
         private const val KEY_OUTBOX_QUOTA_MB = "outbox_quota_mb"
         private const val KEY_ADAPTIVE_SCAN = "adaptive_scan_enabled"
         private const val KEY_STATIONARY_INTERVAL = "stationary_interval_seconds"

@@ -705,15 +705,21 @@ enable. `PermissionHelper.isBluetoothEnabled()` and `isWifiEnabled()` were
 added alongside the existing `isLocationServicesEnabled()` as the central
 place for sensor-state checks.
 
+## Superseded monitor-mode decision
+
+Monitor-mode reception was once deferred to a separate Linux sensor because
+the phone lacked a usable adapter path. This decision was superseded on
+2026-10-21: a USB monitor-mode adapter now works with the Android app, and
+the maintainer has moved the project toward authorized pentesting. The
+current Android Monitor feature remains receive-only; active RF tests
+require separate design and implementation. See `AGENT.md` and
+`docs/roadmap.md` for current scope.
+
 ## Open/deferred (v-next, not forgotten, just not now)
 
 - Matter/Thread device discovery (via BLE commissioning adverts + mDNS) —
   schema intentionally left open (new radio-type Observation model would
   follow the existing pattern), not designed yet.
-- SDR/external-hardware sensor track (Kali Linux box, RTL-SDR/HackRF) for
-  real monitor-mode WiFi capture and packet crafting — the only path to
-  actual offensive/active RF capability, deliberately kept out of the phone
-  app.
 - Self-hosted offline map tiles (v1 uses public OSM tiles, requires internet
   on the viewing device).
 - Watching a *specific* WiFi/BLE/LAN device for online/offline transitions.
@@ -752,6 +758,14 @@ is out of range of [1, 3] (too low)`. The 10th arg is `accuracy`, also
 1-3. This bit us during initial bring-up — don't reintroduce it.
 
 ## Local dev APK signing: persistent keystore
+
+## Android test delivery
+
+The maintainer tests Android changes by installing APKs from whyfi's Download
+page. After successful Android checks, trigger the normal distribution build
+for Android UI or behavior changes unless the maintainer explicitly requests
+source-only work. Verify the published artifact contains the changed class and
+report its version; a local `assembleDebug` result is not sufficient delivery.
 
 When testing the Android app on a physical device or emulator, always
 sign with the **persistent debug keystore** at `~/.android/whyfi-debug.keystore`

@@ -66,7 +66,7 @@ private const val MAX_LISTED = 200
  * user ticks the box.
  */
 @Composable
-fun UsbMonitorTestDialog(backendUrl: String, token: String, onDismiss: () -> Unit) {
+fun UsbMonitorTestDialog(backendUrl: String, token: String, onDismiss: () -> Unit, onSuccessfulTest: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val usbManager = remember { context.getSystemService(Context.USB_SERVICE) as UsbManager }
@@ -139,6 +139,7 @@ fun UsbMonitorTestDialog(backendUrl: String, token: String, onDismiss: () -> Uni
                             connection.fileDescriptor,
                             context.cacheDir.absolutePath,
                             DiagnosticTrace.traceFile(context).absolutePath,
+                            "",
                             runMode.channels,
                             runMode.dwellMs,
                             runDuration,
@@ -150,6 +151,9 @@ fun UsbMonitorTestDialog(backendUrl: String, token: String, onDismiss: () -> Uni
             }
             DiagnosticTrace.log(context, "usbmon: test ended: ${result ?: "OK"}")
             val finalStats = if (UsbMonitorNative.loadError == null) UsbMonitorNative.stats() else LongArray(0)
+            if (UsbMonitorReport.qualifiesForAdvancedMode(result, finalStats)) {
+                onSuccessfulTest()
+            }
             stats = finalStats
             val finalDevices = if (UsbMonitorNative.loadError == null) {
                 withContext(Dispatchers.Default) { snapshotDevices() }
@@ -267,14 +271,14 @@ fun UsbMonitorTestDialog(backendUrl: String, token: String, onDismiss: () -> Uni
     }
 }
 
-private fun describe(device: UsbDevice): String =
+internal fun describe(device: UsbDevice): String =
     "%04x:%04x %s %s".format(
         device.vendorId, device.productId,
         device.manufacturerName.orEmpty(), device.productName.orEmpty(),
     ).trim()
 
 /** Android's USB permission dialog, as a suspend call. */
-private suspend fun requestPermission(context: Context, usbManager: UsbManager, device: UsbDevice): Boolean =
+internal suspend fun requestPermission(context: Context, usbManager: UsbManager, device: UsbDevice): Boolean =
     suspendCancellableCoroutine { cont ->
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(c: Context, intent: Intent) {

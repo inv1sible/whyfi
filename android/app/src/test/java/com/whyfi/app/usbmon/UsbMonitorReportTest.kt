@@ -2,6 +2,7 @@ package com.whyfi.app.usbmon
 
 import com.whyfi.app.usbmon.UsbMonitorNative.Stat
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -9,6 +10,13 @@ class UsbMonitorReportTest {
 
     private fun stats(vararg pairs: Pair<Stat, Long>) = LongArray(Stat.entries.size).also { a ->
         pairs.forEach { (s, v) -> a[s.ordinal] = v }
+    }
+
+    @Test
+    fun `advanced mode requires a successful run with received frames`() {
+        assertFalse(UsbMonitorReport.qualifiesForAdvancedMode(null, stats()))
+        assertFalse(UsbMonitorReport.qualifiesForAdvancedMode("USB failed", stats(Stat.TOTAL to 3)))
+        assertTrue(UsbMonitorReport.qualifiesForAdvancedMode(null, stats(Stat.TOTAL to 3)))
     }
 
     @Test

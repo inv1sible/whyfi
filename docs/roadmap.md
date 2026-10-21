@@ -1,6 +1,6 @@
 # Roadmap
 
-## v1 (this repo's current target)
+## Current survey and assessment foundation
 
 - WiFi scanning (WifiManager) + visualization (dashboard, per-network signal
   history, channel congestion).
@@ -21,8 +21,61 @@
   started from the PWA *after* the phone's owner has switched on Remote
   control in the app. Nothing scans unattended without that opt-in, and the
   foreground-service notification is visible the whole time.
-- Zero offensive capability (the LAN scanner's TCP-connect probes are the
-  one active exception — see `DISCLAIMER.md`).
+- USB monitor-mode reception through a supported external WiFi adapter on
+  Android: a bounded, explicitly started session with channel selection,
+  nearby AP/client list, probe activity, and tentative device-type grouping.
+  The Monitor tab requires a successful adapter test and Advanced mode opt-in.
+  Its observations currently remain on the phone for the app session.
+- The LAN scanner's TCP-connect probes are active network traffic. WiFi
+  packet injection, deauthentication, and packet crafting are not implemented.
+
+## Authorized pentesting track
+
+The external USB WiFi adapter removes the earlier hardware blocker for
+monitor mode on Android. whyfi is moving from a survey viewer toward an
+authorized assessment workflow. Monitoring, evidence, and analysis come first;
+packet injection and other active WiFi tests remain possible later. The next
+increments should be independently verifiable:
+
+1. Validate the Monitor tab on physical devices: USB permission, adapter
+   compatibility, channel changes, stop behavior, long runs, and foreground
+   notification. A successful build does not establish radio behavior.
+2. Preserve useful evidence from a monitor session with explicit user choice:
+   timestamps, adapter, channel, AP/client observations, probe names, and the
+   limits of any inferred device type. The app now stores an optional local
+   PCAP capped at 200 MB, a PDF report, and an append-only JSONL event log
+   in a new UUID directory for each capture. The Missions tab shows the
+   files, opens the PDF, exports the PCAP, and asks the operator to upload
+   a completed mission. The backend keeps the files together under the
+   same UUID and exposes authenticated WebUI downloads. Still needed:
+   explicit retention/deletion controls, download auditing, and a fuller
+   persisted summary for downstream analysis.
+3. Add passive EAPOL key-frame accounting to the monitor session and report.
+   Label it as EAPOL/handshake evidence, not a "WPA hash": hopping may miss
+   frames and seeing key frames does not establish a complete usable
+   handshake. Keep it receive-only and show AP/client/channel relationships.
+4. Add authenticated WebUI search and analysis for opted-in monitor data,
+   including AP/client relationships and probe activity. Keep raw observations
+   distinct from guesses; rotating MAC addresses must not be treated as proof
+   that two sightings belong to one device.
+   Add a monitor-mission replay here: the backend processes an uploaded PCAP
+   into a timestamped, seekable derived-event timeline while retaining the
+   original PCAP for download and external tools such as Wireshark. The WebUI
+   should replay derived AP/client/probe/EAPOL/channel events, not attempt to
+   reproduce a full packet analyser in the browser. During capture, record
+   consented GPS samples with timestamps in the same mission so the replay can
+   correlate radio observations with positions and later feed existing heatmap
+   and localization views. GPS samples remain measurements; any AP/device
+   location is a derived estimate with its evidence and uncertainty.
+   Store an append-only mission event log beside the artifacts: starts/stops,
+   channel selections, filter changes, pins/favorites, operator markers,
+   settings changes, and upload decisions. Replay merges this operator log
+   with capture and GPS timelines rather than guessing later why a view or
+   channel selection changed.
+5. Design active WiFi validation as separate, explicitly armed actions with
+   clear target and test boundaries, visible progress, and recorded results.
+   The exact tests and supported adapters are still to be selected; the
+   current Monitor implementation does not transmit frames.
 
 ## AP localization track (see `ap-localization-design.md`)
 
@@ -114,9 +167,9 @@ implementation.
   — the backend already knows what each phone should be doing and hears from
   it regularly — but this needs its own watch-list model and a per-device
   notion of "seen recently".
-- SDR/external-hardware sensor track (Kali Linux box, RTL-SDR/HackRF)
-  contributing via the same sensor-agnostic ingest API — the actual path to
-  monitor-mode WiFi capture and packet crafting, kept off the phone.
+- Additional external sensors beyond the Android USB adapter may contribute
+  to the same sensor-agnostic ingest model once monitor observations have a
+  defined backend schema.
 - Multi-user authentication / per-user data isolation.
 - WebSocket/live-push updates (v1 is request/poll-based).
 - Self-hosted offline map tiles for fully air-gapped deployments.

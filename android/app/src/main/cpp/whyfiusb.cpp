@@ -41,7 +41,7 @@ enum Stat {
     TOTAL, MGMT, CTRL, DATA, BEACON, PROBE_REQ, PROBE_RESP,
     PROBE_REQ_SOURCES, PROBE_REQ_LOCAL_ADMIN, PROBE_REQ_DIRECTED,
     CLIENTS_TO_AP, RSSI_MIN, RSSI_MAX, CURRENT_CHANNEL, STAGE, BAD_FCS_OR_SHORT,
-    BEACON_CH_MATCH, BEACON_CH_OTHER, DEVICES, NO_RSSI,
+    BEACON_CH_MATCH, BEACON_CH_OTHER, DEVICES, NO_RSSI, PCAP_BYTES, PCAP_TRUNCATED,
     STAT_COUNT
 };
 
@@ -52,6 +52,46 @@ std::mutex g_sets_mu;
 std::set<std::string> g_probe_sources, g_clients;
 std::vector<long long> g_per_channel(256);
 std::string g_trace_path;
+std::mutex g_pcap_mu;
+FILE *g_pcap = nullptr;
+long long g_pcap_bytes = 0;
+constexpr long long MAX_PCAP_BYTES = 200LL * 1024 * 1024;
+
+void put32(FILE *f, uint32_t v) { std::fwrite(&v, sizeof v, 1, f); }
+
+void closePcap() {
+    std::lock_guard<std::mutex> lock(g_pcap_mu);
+    if (g_pcap) std::fclose(g_pcap);
+    g_pcap = nullptr;
+}
+
+bool openPcap(const std::string &path) {
+    if (path.empty()) return true;
+    std::lock_guard<std::mutex> lock(g_pcap_mu);
+    g_pcap = std::fopen(path.c_str(), "wb");
+    if (!g_pcap) return false;
+    // Classic little-endian PCAP, DLT_IEEE802_11. The adapter supplies a full
+    // 802.11 frame including FCS; no radiotap metadata is invented here.
+    put32(g_pcap, 0xa1b2c3d4); uint16_t v = 2; std::fwrite(&v, 2, 1, g_pcap); v = 4; std::fwrite(&v, 2, 1, g_pcap);
+    put32(g_pcap, 0); put32(g_pcap, 0); put32(g_pcap, 65535); put32(g_pcap, 105);
+    g_pcap_bytes = 24;
+    return true;
+}
+
+void writePcap(const Packet &packet) {
+    std::lock_guard<std::mutex> lock(g_pcap_mu);
+    if (!g_pcap || g_pcap_bytes + 16 + static_cast<long long>(packet.Data.size()) > MAX_PCAP_BYTES) {
+        if (g_pcap) { g_stats[PCAP_TRUNCATED] = 1; std::fclose(g_pcap); g_pcap = nullptr; }
+        return;
+    }
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    const auto us = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+    put32(g_pcap, static_cast<uint32_t>(us / 1000000)); put32(g_pcap, static_cast<uint32_t>(us % 1000000));
+    put32(g_pcap, static_cast<uint32_t>(packet.Data.size())); put32(g_pcap, static_cast<uint32_t>(packet.Data.size()));
+    std::fwrite(packet.Data.data(), 1, packet.Data.size(), g_pcap);
+    g_pcap_bytes += 16 + static_cast<long long>(packet.Data.size());
+    g_stats[PCAP_BYTES] = g_pcap_bytes;
+}
 
 void trace(const std::string &msg) {
     __android_log_write(ANDROID_LOG_INFO, TAG, msg.c_str());
@@ -206,6 +246,7 @@ void applyWps(Device *dv, const Ies &ies) {
 void onFrame(const Packet &packet) {
     const auto &a = packet.RxAtrib;
     if (a.crc_err || a.icv_err) { g_stats[BAD_FCS_OR_SHORT]++; return; }
+    writePcap(packet);
     const auto &raw = packet.Data;
     // Data includes the 4-byte FCS; parse only the frame itself.
     if (raw.size() < 4 + 10) { g_stats[BAD_FCS_OR_SHORT]++; return; }
@@ -435,16 +476,19 @@ std::string runProbe(int fd, const std::string &lockDir, const std::vector<int> 
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_whyfi_app_usbmon_UsbMonitorNative_run(JNIEnv *env, jobject, jint fd, jstring lockDir, jstring tracePath,
-                                               jintArray channels, jint dwellMs, jint totalMs) {
+                                               jstring pcapPath, jintArray channels, jint dwellMs, jint totalMs) {
     if (g_running.exchange(true)) return env->NewStringUTF("a test is already running");
     g_stop = false;
     resetStats();
     g_trace_path = jstr(env, tracePath);
+    const std::string pcap_path = jstr(env, pcapPath);
     std::vector<int> chans(env->GetArrayLength(channels));
     env->GetIntArrayRegion(channels, 0, static_cast<jsize>(chans.size()), chans.data());
     std::string result;
     if (chans.empty()) {
         result = "no channels given";
+    } else if (!openPcap(pcap_path)) {
+        result = "could not create PCAP file";
     } else {
         try {
             result = runProbe(fd, jstr(env, lockDir), chans, dwellMs, totalMs);
@@ -452,6 +496,7 @@ Java_com_whyfi_app_usbmon_UsbMonitorNative_run(JNIEnv *env, jobject, jint fd, js
             result = std::string("exception: ") + e.what();
         }
     }
+    closePcap();
     if (!result.empty()) trace("FAILED: " + result);
     g_running = false;
     return env->NewStringUTF(result.c_str());

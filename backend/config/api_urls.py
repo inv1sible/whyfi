@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from config.auth_views import login_view, logout_view, session_view
 from distribution.views import build_status_view, latest_release, trigger_build_view
+from scans.monitor_missions import monitor_missions, upload_monitor_mission
 from scans.views import (
     AccessPointViewSet,
     BLEDeviceViewSet,
@@ -55,6 +56,8 @@ urlpatterns = [
     path("mission/wifi-observations/", mission_wifi_observations),
     path("mission/ble-observations/", mission_ble_observations),
     path("mission/cell-observations/", mission_cell_observations),
+    path("monitor-missions/", monitor_missions),
+    path("monitor-missions/upload/", upload_monitor_mission),
     path("app/latest/", latest_release),
     path("android-build/trigger/", trigger_build_view),
     path("android-build/status/", build_status_view),

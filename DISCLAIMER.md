@@ -1,28 +1,27 @@
 # Authorized Use Only
 
-whyfi is a passive wireless-environment scanner and visualizer. It does not
-transmit, inject, deauthenticate, jam, or otherwise interfere with any
-network or device — nearly everything it does is reading information
-already broadcast publicly (WiFi beacons, your phone's own cellular signal
-measurements, Bluetooth advertisements, GNSS signals).
+whyfi is being developed as a tool for authorized wireless surveys and
+pentesting. Its current WiFi, cellular, BLE, GNSS, and USB Monitor features
+collect observations; the USB adapter receives 802.11 frame metadata in
+monitor mode. Current WiFi functionality does not inject frames,
+deauthenticate clients, jam, or craft packets. Future active tests, if added,
+will need their own explicit controls and documentation.
 
-The one exception is the LAN scanner: it opens brief TCP connections to
-other devices on the WiFi network your phone is currently connected to, to
+The LAN scanner opens brief TCP connections to other devices on the WiFi
+network your phone is currently connected to, to
 discover what's there and which common ports respond (the same kind of
 connection your browser makes visiting a router's admin page — no
 exploitation, no payloads, just connect-and-close). Only run this against a
 network you own or are authorized to test.
 
 whyfi can also be told to scan from its web UI ("Remote control"), which lets
-a phone collect on a schedule while unattended. This collects nothing new —
-the same passive observations, on your own device, to your own server — but
-it does mean a phone can be logging for hours without anyone watching it.
+a phone collect on a schedule while unattended. This uses the regular scan
+features, not USB Monitor, and can log for hours without anyone watching it.
 It is off by default and can only be switched on physically, in the app, on
 the phone itself: no server can turn it on, and it stays off after a reboot
 until someone opens the app again. While it's on, the scanning notification
-is visible the entire time. Keep it that way — if you find yourself wanting
-to hide that notification or auto-start it on boot, you are building
-something this project deliberately isn't.
+is visible the entire time. USB Monitor also requires a local start and a
+visible foreground notification.
 
 Be aware that unattended collection accumulates a detailed record of the
 devices around wherever the phone is left, including BLE identifiers that
@@ -37,10 +36,11 @@ policies that apply to networks and devices you scan. Only use it on:
   penetration-testing engagement, a CTF environment you're permitted to use
   tools against, or your own home/lab equipment).
 
-Future versions of whyfi may add active capabilities (e.g. monitor-mode
-WiFi capture, packet crafting) via dedicated external-hardware sensors. Any
-such feature will be opt-in, clearly labeled, and will carry its own
-authorized-use requirements. Misuse of those capabilities against networks or
-devices you do not own or have authorization to test may violate local, state,
-or federal law (e.g. computer fraud/unauthorized access statutes) — that is
-entirely on you, not this project.
+The optional USB Monitor feature receives nearby WiFi management and data-frame
+metadata with an external adapter. It is explicitly started on the phone after
+a successful adapter test. The live device list stays local to the app
+session; a PDF, mission log, and optional PCAP are retained locally and can
+be uploaded explicitly to the private backend. Probe names and MAC addresses may
+describe other people's devices; only collect and retain them within the
+scope of your authorization. An observed MAC address or a guessed device type
+does not establish a person's identity.

@@ -18,6 +18,7 @@ import { LANDevicesPage } from "./pages/LANDevicesPage";
 import { LocalizationPage } from "./pages/LocalizationPage";
 import { LoginPage } from "./pages/LoginPage";
 import { ManageScansPage } from "./pages/ManageScansPage";
+import { MonitorMissionsPage } from "./pages/MonitorMissionsPage";
 import { NetworkDetailPage } from "./pages/NetworkDetailPage";
 import { RemoteScanPage } from "./pages/RemoteScanPage";
 import { SatelliteViewPage } from "./pages/SatelliteViewPage";
@@ -65,6 +66,7 @@ export function App() {
           <Route path="/download" element={<DownloadPage />} />
           <Route path="/remote" element={<RemoteScanPage />} />
           <Route path="/scans" element={<ManageScansPage />} />
+          <Route path="/monitor-missions" element={<MonitorMissionsPage />} />
           <Route path="/crash-reports" element={<CrashReportsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>

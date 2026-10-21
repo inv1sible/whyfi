@@ -5,6 +5,27 @@ from django.db import models
 from sensors.models import Sensor
 
 
+def monitor_file_path(instance, filename):
+    names = {"report.pdf", "mission.jsonl", "capture.pcap"}
+    if filename not in names:
+        raise ValueError("Unexpected monitor mission filename")
+    return f"monitor-missions/{instance.id}/{filename}"
+
+
+class MonitorMission(models.Model):
+    """Operator-uploaded capture; local source files remain on the phone."""
+
+    id = models.UUIDField(primary_key=True, editable=False)
+    sensor = models.ForeignKey(Sensor, null=True, blank=True, on_delete=models.SET_NULL, related_name="monitor_missions")
+    report = models.FileField(upload_to=monitor_file_path)
+    log = models.FileField(upload_to=monitor_file_path)
+    pcap = models.FileField(upload_to=monitor_file_path, blank=True)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-uploaded_at"]
+
+
 class ScanSession(models.Model):
     """One physical scan pass on the phone (or one LAN scan). Every
     radio-type Observation table FKs to this — it's the shared

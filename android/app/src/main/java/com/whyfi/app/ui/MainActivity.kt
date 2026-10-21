@@ -34,6 +34,7 @@ import com.whyfi.app.data.ThemePreference
 import com.whyfi.app.mission.MissionController
 import com.whyfi.app.mission.MissionScreen
 import com.whyfi.app.scan.RadioKind
+import com.whyfi.app.usbmon.MonitorScreen
 import com.whyfi.app.ui.theme.WhyfiTheme
 import kotlinx.coroutines.launch
 
@@ -183,8 +184,8 @@ private fun maskToken(token: String): String =
 private const val DASHBOARD_ICON = "📊"
 private const val SCAN_ICON = "🔍"
 private const val LAN_ICON = "🌐"
+private const val MONITOR_ICON = "📡"
 private const val SETTINGS_ICON = "⚙️"
-private const val TAB_COUNT = 4
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -198,6 +199,10 @@ private fun WhyfiApp(
     // rememberSaveable, not remember: rotating the phone shouldn't throw you
     // out of a results table back to the Scan tab.
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var advancedMode by remember { mutableStateOf(settingsRepository.advancedModeEnabled) }
+    // Keep the layout stable: Monitor is always discoverable, and its own
+    // screen explains how the USB test unlocks receive controls.
+    val tabCount = 5
     var detailRadio by rememberSaveable { mutableStateOf<String?>(null) }
     var showMission by rememberSaveable { mutableStateOf(false) }
 
@@ -207,7 +212,7 @@ private fun WhyfiApp(
     // directions below rather than replacing it, since PagerState's own
     // Saver isn't wired through the same drill-down early-returns this
     // composable already has.
-    val pagerState = rememberPagerState(initialPage = selectedTab) { TAB_COUNT }
+    val pagerState = rememberPagerState(initialPage = selectedTab.coerceAtMost(tabCount - 1)) { tabCount }
     val coroutineScope = rememberCoroutineScope()
     LaunchedEffect(pagerState.currentPage) { selectedTab = pagerState.currentPage }
     val goToTab: (Int) -> Unit = { index ->
@@ -255,11 +260,12 @@ private fun WhyfiApp(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        TabRow(selectedTabIndex = selectedTab) {
+        TabRow(selectedTabIndex = selectedTab.coerceAtMost(tabCount - 1)) {
             WhyfiTab(DASHBOARD_ICON, "Dashboard", 0, selectedTab) { goToTab(0) }
             WhyfiTab(SCAN_ICON, "Scan", 1, selectedTab) { goToTab(1) }
             WhyfiTab(LAN_ICON, "LAN", 2, selectedTab) { goToTab(2) }
-            WhyfiTab(SETTINGS_ICON, "Settings", 3, selectedTab) { goToTab(3) }
+            WhyfiTab(MONITOR_ICON, "Monitor", 3, selectedTab, enabled = advancedMode) { goToTab(3) }
+            WhyfiTab(SETTINGS_ICON, "Settings", 4, selectedTab) { goToTab(4) }
         }
 
         val openMission: () -> Unit = { showMission = true }
@@ -274,11 +280,17 @@ private fun WhyfiApp(
                     onOpenMission = openMission, missionController = missionController,
                 )
                 2 -> LanScreen(service = service, uiState = uiState)
-                3 -> SettingsScreen(
+                3 -> MonitorScreen(
+                    service = service,
+                    settingsRepository = settingsRepository,
+                    unlocked = advancedMode,
+                )
+                4 -> SettingsScreen(
                     settingsRepository = settingsRepository,
                     themePreference = themePreference,
                     onThemePreferenceChange = onThemePreferenceChange,
                     service = service,
+                    onAdvancedModeChange = { advancedMode = it },
                 )
             }
         }
@@ -286,10 +298,18 @@ private fun WhyfiApp(
 }
 
 @Composable
-private fun WhyfiTab(icon: String, label: String, index: Int, selectedTab: Int, onClick: () -> Unit) {
+private fun WhyfiTab(
+    icon: String,
+    label: String,
+    index: Int,
+    selectedTab: Int,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
     Tab(
         selected = selectedTab == index,
         onClick = onClick,
+        enabled = enabled,
         text = { Text(label) },
         icon = { Text(icon, fontSize = 16.sp) },
     )

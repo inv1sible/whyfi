@@ -65,6 +65,33 @@ WiFi scan-throttle path):
    without duplicating.
 8. Install a second build with a higher version code over the first without
    uninstalling — confirms the signing keystore is stable across builds.
+9. For USB Monitor, connect a supported RTL8812AU/8821AU adapter by OTG.
+   In Settings, run **USB monitor test** until it reports a successful run
+   with received frames. The always-visible **Monitor** tab enables itself
+   after that test. Earlier tests did not save this unlock state, so the test
+   must be repeated once with a build containing the unlock.
+10. On the Monitor tab, confirm the USB selector opens when no adapter is
+    present and collapses after selection. Start with **All** channels; the
+    channel panel can narrow the next session to selected or observed channels.
+    Confirm the top view tabs and the fixed Start/Stop, PCAP, channel, and USB
+    controls remain visible while Nearby cards scroll. Favorite an AP or
+    station, expand an AP to inspect associated stations, and toggle type
+    filters. Auto applies current observations to the RSSI/Latest sort;
+    Manual freezes the display until Refresh. Check category tables and
+    counts after switching.
+    Stop monitoring and confirm the foreground notification clears when the
+    service is otherwise idle. Open **Missions** to verify the PDF, log, and
+    optional PCAP exist with nonzero sizes. Open the PDF, inspect recent log
+    lines, or export the PCAP. The files live in the app-specific
+    Android/data/com.whyfi.app/files/monitor-missions/<mission-id>/ directory
+    and survive new captures and app updates; uninstalling the app removes
+    this app-specific directory, so export or upload first.
+11. In Missions, tap **Upload to backend** on a completed capture. The WebUI's
+    **Monitor Missions** page then lists the PDF, log, and optional PCAP for
+    authenticated download. Uploading never removes the phone's files.
+    A retry uses the same mission ID and does not make a duplicate. The
+    reverse proxy must allow a request body above the 200 MB PCAP cap.
+    Replay is not implemented yet.
 
 ## Permissions this app requests
 

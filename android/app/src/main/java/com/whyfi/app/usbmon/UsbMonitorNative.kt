@@ -12,7 +12,7 @@ object UsbMonitorNative {
         .exceptionOrNull()?.let { "${it.javaClass.simpleName}: ${it.message}" }
 
     /** Blocks for the whole test. Returns "" on success, else the reason. */
-    external fun run(fd: Int, lockDir: String, tracePath: String, channels: IntArray, dwellMs: Int, totalMs: Int): String
+    external fun run(fd: Int, lockDir: String, tracePath: String, pcapPath: String, channels: IntArray, dwellMs: Int, totalMs: Int): String
 
     external fun stop()
 
@@ -30,7 +30,7 @@ object UsbMonitorNative {
         TOTAL, MGMT, CTRL, DATA, BEACON, PROBE_REQ, PROBE_RESP,
         PROBE_REQ_SOURCES, PROBE_REQ_LOCAL_ADMIN, PROBE_REQ_DIRECTED,
         CLIENTS_TO_AP, RSSI_MIN, RSSI_MAX, CURRENT_CHANNEL, STAGE, BAD_FCS_OR_SHORT,
-        BEACON_CH_MATCH, BEACON_CH_OTHER, DEVICES, NO_RSSI,
+        BEACON_CH_MATCH, BEACON_CH_OTHER, DEVICES, NO_RSSI, PCAP_BYTES, PCAP_TRUNCATED,
     }
 
     /** Native STAGE values, for display. */
@@ -45,10 +45,9 @@ object UsbMonitorNative {
         CLIENTS_24("Clients on 2.4 GHz (1/6/11, long dwell)", intArrayOf(1, 6, 11), 3_000),
     }
 
-    /** 2.4 GHz 1/6/11 plus the 5 GHz 20 MHz channels (incl. DFS — receiving
-     * there is fine; we never transmit). */
-    val DEFAULT_CHANNELS = intArrayOf(
-        1, 6, 11,
+    /** 2.4 GHz channels 1–13 plus the listed 5 GHz 20 MHz channels
+     * (including DFS). Receive only; this adapter has no 6 GHz radio. */
+    val DEFAULT_CHANNELS = (1..13).toList().toIntArray() + intArrayOf(
         36, 40, 44, 48, 52, 56, 60, 64,
         100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140,
         149, 153, 157, 161, 165,

@@ -29,6 +29,10 @@ object UsbMonitorReport {
 
     fun stat(stats: LongArray, s: Stat): Long = stats.getOrElse(s.ordinal) { 0 }
 
+    /** A completed run only unlocks Monitor when it actually received frames. */
+    fun qualifiesForAdvancedMode(result: String?, stats: LongArray): Boolean =
+        result == null && stat(stats, Stat.TOTAL) > 0
+
     fun stageName(stats: LongArray): String =
         UsbMonitorNative.STAGES.getOrElse(stat(stats, Stat.STAGE).toInt()) { "stage ${stat(stats, Stat.STAGE)}" }
 
