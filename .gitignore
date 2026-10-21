@@ -17,6 +17,7 @@ npm-debug.log*
 .gradle/
 /android/.gradle/
 /android/app/build/
+/android/app/.cxx/
 /android/build/
 /android/local.properties
 *.apk

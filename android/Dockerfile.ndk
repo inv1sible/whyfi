@@ -1,8 +1,0 @@
-# Spike-only build image: the regular builder plus the NDK and CMake needed
-# for the native USB monitor-mode driver (devourer + libusb). Tagged
-# separately so the always-on android-builder service is unaffected.
-FROM whyfi-android-builder
-ARG ANDROID_NDK_VERSION=27.2.12479018
-ARG ANDROID_CMAKE_VERSION=3.22.1
-RUN yes | sdkmanager --licenses > /dev/null \
-    && sdkmanager --install "ndk;${ANDROID_NDK_VERSION}" "cmake;${ANDROID_CMAKE_VERSION}" > /dev/null

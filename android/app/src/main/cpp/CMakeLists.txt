@@ -30,6 +30,22 @@ target_link_libraries(usb1 PUBLIC log)
 # CMakeLists can't be used directly because it resolves libusb via
 # pkg-config, which the NDK build doesn't have.
 set(DVR ${CMAKE_SOURCE_DIR}/devourer)
+
+# whyfi: 0bda:0811 belongs in is_rtl8821a_pid(). Linux rtw88 (rtw8821au.c)
+# maps it to rtw8821a_hw_spec, and on a real 0bda:0811 stick the 8812
+# power-on flow left the chip stuck in CARDEMU (REG_SYS_CLKR=0x30,
+# REG_CR=0xEA). Compiled from a patched copy so the submodule stays clean
+# and a fresh checkout gets the fix without a manual step.
+set(DVR_EEPROM ${DVR}/src/jaguar1/EepromManager.cpp)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${DVR_EEPROM})
+file(READ ${DVR_EEPROM} DVR_EEPROM_SRC)
+string(FIND "${DVR_EEPROM_SRC}" "  case 0x0BDA0820:\n" DVR_EEPROM_ANCHOR)
+if(DVR_EEPROM_ANCHOR EQUAL -1)
+    message(FATAL_ERROR "devourer EepromManager.cpp changed: 0bda:0811 anchor not found")
+endif()
+string(REPLACE "  case 0x0BDA0820:\n" "  case 0x0BDA0811:\n  case 0x0BDA0820:\n"
+        DVR_EEPROM_SRC "${DVR_EEPROM_SRC}")
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/EepromManager.cpp "${DVR_EEPROM_SRC}")
 add_library(devourer STATIC
         ${DVR}/src/HalmacCfgParam.cpp
         ${DVR}/src/ParsedRadioPacket.cpp
@@ -56,7 +72,7 @@ add_library(devourer STATIC
         ${DVR}/src/jaguar1/RtlJaguarDevice.cpp
         ${DVR}/src/jaguar1/HalModule.cpp
         ${DVR}/src/jaguar1/RadioManagementModule.cpp
-        ${DVR}/src/jaguar1/EepromManager.cpp
+        ${CMAKE_CURRENT_BINARY_DIR}/EepromManager.cpp
         ${DVR}/src/jaguar1/FirmwareManager.cpp
         ${DVR}/src/jaguar1/Iqk8812a.cpp
         ${DVR}/src/jaguar1/PhydmWatchdog.cpp
@@ -66,6 +82,8 @@ add_library(devourer STATIC
 target_compile_features(devourer PUBLIC cxx_std_20)
 target_compile_definitions(devourer PUBLIC DEVOURER_HAVE_JAGUAR1=1)
 target_include_directories(devourer PUBLIC ${DVR}/hal ${DVR}/src)
+# The patched EepromManager.cpp copy resolves its quoted includes from here.
+target_include_directories(devourer PRIVATE ${DVR}/src/jaguar1)
 target_link_libraries(devourer PUBLIC usb1 log)
 
 # --- the JNI bridge

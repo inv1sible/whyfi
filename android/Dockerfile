@@ -6,6 +6,11 @@ FROM gradle:8.9-jdk17
 ARG ANDROID_CMDLINE_TOOLS_VERSION=14742923
 ARG ANDROID_COMPILE_SDK=34
 ARG ANDROID_BUILD_TOOLS_VERSION=34.0.0
+# NDK + CMake for the native USB monitor-mode library (app/src/main/cpp);
+# must match ndkVersion and externalNativeBuild.cmake.version in
+# app/build.gradle.kts.
+ARG ANDROID_NDK_VERSION=27.2.12479018
+ARG ANDROID_CMAKE_VERSION=3.22.1
 
 ENV ANDROID_SDK_ROOT=/opt/android-sdk
 ENV PATH="${PATH}:${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/platform-tools"
@@ -23,7 +28,9 @@ RUN apt-get update \
     && yes | sdkmanager --licenses > /dev/null \
     && sdkmanager --install "platform-tools" \
         "platforms;android-${ANDROID_COMPILE_SDK}" \
-        "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" > /dev/null
+        "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" \
+        "ndk;${ANDROID_NDK_VERSION}" \
+        "cmake;${ANDROID_CMAKE_VERSION}" > /dev/null
 
 WORKDIR /workspace
 # Only a fallback for running this image standalone — docker-compose

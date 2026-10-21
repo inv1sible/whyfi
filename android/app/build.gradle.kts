@@ -7,8 +7,8 @@ plugins {
 android {
     namespace = "com.whyfi.app"
     compileSdk = 34
-    // SPIKE: USB monitor-mode probe (src/main/cpp). Needs the NDK image
-    // (android/Dockerfile.ndk); 64-bit ARM only to keep the test build small.
+    // USB monitor-mode library (src/main/cpp). The NDK is installed in
+    // android/Dockerfile; 64-bit ARM only to keep the build small.
     ndkVersion = "27.2.12479018"
 
     defaultConfig {
