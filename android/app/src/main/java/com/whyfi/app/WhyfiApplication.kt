@@ -3,6 +3,8 @@ package com.whyfi.app
 import android.app.Application
 import android.util.Log
 import com.whyfi.app.diagnostics.CrashLogReader
+import com.whyfi.app.diagnostics.DiagnosticTrace
+import com.whyfi.app.diagnostics.ExitReasonRecorder
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.text.SimpleDateFormat
@@ -14,6 +16,9 @@ class WhyfiApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         installCrashLogger()
+        // Crashes this handler can't see (native signals, ANRs) — copied from
+        // Android's exit history into the same crash log on the next start.
+        ExitReasonRecorder.recordMissedExits(this)
     }
 
     /** Getting today's crash log out of this app required walking a user
@@ -43,6 +48,8 @@ class WhyfiApplication : Application() {
         format.timeZone = TimeZone.getTimeZone("UTC")
         val timestamp = format.format(Date())
         val stackTrace = StringWriter().also { throwable.printStackTrace(PrintWriter(it)) }.toString()
-        CrashLogReader.crashLogFile(this).writeText("$timestamp\n$stackTrace")
+        // The steps logged right before the crash say what was being attempted.
+        val breadcrumbs = DiagnosticTrace.tailIfRecent(this, System.currentTimeMillis())?.let { "\nLast diagnostic steps:\n$it" }.orEmpty()
+        CrashLogReader.appendEntry(CrashLogReader.crashLogFile(this), timestamp, stackTrace + breadcrumbs)
     }
 }

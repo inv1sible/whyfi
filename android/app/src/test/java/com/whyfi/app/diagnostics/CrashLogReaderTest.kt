@@ -48,4 +48,27 @@ class CrashLogReaderTest {
     fun `parse returns null for text with no newline`() {
         assertNull(CrashLogReader.parse("not a crash log"))
     }
+
+    @Test
+    fun `appendEntry writes the parseable format into an empty log`() {
+        val file = File.createTempFile("crash", ".txt").also { it.delete() }
+        CrashLogReader.appendEntry(file, "2026-10-21T10:00:00Z", "Native crash")
+        assertEquals(
+            CrashLogReader.ParsedCrashLog("2026-10-21T10:00:00Z", "Native crash"),
+            CrashLogReader.parse(CrashLogReader.readCrashLog(file)!!),
+        )
+        file.delete()
+    }
+
+    @Test
+    fun `appendEntry keeps an unsent crash and adds the new one under a header`() {
+        val file = File.createTempFile("crash", ".txt")
+        file.writeText("2026-10-21T09:00:00Z\njava.lang.IllegalStateException: boom")
+        CrashLogReader.appendEntry(file, "2026-10-21T10:00:00Z", "Native crash")
+        val parsed = CrashLogReader.parse(CrashLogReader.readCrashLog(file)!!)!!
+        assertEquals("2026-10-21T09:00:00Z", parsed.occurredAt)
+        assertTrue(parsed.stackTrace.contains("boom"))
+        assertTrue(parsed.stackTrace.contains("=== 2026-10-21T10:00:00Z ===\nNative crash"))
+        file.delete()
+    }
 }

@@ -1,7 +1,6 @@
 package com.whyfi.app.ui
 
 import android.content.Intent
-import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Arrangement
@@ -35,14 +34,12 @@ import androidx.compose.ui.unit.dp
 import com.whyfi.app.BuildConfig
 import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.ThemePreference
-import com.whyfi.app.data.remote.ApiClientFactory
-import com.whyfi.app.data.remote.CrashReportRequest
 import com.whyfi.app.diagnostics.CrashLogReader
+import com.whyfi.app.diagnostics.CrashReportSender
 import com.whyfi.app.permissions.PermissionHelper
 import com.whyfi.app.scan.ScanForegroundService
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
-import java.io.IOException
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -382,33 +379,16 @@ fun SettingsScreen(
                             enabled = !sendingCrashLog,
                             onClick = {
                                 val parsed = CrashLogReader.parse(crashLogText)
-                                if (backendUrl.isBlank() || token.isBlank()) {
-                                    crashLogMessage = "Configure a backend URL and sensor token above first."
-                                } else if (parsed == null) {
+                                if (parsed == null) {
                                     crashLogMessage = "Could not parse the crash log."
                                 } else {
                                     sendingCrashLog = true
                                     crashLogMessage = null
                                     scope.launch {
                                         try {
-                                            val api = ApiClientFactory.create(backendUrl)
-                                            val response = api.uploadCrashReport(
-                                                "Token $token",
-                                                CrashReportRequest(
-                                                    occurredAt = parsed.occurredAt,
-                                                    appVersion = BuildConfig.VERSION_NAME,
-                                                    deviceModel = Build.MODEL,
-                                                    osVersion = Build.VERSION.RELEASE,
-                                                    stackTrace = parsed.stackTrace,
-                                                ),
+                                            crashLogMessage = CrashReportSender.send(
+                                                backendUrl, token, parsed.occurredAt, parsed.stackTrace,
                                             )
-                                            crashLogMessage = if (response.isSuccessful) {
-                                                "Sent — view it on the web UI's Crash Reports page."
-                                            } else {
-                                                "Send failed (HTTP ${response.code()})."
-                                            }
-                                        } catch (e: IOException) {
-                                            crashLogMessage = "Could not reach the backend: ${e.message}"
                                         } finally {
                                             sendingCrashLog = false
                                         }

@@ -12,6 +12,7 @@ import java.io.File
  */
 object CrashLogReader {
     const val CRASH_LOG_FILENAME = "last_crash.txt"
+    const val MAX_LOG_BYTES = 256 * 1024L
 
     /** Single source of truth for the path, shared by the writer
      * (WhyfiApplication) and every reader, so the two can't drift onto
@@ -33,6 +34,19 @@ object CrashLogReader {
     fun clearCrashLog(file: File): Boolean = !file.exists() || file.delete()
 
     fun clearCrashLog(context: Context): Boolean = clearCrashLog(crashLogFile(context))
+
+    /** Adds a crash to the log without losing one that hasn't been sent yet:
+     * an empty log gets the plain "timestamp\nbody" format parse() expects;
+     * otherwise the entry is appended under its own header, so the first
+     * line stays the oldest pending crash's timestamp. */
+    fun appendEntry(file: File, occurredAt: String, body: String) {
+        if (file.length() > MAX_LOG_BYTES) return // a crash loop must not fill storage
+        if (!file.exists() || file.length() == 0L) {
+            file.writeText("$occurredAt\n$body")
+        } else {
+            file.appendText("\n\n=== $occurredAt ===\n$body")
+        }
+    }
 
     data class ParsedCrashLog(val occurredAt: String, val stackTrace: String)
 
