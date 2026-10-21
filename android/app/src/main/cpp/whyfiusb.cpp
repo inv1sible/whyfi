@@ -2,9 +2,10 @@
 //
 // Kotlin opens the stick through Android's UsbManager (no root) and passes
 // the file descriptor here; libusb wraps it and devourer brings the chip up
-// in monitor mode. We never transmit. Frames are only counted (types,
-// probe requests, distinct transmitters, RSSI) — no MACs or SSIDs leave this
-// file. Each step is appended to the app's diagnostic trace *before* it is
+// in monitor mode. We never transmit. Besides counters, a per-device table
+// (transmitter MAC, role, network names, WPS identity, traffic volume) is
+// kept in memory for the on-phone device list; Kotlin decides what, if
+// anything, leaves the phone. Each step is appended to the app's diagnostic trace *before* it is
 // attempted, so a native crash still shows how far bring-up got.
 
 #include <jni.h>
@@ -18,6 +19,7 @@
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <map>
 #include <set>
 #include <string>
 #include <thread>
@@ -39,6 +41,7 @@ enum Stat {
     TOTAL, MGMT, CTRL, DATA, BEACON, PROBE_REQ, PROBE_RESP,
     PROBE_REQ_SOURCES, PROBE_REQ_LOCAL_ADMIN, PROBE_REQ_DIRECTED,
     CLIENTS_TO_AP, RSSI_MIN, RSSI_MAX, CURRENT_CHANNEL, STAGE, BAD_FCS_OR_SHORT,
+    BEACON_CH_MATCH, BEACON_CH_OTHER, DEVICES, NO_RSSI,
     STAT_COUNT
 };
 
@@ -70,45 +73,249 @@ std::string mac(const uint8_t *p) {
     return b;
 }
 
-void onFrame(const Packet &packet) {
-    const auto &d = packet.Data;
-    g_stats[TOTAL]++;
-    int ch = static_cast<int>(g_stats[CURRENT_CHANNEL].load());
-    if (ch > 0 && ch < 256) {
-        std::lock_guard<std::mutex> lock(g_sets_mu);
-        g_per_channel[ch]++;
-    }
-    const int rssi = static_cast<int>(packet.RxAtrib.rssi[0]) - 110;  // devourer LinkHealth: raw - 110 = dBm
-    if (rssi < g_stats[RSSI_MIN]) g_stats[RSSI_MIN] = rssi;
-    if (rssi > g_stats[RSSI_MAX]) g_stats[RSSI_MAX] = rssi;
+// One transmitter (or a client seen as a data-frame receiver).
+constexpr int ROLE_AP = 1, ROLE_CLIENT = 2;
+constexpr size_t MAX_DEVICES = 4000, MAX_NAMES = 16;
 
-    if (d.size() < 16) { g_stats[BAD_FCS_OR_SHORT]++; return; }
+struct Device {
+    int roles = 0;
+    long long frames = 0, probeReqs = 0, bytesUp = 0, bytesDown = 0;
+    int bestRssi = -1000;  // -1000 = no reading
+    std::set<int> channels;
+    std::string ssid;                // beaconed network name (APs)
+    std::set<std::string> probed;    // network names asked for (clients)
+    bool wildcardProbe = false;
+    std::set<std::string> bssids;    // APs this client exchanged data with
+    std::string wpsName, wpsManufacturer, wpsModel;
+    long long firstMs = 0, lastMs = 0;
+};
+
+std::map<uint64_t, Device> g_devices;  // guarded by g_sets_mu
+long long g_start_ms = 0;
+
+long long nowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+uint64_t key(const uint8_t *p) {
+    uint64_t k = 0;
+    for (int i = 0; i < 6; i++) k = (k << 8) | p[i];
+    return k;
+}
+
+std::string keyMac(uint64_t k) {
+    uint8_t b[6];
+    for (int i = 5; i >= 0; i--) { b[i] = k & 0xff; k >>= 8; }
+    return mac(b);
+}
+
+bool isUnicast(const uint8_t *p) { return (p[0] & 0x01) == 0; }
+
+// Printable, single-line, separator-free text for the TSV export.
+std::string clean(const uint8_t *p, size_t n) {
+    std::string out;
+    for (size_t i = 0; i < n && out.size() < 64; i++) {
+        uint8_t c = p[i];
+        out += (c >= 0x20 && c != 0x7f && c != '\t' && c != '|') ? static_cast<char>(c) : '?';
+    }
+    return out;
+}
+
+bool allZero(const uint8_t *p, size_t n) {
+    for (size_t i = 0; i < n; i++) if (p[i]) return false;
+    return true;
+}
+
+Device *device(uint64_t k, long long t) {  // caller holds g_sets_mu
+    auto it = g_devices.find(k);
+    if (it == g_devices.end()) {
+        if (g_devices.size() >= MAX_DEVICES) return nullptr;
+        it = g_devices.emplace(k, Device{}).first;
+        it->second.firstMs = t;
+        g_stats[DEVICES] = static_cast<long long>(g_devices.size());
+    }
+    it->second.lastMs = t;
+    return &it->second;
+}
+
+// Signal in dBm from the PHY status, per Realtek phydm (Jaguar series):
+// per-path power = (gain_trsw & 0x7F) - 110. Only frames that carry a PHY
+// status have one (A-MPDU subframes don't); absurd values are dropped.
+int frameRssi(const rx_pkt_attrib &a) {
+    if (!a.physt) return -1000;
+    int best = -1000;
+    for (int i = 0; i < 2; i++) {
+        if (a.rssi[i] == 0) continue;
+        int dbm = (a.rssi[i] & 0x7F) - 110;
+        if (dbm >= -100 && dbm <= -5 && dbm > best) best = dbm;
+    }
+    return best;
+}
+
+struct Ies {
+    std::string ssid;
+    bool hasSsid = false, wildcard = false;
+    int channel = 0;  // DS Parameter Set (2.4 GHz) or HT Operation primary channel
+    std::string wpsName, wpsManufacturer, wpsModel;
+};
+
+// WPS attributes (big-endian type/length) inside vendor IE 00:50:F2 type 4.
+void parseWps(const uint8_t *p, size_t n, Ies &out) {
+    size_t i = 0;
+    while (i + 4 <= n) {
+        const int type = (p[i] << 8) | p[i + 1], len = (p[i + 2] << 8) | p[i + 3];
+        if (i + 4 + len > n) break;
+        const uint8_t *v = p + i + 4;
+        if (type == 0x1011) out.wpsName = clean(v, len);
+        else if (type == 0x1021) out.wpsManufacturer = clean(v, len);
+        else if (type == 0x1023) out.wpsModel = clean(v, len);
+        i += 4 + len;
+    }
+}
+
+Ies parseIes(const uint8_t *p, size_t n) {
+    Ies out;
+    size_t i = 0;
+    while (i + 2 <= n) {
+        const int id = p[i], len = p[i + 1];
+        if (i + 2 + len > n) break;
+        const uint8_t *v = p + i + 2;
+        if (id == 0 && !out.hasSsid) {
+            out.hasSsid = true;
+            out.wildcard = len == 0 || allZero(v, len);
+            if (!out.wildcard) out.ssid = clean(v, len);
+        } else if (id == 3 && len >= 1) {
+            out.channel = v[0];
+        } else if (id == 61 && len >= 1 && out.channel == 0) {
+            out.channel = v[0];
+        } else if (id == 221 && len >= 4 && v[0] == 0x00 && v[1] == 0x50 && v[2] == 0xF2 && v[3] == 0x04) {
+            parseWps(v + 4, len - 4, out);
+        }
+        i += 2 + len;
+    }
+    return out;
+}
+
+void applyWps(Device *dv, const Ies &ies) {
+    if (!ies.wpsName.empty()) dv->wpsName = ies.wpsName;
+    if (!ies.wpsManufacturer.empty()) dv->wpsManufacturer = ies.wpsManufacturer;
+    if (!ies.wpsModel.empty()) dv->wpsModel = ies.wpsModel;
+}
+
+void onFrame(const Packet &packet) {
+    const auto &a = packet.RxAtrib;
+    if (a.crc_err || a.icv_err) { g_stats[BAD_FCS_OR_SHORT]++; return; }
+    const auto &raw = packet.Data;
+    // Data includes the 4-byte FCS; parse only the frame itself.
+    if (raw.size() < 4 + 10) { g_stats[BAD_FCS_OR_SHORT]++; return; }
+    const uint8_t *d = raw.data();
+    const size_t n = raw.size() - 4;
+
+    g_stats[TOTAL]++;
+    const int ch = static_cast<int>(g_stats[CURRENT_CHANNEL].load());
+    const int rssi = frameRssi(a);
+    if (rssi == -1000) {
+        g_stats[NO_RSSI]++;
+    } else {
+        if (rssi < g_stats[RSSI_MIN]) g_stats[RSSI_MIN] = rssi;
+        if (rssi > g_stats[RSSI_MAX]) g_stats[RSSI_MAX] = rssi;
+    }
+
     const uint8_t fc0 = d[0], fc1 = d[1];
     const int type = (fc0 >> 2) & 0x3, subtype = (fc0 >> 4) & 0xF;
-    const uint8_t *addr1 = &d[4], *addr2 = &d[10];
+    const long long t = nowMs() - g_start_ms;
+
+    std::lock_guard<std::mutex> lock(g_sets_mu);
+    if (ch > 0 && ch < 256) g_per_channel[ch]++;
+    if (type == 1) { g_stats[CTRL]++; return; }  // control frames carry no transmitter identity worth keeping
+    if (n < 24) { g_stats[BAD_FCS_OR_SHORT]++; return; }
+    const uint8_t *addr1 = d + 4, *addr2 = d + 10, *addr3 = d + 16;
+
+    auto seen = [&](Device *dv) {
+        if (!dv) return;
+        dv->frames++;
+        if (rssi > dv->bestRssi) dv->bestRssi = rssi;
+        if (ch > 0) dv->channels.insert(ch);
+    };
 
     if (type == 0) {
         g_stats[MGMT]++;
-        if (subtype == 8) g_stats[BEACON]++;
-        else if (subtype == 5) g_stats[PROBE_RESP]++;
-        else if (subtype == 4) {
+        if (subtype == 8 || subtype == 5) {  // beacon / probe response: addr2 is the AP
+            if (subtype == 8) g_stats[BEACON]++; else g_stats[PROBE_RESP]++;
+            if (n < 36) return;
+            const Ies ies = parseIes(d + 36, n - 36);
+            if (subtype == 8 && ies.channel > 0)
+                g_stats[ies.channel == ch ? BEACON_CH_MATCH : BEACON_CH_OTHER]++;
+            Device *dv = device(key(addr2), t);
+            seen(dv);
+            if (dv) {
+                dv->roles |= ROLE_AP;
+                if (!ies.ssid.empty()) dv->ssid = ies.ssid;
+                applyWps(dv, ies);
+            }
+        } else if (subtype == 4) {  // probe request: addr2 is the searching client
             g_stats[PROBE_REQ]++;
-            // Body starts after the 24-byte header; first IE is the SSID.
-            if (d.size() >= 26 && d[24] == 0 && d[25] > 0) g_stats[PROBE_REQ_DIRECTED]++;
-            std::lock_guard<std::mutex> lock(g_sets_mu);
+            const Ies ies = parseIes(d + 24, n - 24);
+            if (!ies.wildcard && ies.hasSsid) g_stats[PROBE_REQ_DIRECTED]++;
             if (g_probe_sources.insert(mac(addr2)).second && (addr2[0] & 0x02))
                 g_stats[PROBE_REQ_LOCAL_ADMIN]++;
             g_stats[PROBE_REQ_SOURCES] = static_cast<long long>(g_probe_sources.size());
+            Device *dv = device(key(addr2), t);
+            seen(dv);
+            if (dv) {
+                dv->roles |= ROLE_CLIENT;
+                dv->probeReqs++;
+                if (ies.wildcard) dv->wildcardProbe = true;
+                else if (!ies.ssid.empty() && dv->probed.size() < MAX_NAMES) dv->probed.insert(ies.ssid);
+                applyWps(dv, ies);
+            }
+        } else if ((subtype == 0 || subtype == 2) && isUnicast(addr1)) {
+            // (re)association request: client addr2 joins AP addr1; body has the SSID.
+            const size_t fixed = subtype == 0 ? 4 : 10;
+            Device *dv = device(key(addr2), t);
+            seen(dv);
+            if (dv) {
+                dv->roles |= ROLE_CLIENT;
+                if (dv->bssids.size() < MAX_NAMES) dv->bssids.insert(mac(addr1));
+                if (n > 24 + fixed) {
+                    const Ies ies = parseIes(d + 24 + fixed, n - 24 - fixed);
+                    if (!ies.ssid.empty() && dv->probed.size() < MAX_NAMES) dv->probed.insert(ies.ssid);
+                    applyWps(dv, ies);
+                }
+            }
+        } else if (isUnicast(addr2)) {
+            seen(device(key(addr2), t));
         }
-    } else if (type == 1) {
-        g_stats[CTRL]++;
+        (void)addr3;
     } else if (type == 2) {
         g_stats[DATA]++;
-        // ToDS=1, FromDS=0: a station sending to its AP -> addr2 is the client.
-        if ((fc1 & 0x3) == 0x1 && d.size() >= 24) {
-            std::lock_guard<std::mutex> lock(g_sets_mu);
-            g_clients.insert(mac(addr2) + ">" + mac(addr1));
-            g_stats[CLIENTS_TO_AP] = static_cast<long long>(g_clients.size());
+        const int ds = fc1 & 0x3;
+        const long long len = static_cast<long long>(n);
+        if (ds == 0x1 && isUnicast(addr2)) {  // ToDS: client addr2 -> AP addr1
+            Device *dv = device(key(addr2), t);
+            seen(dv);
+            if (dv) {
+                dv->roles |= ROLE_CLIENT;
+                dv->bytesUp += len;
+                if (dv->bssids.size() < MAX_NAMES) dv->bssids.insert(mac(addr1));
+                g_clients.insert(mac(addr2) + ">" + mac(addr1));
+                g_stats[CLIENTS_TO_AP] = static_cast<long long>(g_clients.size());
+            }
+            Device *ap = device(key(addr1), t);
+            if (ap) ap->roles |= ROLE_AP;
+        } else if (ds == 0x2 && isUnicast(addr1)) {  // FromDS: AP addr2 -> client addr1
+            Device *ap = device(key(addr2), t);
+            seen(ap);
+            if (ap) ap->roles |= ROLE_AP;
+            Device *dv = device(key(addr1), t);
+            if (dv) {
+                dv->roles |= ROLE_CLIENT;
+                dv->bytesDown += len;
+                if (dv->bssids.size() < MAX_NAMES) dv->bssids.insert(mac(addr2));
+                g_clients.insert(mac(addr1) + ">" + mac(addr2));
+                g_stats[CLIENTS_TO_AP] = static_cast<long long>(g_clients.size());
+            }
         }
     }
 }
@@ -120,6 +327,8 @@ void resetStats() {
     std::lock_guard<std::mutex> lock(g_sets_mu);
     g_probe_sources.clear();
     g_clients.clear();
+    g_devices.clear();
+    g_start_ms = nowMs();
     std::fill(g_per_channel.begin(), g_per_channel.end(), 0);
 }
 
@@ -274,4 +483,45 @@ Java_com_whyfi_app_usbmon_UsbMonitorNative_perChannel(JNIEnv *env, jobject) {
     jlongArray arr = env->NewLongArray(static_cast<jsize>(flat.size()));
     env->SetLongArrayRegion(arr, 0, static_cast<jsize>(flat.size()), flat.data());
     return arr;
+}
+
+// One line per device, tab-separated (UsbMonitorDevices.parse — keep in sync):
+// mac, roles, frames, probeReqs, bytesUp, bytesDown, bestRssi (or empty),
+// channels (comma), ssid, probed (|-joined), wildcard (0/1), bssids (comma),
+// wpsName, wpsManufacturer, wpsModel, firstMs, lastMs
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_whyfi_app_usbmon_UsbMonitorNative_devices(JNIEnv *env, jobject) {
+    std::string out;
+    {
+        std::lock_guard<std::mutex> lock(g_sets_mu);
+        for (const auto &[k, dv] : g_devices) {
+            auto join = [](const std::set<std::string> &xs, char sep) {
+                std::string r;
+                for (const auto &x : xs) { if (!r.empty()) r += sep; r += x; }
+                return r;
+            };
+            std::string chans;
+            for (int c : dv.channels) { if (!chans.empty()) chans += ','; chans += std::to_string(c); }
+            out += keyMac(k) + '\t' + std::to_string(dv.roles) + '\t' + std::to_string(dv.frames) + '\t' +
+                   std::to_string(dv.probeReqs) + '\t' + std::to_string(dv.bytesUp) + '\t' +
+                   std::to_string(dv.bytesDown) + '\t' + (dv.bestRssi == -1000 ? "" : std::to_string(dv.bestRssi)) +
+                   '\t' + chans + '\t' + dv.ssid + '\t' + join(dv.probed, '|') + '\t' +
+                   (dv.wildcardProbe ? "1" : "0") + '\t' + join(dv.bssids, ',') + '\t' + dv.wpsName + '\t' +
+                   dv.wpsManufacturer + '\t' + dv.wpsModel + '\t' + std::to_string(dv.firstMs) + '\t' +
+                   std::to_string(dv.lastMs) + '\n';
+        }
+    }
+    // NewStringUTF wants modified UTF-8; clean() already reduced names to
+    // printable bytes, but non-ASCII ones may still be invalid UTF-8 — go
+    // through a byte array so the JVM decodes (and replaces) properly.
+    jbyteArray bytes = env->NewByteArray(static_cast<jsize>(out.size()));
+    env->SetByteArrayRegion(bytes, 0, static_cast<jsize>(out.size()), reinterpret_cast<const jbyte *>(out.data()));
+    jclass strClass = env->FindClass("java/lang/String");
+    jmethodID ctor = env->GetMethodID(strClass, "<init>", "([BLjava/lang/String;)V");
+    jstring charset = env->NewStringUTF("UTF-8");
+    auto result = static_cast<jstring>(env->NewObject(strClass, ctor, bytes, charset));
+    env->DeleteLocalRef(bytes);
+    env->DeleteLocalRef(charset);
+    env->DeleteLocalRef(strClass);
+    return result;
 }
