@@ -7,6 +7,9 @@ plugins {
 android {
     namespace = "com.whyfi.app"
     compileSdk = 34
+    // SPIKE: USB monitor-mode probe (src/main/cpp). Needs the NDK image
+    // (android/Dockerfile.ndk); 64-bit ARM only to keep the test build small.
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "com.whyfi.app"
@@ -24,6 +27,17 @@ android {
         // for everyone who downloads it, defeating per-device tokens
         // entirely — see MEMORY.md.
         buildConfigField("String", "DEFAULT_BACKEND_URL", "\"${System.getenv("WHYFI_PUBLIC_URL") ?: ""}\"")
+
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     // Signing key must persist across builds and be kept outside git — see

@@ -1,0 +1,6 @@
+[submodule "android/app/src/main/cpp/devourer"]
+	path = android/app/src/main/cpp/devourer
+	url = https://github.com/OpenIPC/devourer.git
+[submodule "android/app/src/main/cpp/libusb"]
+	path = android/app/src/main/cpp/libusb
+	url = https://github.com/libusb/libusb.git

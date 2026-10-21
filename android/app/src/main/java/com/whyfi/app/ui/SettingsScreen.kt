@@ -16,6 +16,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -36,6 +37,7 @@ import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.ThemePreference
 import com.whyfi.app.diagnostics.CrashLogReader
 import com.whyfi.app.diagnostics.CrashReportSender
+import com.whyfi.app.usbmon.UsbMonitorTestDialog
 import com.whyfi.app.permissions.PermissionHelper
 import com.whyfi.app.scan.ScanForegroundService
 import com.journeyapps.barcodescanner.ScanContract
@@ -407,6 +409,15 @@ fun SettingsScreen(
                         }
                     }
                     crashLogMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                }
+
+                // SPIKE: USB monitor-mode feasibility test (usbmon/).
+                var showUsbMonitorTest by remember { mutableStateOf(false) }
+                OutlinedButton(onClick = { showUsbMonitorTest = true }) {
+                    Text("USB monitor test (experimental)")
+                }
+                if (showUsbMonitorTest) {
+                    UsbMonitorTestDialog(backendUrl, token, onDismiss = { showUsbMonitorTest = false })
                 }
             }
         }
