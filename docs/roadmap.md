@@ -50,10 +50,10 @@ increments should be independently verifiable:
    same UUID and exposes authenticated WebUI downloads. Still needed:
    explicit retention/deletion controls, download auditing, and a fuller
    persisted summary for downstream analysis.
-3. Add passive EAPOL key-frame accounting to the monitor session and report.
-   Label it as EAPOL/handshake evidence, not a "WPA hash": hopping may miss
-   frames and seeing key frames does not establish a complete usable
-   handshake. Keep it receive-only and show AP/client/channel relationships.
+3. Passive EAPOL-Key frame accounting is now included in the monitor mission
+   report. A future analysis step can validate AP/client/channel relationships
+   and handshake completeness. Hopping may still miss part of an exchange;
+   do not label a frame count as a "WPA hash".
 4. Add authenticated WebUI search and analysis for opted-in monitor data,
    including AP/client relationships and probe activity. Keep raw observations
    distinct from guesses; rotating MAC addresses must not be treated as proof

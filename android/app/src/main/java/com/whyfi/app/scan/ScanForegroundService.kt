@@ -53,6 +53,7 @@ data class MonitorUiState(
     val reportPath: String? = null,
     val pcapBytes: Long = 0,
     val pcapTruncated: Boolean = false,
+    val eapolKeyFrames: Long = 0,
     /** Frame totals reported by the adapter for each channel heard so far. */
     val channelFrames: Map<Int, Long> = emptyMap(),
     val devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>> = emptyList(),
@@ -600,6 +601,7 @@ class ScanForegroundService : Service() {
                     it.copy(frames = frames, channelFrames = channelFrames, devices = raw,
                         pcapBytes = nativeStats.getOrElse(UsbMonitorNative.Stat.PCAP_BYTES.ordinal) { 0 },
                         pcapTruncated = nativeStats.getOrElse(UsbMonitorNative.Stat.PCAP_TRUNCATED.ordinal) { 0 } != 0L,
+                        eapolKeyFrames = nativeStats.getOrElse(UsbMonitorNative.Stat.EAPOL_KEY_FRAMES.ordinal) { 0 },
                         status = if (it.status == "Stopping…") it.status else "Receiving…")
                 }
             }

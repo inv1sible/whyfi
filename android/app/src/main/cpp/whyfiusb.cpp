@@ -12,6 +12,7 @@
 #include <android/log.h>
 #include <libusb.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -42,6 +43,7 @@ enum Stat {
     PROBE_REQ_SOURCES, PROBE_REQ_LOCAL_ADMIN, PROBE_REQ_DIRECTED,
     CLIENTS_TO_AP, RSSI_MIN, RSSI_MAX, CURRENT_CHANNEL, STAGE, BAD_FCS_OR_SHORT,
     BEACON_CH_MATCH, BEACON_CH_OTHER, DEVICES, NO_RSSI, PCAP_BYTES, PCAP_TRUNCATED,
+    EAPOL_KEY_FRAMES,
     STAT_COUNT
 };
 
@@ -243,6 +245,22 @@ void applyWps(Device *dv, const Ies &ies) {
     if (!ies.wpsModel.empty()) dv->wpsModel = ies.wpsModel;
 }
 
+// Count cleartext EAPOL-Key data frames, including QoS and four-address data.
+// This is evidence of key exchange traffic, not proof of a complete handshake.
+bool isEapolKey(const uint8_t *d, size_t n) {
+    if ((d[0] & 0x0c) != 0x08 || (d[1] & 0x40)) return false;
+    const bool qos = (d[0] & 0x80) != 0;
+    const size_t header = 24 + ((d[1] & 0x03) == 0x03 ? 6 : 0) +
+        (qos ? 2 : 0) + (qos && (d[1] & 0x80) ? 4 : 0);
+    if (n < header + 8 + 4) return false;
+    const uint8_t *llc = d + header;
+    const uint8_t eapolLlc[] = {0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00, 0x88, 0x8e};
+    if (!std::equal(eapolLlc, eapolLlc + 8, llc)) return false;
+    const uint8_t *e = llc + 8;
+    const size_t declared = (static_cast<size_t>(e[2]) << 8) | e[3];
+    return e[1] == 3 && declared >= 95 && n >= header + 8 + 4 + declared;
+}
+
 void onFrame(const Packet &packet) {
     const auto &a = packet.RxAtrib;
     if (a.crc_err || a.icv_err) { g_stats[BAD_FCS_OR_SHORT]++; return; }
@@ -331,6 +349,7 @@ void onFrame(const Packet &packet) {
         (void)addr3;
     } else if (type == 2) {
         g_stats[DATA]++;
+        if (isEapolKey(d, n)) g_stats[EAPOL_KEY_FRAMES]++;
         const int ds = fc1 & 0x3;
         const long long len = static_cast<long long>(n);
         if (ds == 0x1 && isUnicast(addr2)) {  // ToDS: client addr2 -> AP addr1

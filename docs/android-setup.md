@@ -73,15 +73,19 @@ WiFi scan-throttle path):
 10. On the Monitor tab, confirm the USB selector opens when no adapter is
     present and collapses after selection. Start with **All** channels; the
     channel panel can narrow the next session to selected or observed channels.
-    Confirm the top view tabs and the fixed Start/Stop, PCAP, channel, and USB
-    controls remain visible while Nearby cards scroll. Favorite an AP or
-    station, expand an AP to inspect associated stations, and toggle type
+    Confirm the top view tabs and the fixed Start/Stop, PCAP, and channel
+    controls remain visible while Nearby cards scroll. Missions sits next to
+    Nearby. Favorite an AP or station, expand an AP to inspect associated
+    stations, and toggle type
     filters. Auto applies current observations to the RSSI/Latest sort;
-    Manual freezes the display until Refresh. Check category tables and
+    Manual freezes the display until the reload icon beside Manual is tapped.
+    Check category tables and
     counts after switching.
     Stop monitoring and confirm the foreground notification clears when the
     service is otherwise idle. Open **Missions** to verify the PDF, log, and
-    optional PCAP exist with nonzero sizes. Open the PDF, inspect recent log
+    optional PCAP exist with nonzero sizes. The PDF includes a count of
+    observed EAPOL-Key frames; this count alone does not prove a complete
+    handshake or a usable WPA hash. Open the PDF, inspect recent log
     lines, or export the PCAP. The files live in the app-specific
     Android/data/com.whyfi.app/files/monitor-missions/<mission-id>/ directory
     and survive new captures and app updates; uninstalling the app removes

@@ -39,9 +39,8 @@ fun MonitorScreen(service: ScanForegroundService?, settingsRepository: SettingsR
 }
 
 private enum class MonitorTab(val label: String) {
-    NEARBY("Nearby"), ACCESS_POINTS("APs"), UNASSOCIATED("Unassociated"),
+    NEARBY("Nearby"), MISSIONS("Missions"), ACCESS_POINTS("APs"), UNASSOCIATED("Unassociated"),
     IOT("IoT"), CAMERAS("Cameras"), PHONES_LAPTOPS("Phones / laptops"), CLIENTS("Other clients"),
-    MISSIONS("Missions"),
 }
 
 private enum class NearbySort { RSSI, LAST_SEEN }
@@ -133,26 +132,26 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             }
         }
         if (selected == MonitorTab.NEARBY) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Updates", style = MaterialTheme.typography.bodySmall)
                 TextButton({
                     autoUpdate = !autoUpdate
                     if (state.running) service?.logMonitorEvent("update_mode", if (autoUpdate) "auto" else "manual")
                 }) { Text(if (autoUpdate) "Auto" else "Manual") }
+                if (!autoUpdate) {
+                    IconButton({
+                        displayDevices = state.devices
+                        if (state.running) service?.logMonitorEvent("display_refresh")
+                    }, modifier = Modifier.size(40.dp).semantics {
+                        contentDescription = "Refresh displayed devices${if (newDevices > 0) ", $newDevices new" else ""}"
+                    }) { Text("⟳", style = MaterialTheme.typography.headlineSmall) }
+                }
+                Spacer(Modifier.weight(1f))
                 Text("Sort", style = MaterialTheme.typography.bodySmall)
                 TextButton({
                     sortName = if (nearbySort == NearbySort.RSSI) NearbySort.LAST_SEEN.name else NearbySort.RSSI.name
                     if (state.running) service?.logMonitorEvent("nearby_sort", sortName)
                 }) { Text(if (nearbySort == NearbySort.RSSI) "RSSI ↓" else "Latest ↓") }
-            }
-            if (!autoUpdate) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.End) {
-                    TextButton({
-                        displayDevices = state.devices
-                        if (state.running) service?.logMonitorEvent("display_refresh")
-                    }) { Text(if (newDevices > 0) "Refresh (+$newDevices)" else "Refresh") }
-                }
             }
         }
         if (selected == MonitorTab.NEARBY) {
@@ -184,12 +183,6 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             Column(Modifier.padding(horizontal = 10.dp, vertical = 5.dp)) {
                 Text("${state.status} · ${state.frames} frames", style = MaterialTheme.typography.bodySmall, maxLines = 1)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton({
-                        usbDevices = usbManager.deviceList.values.toList()
-                        if (selectedDevice !in usbDevices) selectedDevice = usbDevices.firstOrNull()
-                        showUsb = !showUsb
-                        selectedName = MonitorTab.NEARBY.name
-                    }, modifier = Modifier.semantics { contentDescription = "USB adapter" }) { Text("🔌") }
                     if (state.running) Button({ service?.stopMonitor() },
                         enabled = state.status != "Starting…" && state.status != "Stopping…") { Text("Stop") }
                     else Button(startMonitor, enabled = !starting && selectedDevice != null) {
