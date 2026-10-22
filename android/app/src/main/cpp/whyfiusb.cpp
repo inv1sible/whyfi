@@ -24,6 +24,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <time.h>
 #include <vector>
 
 #include "IRtlDevice.h"
@@ -123,6 +124,9 @@ struct Device {
     int roles = 0;
     long long frames = 0, probeReqs = 0, bytesUp = 0, bytesDown = 0;
     int bestRssi = -1000;  // -1000 = no reading
+    int lastRssi = -1000;
+    long long lastRssiBootMs = 0;
+    int lastRssiChannel = 0;
     std::set<int> channels;
     std::string ssid;                // beaconed network name (APs)
     std::set<std::string> probed;    // network names asked for (clients)
@@ -138,6 +142,12 @@ long long g_start_ms = 0;
 long long nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+long long bootMs() {
+    timespec ts{};
+    clock_gettime(CLOCK_BOOTTIME, &ts);
+    return static_cast<long long>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
 }
 
 uint64_t key(const uint8_t *p) {
@@ -295,6 +305,11 @@ void onFrame(const Packet &packet) {
         if (!dv) return;
         dv->frames++;
         if (rssi > dv->bestRssi) dv->bestRssi = rssi;
+        if (rssi != -1000) {
+            dv->lastRssi = rssi;
+            dv->lastRssiBootMs = bootMs();
+            dv->lastRssiChannel = ch;
+        }
         if (ch > 0) dv->channels.insert(ch);
     };
 
@@ -552,7 +567,8 @@ Java_com_whyfi_app_usbmon_UsbMonitorNative_perChannel(JNIEnv *env, jobject) {
 // One line per device, tab-separated (UsbMonitorDevices.parse — keep in sync):
 // mac, roles, frames, probeReqs, bytesUp, bytesDown, bestRssi (or empty),
 // channels (comma), ssid, probed (|-joined), wildcard (0/1), bssids (comma),
-// wpsName, wpsManufacturer, wpsModel, firstMs, lastMs
+// wpsName, wpsManufacturer, wpsModel, firstMs, lastMs,
+// lastRssi, lastRssiBootMs (Android elapsed-realtime clock), lastRssiChannel
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_whyfi_app_usbmon_UsbMonitorNative_devices(JNIEnv *env, jobject) {
     std::string out;
@@ -572,7 +588,10 @@ Java_com_whyfi_app_usbmon_UsbMonitorNative_devices(JNIEnv *env, jobject) {
                    '\t' + chans + '\t' + dv.ssid + '\t' + join(dv.probed, '|') + '\t' +
                    (dv.wildcardProbe ? "1" : "0") + '\t' + join(dv.bssids, ',') + '\t' + dv.wpsName + '\t' +
                    dv.wpsManufacturer + '\t' + dv.wpsModel + '\t' + std::to_string(dv.firstMs) + '\t' +
-                   std::to_string(dv.lastMs) + '\n';
+                   std::to_string(dv.lastMs) + '\t' +
+                   (dv.lastRssi == -1000 ? "" : std::to_string(dv.lastRssi)) + '\t' +
+                   std::to_string(dv.lastRssiBootMs) + '\t' +
+                   std::to_string(dv.lastRssiChannel) + '\n';
         }
     }
     // NewStringUTF wants modified UTF-8; clean() already reduced names to

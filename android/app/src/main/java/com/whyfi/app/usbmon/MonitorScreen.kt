@@ -181,7 +181,11 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
         }
         Surface(Modifier.fillMaxWidth(), tonalElevation = 5.dp, shadowElevation = 5.dp) {
             Column(Modifier.padding(horizontal = 10.dp, vertical = 5.dp)) {
-                Text("${state.status} · ${state.frames} frames", style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                Text("${state.status} · ${state.frames} frames · ${state.geoSamples} GPS samples",
+                    style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                if (state.running && state.geoStatus != "Location sampling active") {
+                    Text(state.geoStatus, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (state.running) Button({ service?.stopMonitor() },
                         enabled = state.status != "Starting…" && state.status != "Stopping…") { Text("Stop") }

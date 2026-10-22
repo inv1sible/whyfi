@@ -79,6 +79,15 @@ and sizes, can open the PDF or export the PCAP, and uploads only after an
 explicit tap. The backend stores each file under that UUID and exposes
 authenticated downloads in the WebUI's Monitor Missions page. Successful
 upload marks the phone's copy but does not delete it.
+Pinned Nearby devices also produce bounded geotagged RSSI samples in the
+mission log. The native USB path supplies a recent radio RSSI and Android
+elapsed-time timestamp; the service only pairs it with a fresh, accurate
+location fix. The report groups spatially redundant readings, compares a
+signal-weighted centroid with a robust log-distance fit, and labels
+uncertainty and sampling advice. Its OpenStreetMap-backed heat layer is
+relative model fit, not a calibrated position probability. With no valid GPS
+fix the report states why no coordinate estimate can be made; older missions
+cannot recover RSSI/GPS pairings from their raw PCAP.
 
 ## Sighting tables
 

@@ -42,6 +42,15 @@ class SniffedDevicesTest {
     }
 
     @Test
+    fun `parse keeps the recent radio reading separate from the session maximum`() {
+        val d = SniffedDevices.parse(line("24:a1:60:00:00:01", 2) + "\t-74\t1234567\t11").single()
+        assertEquals(-60, d.bestRssi)
+        assertEquals(-74, d.lastRssi)
+        assertEquals(1_234_567L, d.lastRssiBootMs)
+        assertEquals(11, d.lastRssiChannel)
+    }
+
+    @Test
     fun `camera vendor is a camera`() {
         assertEquals(Kind.CAMERA, guess(line("bc:9a:8e:00:00:01", 2)).kind)
     }

@@ -5,8 +5,10 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
+import android.graphics.RectF
 import com.whyfi.app.scan.MonitorUiState
 import java.io.File
+import java.io.IOException
 import java.text.DateFormat
 import java.util.Date
 import java.util.UUID
@@ -14,6 +16,7 @@ import org.json.JSONObject
 
 /** One immutable local mission directory; a later capture always gets another. */
 object MonitorMission {
+    private val logLock = Any()
     data class Files(val directory: File, val pcap: File?, val report: File, val log: File)
     data class Stored(
         val directory: File,
@@ -48,11 +51,42 @@ object MonitorMission {
 
     /** Append-only so replay has the operator's actual sequence of actions. */
     fun append(files: Files, event: String, details: String = "") {
-        files.log.appendText(JSONObject().put("at_ms", System.currentTimeMillis()).put("event", event)
-            .put("details", details).toString() + "\n")
+        synchronized(logLock) {
+            files.log.appendText(JSONObject().put("at_ms", System.currentTimeMillis()).put("event", event)
+                .put("details", details).toString() + "\n")
+        }
     }
 
-    fun writeReport(files: Files, state: MonitorUiState) {
+    fun appendSamples(files: Files, samples: List<MonitorGeoSample>) {
+        if (samples.isEmpty()) return
+        synchronized(logLock) {
+            files.log.appendText(samples.joinToString("", "", "") { sample ->
+                JSONObject().put("event", "geo_sample").put("at_ms", sample.atMs).put("mac", sample.mac)
+                    .put("lat", sample.lat).put("lng", sample.lng).put("gps_accuracy_m", sample.gpsAccuracyM)
+                    .put("rssi", sample.rssi).put("channel", sample.channel).toString() + "\n"
+            })
+        }
+    }
+
+    fun readSamples(log: File): List<MonitorGeoSample> = log.useLines { lines ->
+        lines.mapNotNull { line ->
+            runCatching {
+                val row = JSONObject(line)
+                if (row.optString("event") != "geo_sample") return@runCatching null
+                MonitorGeoSample(row.getString("mac"), row.getLong("at_ms"), row.getDouble("lat"),
+                    row.getDouble("lng"), row.getDouble("gps_accuracy_m"), row.getInt("rssi"), row.getInt("channel"))
+            }.getOrNull()
+        }.toList()
+    }
+
+    fun targets(log: File): Set<String> = log.useLines { lines ->
+        lines.mapNotNull { line ->
+            runCatching { JSONObject(line).takeIf { it.optString("event") == "mission_target" }
+                ?.optString("details")?.takeIf(String::isNotBlank) }.getOrNull()
+        }.toSet()
+    }
+
+    fun writeReport(context: Context, files: Files, state: MonitorUiState, favorites: Set<String>) {
         val pdf = PdfDocument()
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         val ink = Color.rgb(24, 43, 51)
@@ -136,11 +170,44 @@ object MonitorMission {
             line("${guess.kind.label}; frames ${device.frames}; probes ${device.probeRequests}; APs ${device.bssids.joinToString().ifBlank { "none observed" }}", 12f, muted)
             if (device.probed.isNotEmpty()) line("Probed: ${device.probed.joinToString().take(90)}", 12f, muted)
         }
+        val geoSamples = readSamples(files.log)
+        section("Favorite position estimates (${favorites.size})")
+        if (favorites.isEmpty()) line("Star devices in Nearby during capture to include position estimates.", color = muted)
+        favorites.sorted().forEach { mac ->
+            if (y > 355f) nextPage()
+            val device = state.devices.firstOrNull { it.first.mac == mac }?.first
+            section("${device?.ssid?.takeIf { it.isNotBlank() } ?: "Device"}  $mac")
+            val samples = geoSamples.filter { it.mac == mac }
+            val estimate = MonitorLocalization.estimate(samples)
+            if (estimate == null) {
+                line("No GPS-tagged RSSI readings while this device was pinned.", color = muted)
+                line("Keep it pinned, enable precise location, and walk to several positions.", color = muted)
+            } else {
+                line("Estimated position: %.6f, %.6f  |  uncertainty at least %.0f m".format(
+                    estimate.lat, estimate.lng, estimate.uncertaintyM))
+                line("${estimate.spatialGroups} independent places  |  %.0f m route span  |  ${estimate.band}".format(
+                    estimate.receiverSpreadM), color = muted)
+                if (estimate.provisional) line("Provisional estimate: geometry or sample count is weak.", color = muted)
+                line("RSSI centroid baseline: %.6f, %.6f".format(estimate.baselineLat, estimate.baselineLng), color = muted)
+                val map = RectF(36f, y + 6f, 559f, y + 306f)
+                MonitorTileMap.draw(context, page!!.canvas, map, estimate, samples)
+                y = map.bottom + 15f
+                estimate.advice.forEach { line(it, color = muted) }
+                line("Heat colors show relative model fit, not a calibrated probability.", color = muted)
+            }
+        }
         section("Interpretation")
         line("Device types and associations are inferences from sampled traffic.", color = muted)
         line("No observed association does not prove a client is unassociated.", color = muted)
+        line("A device may move; receiver position and RSSI do not prove its physical location.", color = muted)
         finishPage()
-        files.report.outputStream().use { pdf.writeTo(it) }
-        pdf.close()
+        val temporary = File(files.directory, "report.pdf.tmp")
+        try {
+            temporary.outputStream().use { pdf.writeTo(it) }
+            if (!temporary.renameTo(files.report)) throw IOException("Could not save PDF report")
+        } finally {
+            pdf.close()
+            temporary.delete()
+        }
     }
 }

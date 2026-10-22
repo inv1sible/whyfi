@@ -8,10 +8,12 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.hardware.usb.UsbDeviceConnection
+import android.location.Location
 import android.os.BatteryManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.whyfi.app.BuildConfig
@@ -28,12 +30,14 @@ import com.whyfi.app.permissions.PermissionHelper
 import com.whyfi.app.ui.MainActivity
 import com.whyfi.app.usbmon.OuiTable
 import com.whyfi.app.usbmon.MonitorMission
+import com.whyfi.app.usbmon.MonitorGeoSample
 import com.whyfi.app.usbmon.SniffedDevices
 import com.whyfi.app.usbmon.UsbMonitorNative
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,7 +46,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.abs
 
 data class MonitorUiState(
     val running: Boolean = false,
@@ -54,6 +62,8 @@ data class MonitorUiState(
     val pcapBytes: Long = 0,
     val pcapTruncated: Boolean = false,
     val eapolKeyFrames: Long = 0,
+    val geoSamples: Int = 0,
+    val geoStatus: String = "",
     /** Frame totals reported by the adapter for each channel heard so far. */
     val channelFrames: Map<Int, Long> = emptyMap(),
     val devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>> = emptyList(),
@@ -583,14 +593,40 @@ class ScanForegroundService : Service() {
         _monitorState.value = MonitorUiState(running = true, status = "Starting…", device = device, pcapPath = mission.pcap?.absolutePath)
         updateNotification("Monitoring WiFi on ${channels.size} channels…")
         serviceScope.launch {
+            val location = AtomicReference<Location?>(LocationSnapshot.lastKnown(applicationContext))
+            val locationSubscription = LocationSnapshot.requestUpdates(applicationContext) { fix ->
+                location.set(Location(fix))
+            }
+            val seenSampleTimes = mutableMapOf<String, Long>()
+            val snapshotMutex = Mutex()
+            var geoSampleCount = 0
             val vendorTable = withContext(Dispatchers.IO) {
                 runCatching { assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
             }
-            suspend fun snapshot() {
+            suspend fun snapshot() = snapshotMutex.withLock {
                 val raw = withContext(Dispatchers.Default) {
                     SniffedDevices.parse(UsbMonitorNative.devices()).map { d ->
                         d to SniffedDevices.guess(d) { vendorTable?.vendorOf(it) }
                     }
+                }
+                val fix = location.get()
+                val fixAtBootMs = fix?.elapsedRealtimeNanos?.div(1_000_000)
+                val favorites = settingsRepository.monitorFavoriteMacs
+                val newSamples = raw.mapNotNull { (device, _) ->
+                    val bootMs = device.lastRssiBootMs ?: return@mapNotNull null
+                    if (device.mac !in favorites || bootMs <= (seenSampleTimes[device.mac] ?: 0L)) return@mapNotNull null
+                    seenSampleTimes[device.mac] = bootMs
+                    val rssi = device.lastRssi ?: return@mapNotNull null
+                    val channel = device.lastRssiChannel ?: return@mapNotNull null
+                    if (fix == null || fixAtBootMs == null || !fix.hasAccuracy() || fix.accuracy > 100f ||
+                        abs(fixAtBootMs - bootMs) > 5_000 || geoSampleCount >= 10_000
+                    ) return@mapNotNull null
+                    val wallMs = System.currentTimeMillis() - SystemClock.elapsedRealtime() + bootMs
+                    MonitorGeoSample(device.mac, wallMs, fix.latitude, fix.longitude, fix.accuracy.toDouble(), rssi, channel)
+                }.take((10_000 - geoSampleCount).coerceAtLeast(0))
+                if (newSamples.isNotEmpty()) {
+                    withContext(Dispatchers.IO) { MonitorMission.appendSamples(mission, newSamples) }
+                    geoSampleCount += newSamples.size
                 }
                 val frames = UsbMonitorNative.stats().getOrElse(UsbMonitorNative.Stat.TOTAL.ordinal) { 0 }
                 val nativeStats = UsbMonitorNative.stats()
@@ -602,6 +638,15 @@ class ScanForegroundService : Service() {
                         pcapBytes = nativeStats.getOrElse(UsbMonitorNative.Stat.PCAP_BYTES.ordinal) { 0 },
                         pcapTruncated = nativeStats.getOrElse(UsbMonitorNative.Stat.PCAP_TRUNCATED.ordinal) { 0 } != 0L,
                         eapolKeyFrames = nativeStats.getOrElse(UsbMonitorNative.Stat.EAPOL_KEY_FRAMES.ordinal) { 0 },
+                        geoSamples = geoSampleCount,
+                        geoStatus = when {
+                            favorites.isEmpty() -> "Star a device to collect location samples"
+                            fix == null -> "Waiting for GPS permission or fix"
+                            !fix.hasAccuracy() || fix.accuracy > 100f -> "GPS accuracy too low"
+                            abs(SystemClock.elapsedRealtime() - fixAtBootMs!!) > 5_000 -> "Waiting for fresh GPS"
+                            geoSampleCount >= 10_000 -> "Location sample cap reached"
+                            else -> "Location sampling active"
+                        },
                         status = if (it.status == "Stopping…") it.status else "Receiving…")
                 }
             }
@@ -622,12 +667,19 @@ class ScanForegroundService : Service() {
             } catch (e: Exception) {
                 result = e.message ?: e.javaClass.simpleName
             } finally {
-                poller.cancel()
+                poller.cancelAndJoin()
+                locationSubscription?.close()
                 connection.close()
                 val finished = _monitorState.value.copy(running = false, status = if (result.isEmpty()) "Finished" else "Failed: $result")
-                runCatching { MonitorMission.writeReport(mission, finished) }
+                settingsRepository.monitorFavoriteMacs.sorted().forEach { MonitorMission.append(mission, "mission_target", it) }
+                val reportResult = runCatching {
+                    MonitorMission.writeReport(applicationContext, mission, finished, settingsRepository.monitorFavoriteMacs)
+                }
                 MonitorMission.append(mission, "monitor_finished", "status=${finished.status} frames=${finished.frames}")
-                _monitorState.value = finished.copy(reportPath = mission.report.absolutePath)
+                _monitorState.value = finished.copy(
+                    reportPath = mission.report.takeIf { reportResult.isSuccess && it.isFile }?.absolutePath,
+                    status = if (reportResult.isFailure) "${finished.status}; PDF report failed" else finished.status,
+                )
                 monitorMission = null
                 stopIfNothingKeepsUsAlive()
             }

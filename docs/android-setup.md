@@ -76,17 +76,25 @@ WiFi scan-throttle path):
     Confirm the top view tabs and the fixed Start/Stop, PCAP, and channel
     controls remain visible while Nearby cards scroll. Missions sits next to
     Nearby. Favorite an AP or station, expand an AP to inspect associated
-    stations, and toggle type
-    filters. Auto applies current observations to the RSSI/Latest sort;
+    stations, and toggle type filters. Auto applies current observations to the RSSI/Latest sort;
     Manual freezes the display until the reload icon beside Manual is tapped.
-    Check category tables and
-    counts after switching.
+    Check category tables and counts after switching. Star a device while
+    monitoring, keep precise location enabled, and walk through several
+    separated positions. The command bar shows the number of GPS-tagged
+    radio samples. Sampling begins after the device is starred; stale or
+    inaccurate GPS fixes are excluded.
     Stop monitoring and confirm the foreground notification clears when the
     service is otherwise idle. Open **Missions** to verify the PDF, log, and
     optional PCAP exist with nonzero sizes. The PDF includes a count of
     observed EAPOL-Key frames; this count alone does not prove a complete
-    handshake or a usable WPA hash. Open the PDF, inspect recent log
-    lines, or export the PCAP. The files live in the app-specific
+    handshake or a usable WPA hash. Open the PDF to inspect each favorite's
+    map-backed position estimate, uncertainty, and route suggestions. Red
+    heat shows relative RSSI-model fit, not calibrated probability; blue
+    dots mark the phone's measurement positions. Map tiles use the same
+    OpenStreetMap source as Mission and are cached. If tiles are unavailable,
+    the GPS overlay and coordinate estimate remain in the PDF. Open a favorite
+    in Missions for an interactive map; inspect the log or export the PCAP.
+    The files live in the app-specific
     Android/data/com.whyfi.app/files/monitor-missions/<mission-id>/ directory
     and survive new captures and app updates; uninstalling the app removes
     this app-specific directory, so export or upload first.

@@ -28,6 +28,9 @@ object SniffedDevices {
         val wpsModel: String,
         val firstMs: Long,
         val lastMs: Long,
+        val lastRssi: Int? = null,
+        val lastRssiBootMs: Long? = null,
+        val lastRssiChannel: Int? = null,
     ) {
         val isAp get() = roles and ROLE_AP != 0
         val isClient get() = roles and ROLE_CLIENT != 0
@@ -60,6 +63,9 @@ object SniffedDevices {
                 bssids = f[11].split(',').filter { it.isNotEmpty() },
                 wpsName = f[12], wpsManufacturer = f[13], wpsModel = f[14],
                 firstMs = f[15].toLong(), lastMs = f[16].toLong(),
+                lastRssi = f.getOrNull(17)?.toIntOrNull(),
+                lastRssiBootMs = f.getOrNull(18)?.toLongOrNull(),
+                lastRssiChannel = f.getOrNull(19)?.toIntOrNull(),
             )
         }.getOrNull()
     }.toList()
