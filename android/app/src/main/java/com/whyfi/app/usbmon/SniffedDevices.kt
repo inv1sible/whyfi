@@ -102,21 +102,21 @@ object SniffedDevices {
         vendor?.let { reasons += "vendor: $it" }
         if (d.wps.isNotEmpty()) reasons += "announces itself as: ${d.wps}"
         val identity = "${d.wps} ${d.ssid}"
+        val camera = (vendor != null && CAMERA_VENDORS.containsMatchIn(vendor)) || CAMERA_WORDS.containsMatchIn(identity)
         val streaming = d.bytesUp >= STREAM_UP_BYTES && d.bytesUp >= 4 * d.bytesDown
         if (streaming) reasons += "uploads continuously (${d.bytesUp / 1024} KB up / ${d.bytesDown / 1024} KB down)"
         val only24 = d.channels.isNotEmpty() && d.channels.all { it <= 14 }
 
-        if (d.isAp && d.ssid.isNotEmpty() && !d.isClient) {
-            if (IOT_HOTSPOT.containsMatchIn(d.ssid) || (vendor != null && IOT_VENDORS.containsMatchIn(vendor))) {
+        if (d.isAp && !d.isClient) {
+            if (camera) return Guess(Kind.CAMERA, vendor, reasons)
+            if (d.ssid.isNotEmpty() &&
+                (IOT_HOTSPOT.containsMatchIn(d.ssid) || (vendor != null && IOT_VENDORS.containsMatchIn(vendor)))) {
                 reasons += "network name/vendor looks like a device's own setup hotspot"
                 return Guess(Kind.IOT, vendor, reasons)
             }
-            if (vendor != null && CAMERA_VENDORS.containsMatchIn(vendor)) return Guess(Kind.CAMERA, vendor, reasons)
             return Guess(Kind.ACCESS_POINT, vendor, reasons)
         }
-        if (d.isAp && !d.isClient) return Guess(Kind.ACCESS_POINT, vendor, reasons)
 
-        val camera = (vendor != null && CAMERA_VENDORS.containsMatchIn(vendor)) || CAMERA_WORDS.containsMatchIn(identity)
         val iot = vendor != null && IOT_VENDORS.containsMatchIn(vendor)
         val chip = vendor != null && CHIP_MAKERS.containsMatchIn(vendor)
         if (chip) reasons += "Wi-Fi chip maker's address — typical for embedded devices"

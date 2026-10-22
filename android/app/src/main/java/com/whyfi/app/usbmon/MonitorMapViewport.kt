@@ -25,8 +25,8 @@ internal fun monitorMapViewport(points: List<Pair<Double, Double>>, width: Int, 
     }
     val xSpan = (maxLng - minLng) / 360.0
     val ySpan = mercatorY(minLat) - mercatorY(maxLat)
-    val xZoom = if (xSpan == 0.0) 19.0 else log2(width.coerceAtLeast(1) * 0.7 / (256.0 * xSpan))
-    val yZoom = if (ySpan == 0.0) 19.0 else log2(height.coerceAtLeast(1) * 0.7 / (256.0 * ySpan))
+    val xZoom = if (xSpan == 0.0) 19.0 else log2(width.coerceAtLeast(1) * 0.85 / (256.0 * xSpan))
+    val yZoom = if (ySpan == 0.0) 19.0 else log2(height.coerceAtLeast(1) * 0.85 / (256.0 * ySpan))
     return MonitorMapViewport((minLat + maxLat) / 2.0, (minLng + maxLng) / 2.0,
         min(xZoom, yZoom).coerceIn(3.0, 19.0))
 }

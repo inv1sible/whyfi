@@ -335,7 +335,12 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                         }
                     } else {
                         Text(if (selected == MonitorTab.MAPPING) locationSummary
-                            else "${state.status} · ${state.frames} frames · ${state.geoSamples} location samples",
+                            else buildString {
+                                append(state.status)
+                                if (selected == MonitorTab.NEARBY && state.pcapPath != null)
+                                    append(" · PCAP ${formatPcapBytes(state.pcapBytes)}")
+                                append(" · ${state.frames} frames · ${state.geoSamples} location samples")
+                            },
                             style = MaterialTheme.typography.bodySmall, maxLines = 1)
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             if (state.running) Button({ service?.stopMonitor() },
@@ -474,10 +479,15 @@ private fun MonitorTable(
         if (tab == MonitorTab.PHONES_LAPTOPS) {
             Text("Current frame metadata cannot reliably distinguish phones from laptops.", style = MaterialTheme.typography.bodySmall)
         }
+        if (tab == MonitorTab.CAMERAS && rows.isEmpty()) {
+            Text("No camera identified yet. Check APs and other client tabs; identification needs recognizable names, manufacturer, or uplink traffic.",
+                style = MaterialTheme.typography.bodySmall)
+        }
         DataTable(
             columns = listOf(
                 TableColumn("Device", 150.dp),
                 TableColumn("MAC", 150.dp),
+                TableColumn("Manufacturer", 180.dp),
                 TableColumn("RSSI", 70.dp),
                 TableColumn("Channel", 80.dp),
                 TableColumn("Seen", 76.dp),
@@ -487,8 +497,10 @@ private fun MonitorTable(
                 DataTableRow(
                     key = device.mac,
                     cells = listOf(
-                        device.ssid.takeIf { it.isNotEmpty() } ?: guess.vendor ?: if (device.randomized) "private MAC" else "unknown",
+                        device.ssid.takeIf { it.isNotEmpty() } ?: device.wpsName.takeIf { it.isNotEmpty() }
+                            ?: if (device.randomized) "private MAC" else "unknown",
                         device.mac,
+                        guess.vendor ?: "—",
                         device.bestRssi?.let { "$it dBm" } ?: "—",
                         device.channels.joinToString().ifBlank { "—" },
                         relativeSeen(newest - device.lastMs),
@@ -500,6 +512,12 @@ private fun MonitorTable(
             showBadgeColumn = false,
         )
     }
+}
+
+private fun formatPcapBytes(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> "%.1f KiB".format(bytes / 1024.0)
+    else -> "%.1f MiB".format(bytes / (1024.0 * 1024.0))
 }
 
 private fun relativeSeen(ageMs: Long): String = when {

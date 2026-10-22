@@ -79,7 +79,11 @@ WiFi scan-throttle path):
     heading to hide/show its cards. Favorite an AP or station, expand an AP
     to inspect associated stations, and toggle type filters. Auto applies current observations to the RSSI/Latest sort;
     Manual freezes the display until the reload icon beside Manual is tapped.
-    Check category tables and counts after switching. Star a device while
+    Check category tables and counts after switching. Their Manufacturer column
+    comes from the bundled OUI table; a blank match is shown as —, and camera
+    labels are tentative because many cameras use generic Wi-Fi chip addresses.
+    When PCAP is enabled, Nearby's bottom statistics show its current file size.
+    Star a device while
     monitoring and allow the location prompt; approximate location is usable
     but produces a wider uncertainty region. Walk through several separated
     positions. The command bar shows the number of location-tagged radio
@@ -93,8 +97,9 @@ WiFi scan-throttle path):
     Pinned AP/station estimates and uncertainty circles appear on the same
     map; the favorite chips below the command bar filter All or one selected
     device and its sampled-RSSI cones. Their labels use the known SSID/device
-    name or vendor plus the complete MAC address. The map initially fits the
-    visible measurements and keeps the chosen zoom when centered. Refresh and ⌖ Center are also
+    name or vendor plus the complete MAC address. The map opens around the most
+    recent measurement points so a long mission does not force a distant view;
+    older points remain available by panning or zooming out. It keeps the chosen zoom when centered. Refresh and ⌖ Center are also
     in the bottom command bar; centering preserves map zoom. Channels remains available from Nearby.
     Select a saved mission or one of its position targets in **Missions** to jump
     to Location. The target opens centered on its estimate when geotagged

@@ -59,8 +59,11 @@ internal fun MonitorLocationMap(
             val focus = targetFocus
                 ?: receiver?.fix?.let { GeoPoint(it.lat, it.lng) }
                 ?: estimates.values.firstOrNull()?.let { GeoPoint(it.lat, it.lng) }
-            val measurementPoints = selectedSamples.map { it.lat to it.lng } +
-                estimates.values.map { it.lat to it.lng }
+            // A long mission may span a large area; open near its latest measurements.
+            val recentSamples = selectedSamples.takeLast(16)
+            val measurementPoints = recentSamples.map { it.lat to it.lng } +
+                if (selectedMac != null) estimates[selectedMac]?.let { listOf(it.lat to it.lng) }.orEmpty()
+                else if (recentSamples.isEmpty()) estimates.values.map { it.lat to it.lng } else emptyList()
             val fitPoints = measurementPoints.ifEmpty {
                 receiver?.fix?.let { listOf(it.lat to it.lng) }.orEmpty()
             }

@@ -106,6 +106,12 @@ class SniffedDevicesTest {
     }
 
     @Test
+    fun `camera identity on an AP wins over generic IoT hotspot classification`() {
+        assertEquals(Kind.CAMERA, guess(line("24:a1:60:00:00:0b", 1, ssid = "IPC-FrontDoor")).kind)
+        assertEquals(Kind.CAMERA, guess(line("bc:9a:8e:00:00:0c", 1)).kind)
+    }
+
+    @Test
     fun `activity describes searching and connections`() {
         val d = SniffedDevices.parse(line("da:a1:19:00:00:0a", 2, probes = 2, probed = "Home", bssids = "aa:bb:cc:00:00:01")).single()
         assertEquals("searching for \"Home\"; connected to 1 AP", SniffedDevices.activity(d))

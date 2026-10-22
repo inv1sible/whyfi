@@ -3,7 +3,7 @@ package com.whyfi.app.usbmon
 import android.content.Context
 import java.io.File
 
-/** Shared mission timeline for map, Nearby, and category tables. */
+/** Shared mission timeline for the map and category tables; Nearby stays live. */
 internal data class MonitorReplayMission(
     val log: File,
     val samples: List<MonitorGeoSample>,
