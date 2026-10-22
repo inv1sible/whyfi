@@ -120,9 +120,14 @@ private class MonitorLocationOverlay(
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 11f, paint)
             paint.color = Color.rgb(0, 110, 97)
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 8f, paint)
-            paint.textSize = 32f
+            val suffix = mac.takeLast(8).uppercase()
+            val name = labels[mac]?.removeSuffix(" · $suffix")?.take(20) ?: "Device"
+            paint.textSize = 27f
             paint.setShadowLayer(3f, 1f, 1f, Color.WHITE)
-            canvas.drawText((labels[mac] ?: mac.takeLast(8)).take(34), p.x + 15f, p.y - 12f, paint)
+            val textX = if (p.x + 16 + max(paint.measureText(name), paint.measureText(suffix)) > mapView.width)
+                p.x - 16 - max(paint.measureText(name), paint.measureText(suffix)) else p.x + 16f
+            canvas.drawText(name, textX, p.y - 10f, paint)
+            canvas.drawText(suffix, textX, p.y + 20f, paint)
             paint.clearShadowLayer()
         }
     }
