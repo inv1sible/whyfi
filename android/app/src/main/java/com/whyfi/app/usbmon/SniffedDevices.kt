@@ -64,8 +64,8 @@ object SniffedDevices {
                 wpsName = f[12], wpsManufacturer = f[13], wpsModel = f[14],
                 firstMs = f[15].toLong(), lastMs = f[16].toLong(),
                 lastRssi = f.getOrNull(17)?.toIntOrNull(),
-                lastRssiBootMs = f.getOrNull(18)?.toLongOrNull(),
-                lastRssiChannel = f.getOrNull(19)?.toIntOrNull(),
+                lastRssiBootMs = f.getOrNull(18)?.toLongOrNull()?.takeIf { it > 0 },
+                lastRssiChannel = f.getOrNull(19)?.toIntOrNull()?.takeIf { it > 0 },
             )
         }.getOrNull()
     }.toList()

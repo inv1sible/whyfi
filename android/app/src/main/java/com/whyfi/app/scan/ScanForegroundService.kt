@@ -66,9 +66,23 @@ data class MonitorUiState(
     val eapolKeyFrames: Long = 0,
     val geoSamples: Int = 0,
     val geoStatus: String = "",
+    val locationFixes: List<MonitorLocationCandidate> = emptyList(),
+    val locationUpdatesRegistered: Boolean = false,
+    val geoDiagnostics: MonitorGeoDiagnostics = MonitorGeoDiagnostics(),
     /** Frame totals reported by the adapter for each channel heard so far. */
     val channelFrames: Map<Int, Long> = emptyMap(),
     val devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>> = emptyList(),
+)
+
+/** Counts each new radio reading from a pinned transmitter exactly once. */
+data class MonitorGeoDiagnostics(
+    val radioReadings: Int = 0,
+    val favoriteDevicesHeard: Int = 0,
+    val favoriteWithoutRssi: Int = 0,
+    val missingRssi: Int = 0,
+    val missingChannel: Int = 0,
+    val noMatchingFix: Int = 0,
+    val sampleCap: Int = 0,
 )
 
 data class ScanUiState(
@@ -599,7 +613,7 @@ class ScanForegroundService : Service() {
         serviceScope.launch {
             val locations = AtomicReference(LocationSnapshot.lastKnownCandidates(applicationContext)
                 .associateBy { it.provider ?: "unknown" })
-            val locationSubscription = LocationSnapshot.requestUpdates(applicationContext, includeFused = true) { fix ->
+            val onFix: (Location) -> Unit = { fix ->
                 locations.updateAndGet { previous ->
                     val provider = fix.provider ?: "unknown"
                     val old = previous[provider]
@@ -607,14 +621,19 @@ class ScanForegroundService : Service() {
                         previous + (provider to Location(fix)) else previous
                 }
             }
+            var locationSubscription = LocationSnapshot.requestUpdates(applicationContext, includeFused = true, onLocation = onFix)
             val seenSampleTimes = mutableMapOf<String, Long>()
             val snapshotMutex = Mutex()
             var geoSampleCount = 0
+            var geoDiagnostics = MonitorGeoDiagnostics()
             val sampledMacs = mutableSetOf<String>()
             val vendorTable = withContext(Dispatchers.IO) {
                 runCatching { assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
             }
             suspend fun snapshot() = snapshotMutex.withLock {
+                if (locationSubscription == null) {
+                    locationSubscription = LocationSnapshot.requestUpdates(applicationContext, includeFused = true, onLocation = onFix)
+                }
                 val raw = withContext(Dispatchers.Default) {
                     SniffedDevices.parse(UsbMonitorNative.devices()).map { d ->
                         d to SniffedDevices.guess(d) { vendorTable?.vendorOf(it) }
@@ -627,18 +646,38 @@ class ScanForegroundService : Service() {
                             fix.accuracy.toDouble() else 1_000.0)
                 }
                 val favorites = settingsRepository.monitorFavoriteMacs
+                val heardFavorites = raw.map { it.first }.filter { it.mac in favorites }
+                geoDiagnostics = geoDiagnostics.copy(
+                    favoriteDevicesHeard = heardFavorites.size,
+                    favoriteWithoutRssi = heardFavorites.count { it.lastRssiBootMs == null },
+                )
+                var acceptedThisSnapshot = 0
                 val newSamples = raw.mapNotNull { (device, _) ->
                     val bootMs = device.lastRssiBootMs ?: return@mapNotNull null
                     if (device.mac !in favorites || bootMs <= (seenSampleTimes[device.mac] ?: 0L)) return@mapNotNull null
                     seenSampleTimes[device.mac] = bootMs
-                    val rssi = device.lastRssi ?: return@mapNotNull null
-                    val channel = device.lastRssiChannel ?: return@mapNotNull null
-                    if (geoSampleCount >= 10_000) return@mapNotNull null
-                    val selectedFix = MonitorLocationPolicy.select(fixes, bootMs) ?: return@mapNotNull null
+                    geoDiagnostics = geoDiagnostics.copy(radioReadings = geoDiagnostics.radioReadings + 1)
+                    val rssi = device.lastRssi ?: run {
+                        geoDiagnostics = geoDiagnostics.copy(missingRssi = geoDiagnostics.missingRssi + 1)
+                        return@mapNotNull null
+                    }
+                    val channel = device.lastRssiChannel?.takeIf { it > 0 } ?: run {
+                        geoDiagnostics = geoDiagnostics.copy(missingChannel = geoDiagnostics.missingChannel + 1)
+                        return@mapNotNull null
+                    }
+                    if (geoSampleCount + acceptedThisSnapshot >= 10_000) {
+                        geoDiagnostics = geoDiagnostics.copy(sampleCap = geoDiagnostics.sampleCap + 1)
+                        return@mapNotNull null
+                    }
+                    val selectedFix = MonitorLocationPolicy.select(fixes, bootMs) ?: run {
+                        geoDiagnostics = geoDiagnostics.copy(noMatchingFix = geoDiagnostics.noMatchingFix + 1)
+                        return@mapNotNull null
+                    }
                     val wallMs = System.currentTimeMillis() - SystemClock.elapsedRealtime() + bootMs
+                    acceptedThisSnapshot++
                     MonitorGeoSample(device.mac, wallMs, selectedFix.fix.lat, selectedFix.fix.lng,
                         selectedFix.fix.accuracyM, rssi, channel, selectedFix.fix.provider, selectedFix.ageMs)
-                }.take((10_000 - geoSampleCount).coerceAtLeast(0))
+                }
                 if (newSamples.isNotEmpty()) {
                     withContext(Dispatchers.IO) { MonitorMission.appendSamples(mission, newSamples) }
                     geoSampleCount += newSamples.size
@@ -656,6 +695,9 @@ class ScanForegroundService : Service() {
                         pcapTruncated = nativeStats.getOrElse(UsbMonitorNative.Stat.PCAP_TRUNCATED.ordinal) { 0 } != 0L,
                         eapolKeyFrames = nativeStats.getOrElse(UsbMonitorNative.Stat.EAPOL_KEY_FRAMES.ordinal) { 0 },
                         geoSamples = geoSampleCount,
+                        locationFixes = fixes,
+                        locationUpdatesRegistered = locationSubscription != null,
+                        geoDiagnostics = geoDiagnostics,
                         geoStatus = when {
                             favorites.isEmpty() -> "Star a device to collect location samples"
                             currentFix == null -> "Waiting for a recent GPS/network/fused fix"

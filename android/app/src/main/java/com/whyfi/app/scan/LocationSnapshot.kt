@@ -8,6 +8,7 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
+import android.os.Looper
 import androidx.core.content.ContextCompat
 
 /** One-shot "roughly where am I right now" reads, shared by [ScanCoordinator]
@@ -51,10 +52,9 @@ object LocationSnapshot {
             .maxByOrNull { it.time }
     }
 
-    /** Registers for live position updates on every enabled GPS/network
-     * provider, delivering each fix to [onLocation]. Returns null (no
-     * subscription made) without the location permission or with every
-     * provider disabled. Callers must [AutoCloseable.close] the result to
+    /** Registers for live position updates on available GPS/network providers,
+     * including providers that may be enabled during the session. Returns null
+     * if permission is missing or every registration fails. Callers must [AutoCloseable.close] the result to
      * stop listening — see MissionController's tracking lifecycle. */
     @SuppressLint("MissingPermission")
     fun requestUpdates(
@@ -68,14 +68,13 @@ object LocationSnapshot {
             return null
         }
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        val providers = providers(includeFused)
-            .filter { runCatching { locationManager.isProviderEnabled(it) }.getOrDefault(false) }
-        if (providers.isEmpty()) return null
-
         val listener = LocationListener { location -> onLocation(location) }
-        providers.forEach { provider ->
-            runCatching { locationManager.requestLocationUpdates(provider, minTimeMs, minDistanceM, listener) }
+        val registered = providers(includeFused).count { provider ->
+            runCatching {
+                locationManager.requestLocationUpdates(provider, minTimeMs, minDistanceM, listener, Looper.getMainLooper())
+            }.isSuccess
         }
+        if (registered == 0) return null
         return AutoCloseable { locationManager.removeUpdates(listener) }
     }
 }

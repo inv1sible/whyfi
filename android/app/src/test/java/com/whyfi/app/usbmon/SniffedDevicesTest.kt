@@ -51,6 +51,14 @@ class SniffedDevicesTest {
     }
 
     @Test
+    fun `zero native radio timestamp means no signal reading`() {
+        val d = SniffedDevices.parse(line("24:a1:60:00:00:01", 2) + "\t\t0\t0").single()
+        assertNull(d.lastRssi)
+        assertNull(d.lastRssiBootMs)
+        assertNull(d.lastRssiChannel)
+    }
+
+    @Test
     fun `camera vendor is a camera`() {
         assertEquals(Kind.CAMERA, guess(line("bc:9a:8e:00:00:01", 2)).kind)
     }

@@ -715,6 +715,13 @@ current Android Monitor feature remains receive-only; active RF tests
 require separate design and implementation. See `AGENT.md` and
 `docs/roadmap.md` for current scope.
 
+Monitor location subscriptions run from `ScanForegroundService`'s background
+coroutine. The four-argument `LocationManager.requestLocationUpdates` overload
+needs a Looper on the calling thread; using it there silently failed because
+registration errors were caught. `LocationSnapshot.requestUpdates` now passes
+`Looper.getMainLooper()` explicitly. This is a source-level diagnosis; confirm
+GPS/network/fused delivery and geotagged samples on a physical phone.
+
 ## Open/deferred (v-next, not forgotten, just not now)
 
 - Matter/Thread device discovery (via BLE commissioning adverts + mDNS) —

@@ -74,8 +74,8 @@ WiFi scan-throttle path):
     present and collapses after selection. Start with **All** channels; the
     channel panel can narrow the next session to selected or observed channels.
     Confirm the top view tabs and the fixed Start/Stop, PCAP, and channel
-    controls remain visible while Nearby cards scroll. Missions sits next to
-    Nearby. Favorite an AP or station, expand an AP to inspect associated
+    controls remain visible while Nearby cards scroll. Location and Missions
+    sit next to Nearby. Favorite an AP or station, expand an AP to inspect associated
     stations, and toggle type filters. Auto applies current observations to the RSSI/Latest sort;
     Manual freezes the display until the reload icon beside Manual is tapped.
     Check category tables and counts after switching. Star a device while
@@ -84,8 +84,13 @@ WiFi scan-throttle path):
     positions. The command bar shows the number of location-tagged radio
     samples and the currently selected GPS/network/fused source. Fixes up to
     60 seconds from a packet can be paired, with their age added to the
-    uncertainty. Open **Map** during capture to inspect a favorite's evolving
-    estimate, or select an older saved mission there.
+    uncertainty. Open **Location** beside Nearby to see the phone's Android
+    position on the map even before a radio sample is saved. The diagnostics
+    show permission, GPS/network/fused provider status, raw coordinates,
+    accuracy, fix age, and why pinned radio readings were not geotagged.
+    Pinned AP/station estimates and uncertainty circles appear on the same
+    map; select one to inspect its signal-fit heatmap. Older saved missions
+    can also be selected there.
     Stop monitoring and confirm the foreground notification clears when the
     service is otherwise idle. Open **Missions** to verify the PDF, log, and
     optional PCAP exist with nonzero sizes. The PDF includes a count of

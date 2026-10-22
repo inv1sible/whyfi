@@ -43,7 +43,7 @@ fun MonitorScreen(service: ScanForegroundService?, settingsRepository: SettingsR
 }
 
 private enum class MonitorTab(val label: String) {
-    NEARBY("Nearby"), MAPPING("Map"), MISSIONS("Missions"), ACCESS_POINTS("APs"), UNASSOCIATED("Unassociated"),
+    NEARBY("Nearby"), MAPPING("Location"), MISSIONS("Missions"), ACCESS_POINTS("APs"), UNASSOCIATED("Unassociated"),
     IOT("IoT"), CAMERAS("Cameras"), PHONES_LAPTOPS("Phones / laptops"), CLIENTS("Other clients"),
 }
 
@@ -207,7 +207,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
         }
         Surface(Modifier.fillMaxWidth(), tonalElevation = 5.dp, shadowElevation = 5.dp) {
             Column(Modifier.padding(horizontal = 10.dp, vertical = 5.dp)) {
-                Text("${state.status} · ${state.frames} frames · ${state.geoSamples} GPS samples",
+                Text("${state.status} · ${state.frames} frames · ${state.geoSamples} location samples",
                     style = MaterialTheme.typography.bodySmall, maxLines = 1)
                 if (state.running && state.geoStatus != "Location sampling active") {
                     Text(state.geoStatus, style = MaterialTheme.typography.bodySmall, maxLines = 1)
