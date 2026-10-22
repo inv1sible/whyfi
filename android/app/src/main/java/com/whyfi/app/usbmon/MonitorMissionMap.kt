@@ -38,6 +38,7 @@ internal fun MonitorLocationMap(
     modifier: Modifier = Modifier.height(280.dp),
     mapKey: String = "",
     recenterToken: String = "",
+    focusToken: String = "",
     followReceiver: Boolean = false,
 ) {
     Column(modifier.clipToBounds()) {
@@ -54,15 +55,29 @@ internal fun MonitorLocationMap(
             }
         }, update = { map ->
             val centerState = map.tag as? MapCenterState ?: MapCenterState()
-            val focus = receiver?.fix?.let { GeoPoint(it.lat, it.lng) }
+            val targetFocus = estimates[selectedMac]?.let { GeoPoint(it.lat, it.lng) }
+            val focus = targetFocus
+                ?: receiver?.fix?.let { GeoPoint(it.lat, it.lng) }
                 ?: estimates.values.firstOrNull()?.let { GeoPoint(it.lat, it.lng) }
             if (focus != null && !centerState.initialized) {
                 map.controller.setCenter(focus)
                 map.controller.setZoom(17.0)
-                map.tag = MapCenterState(true, receiver != null, recenterToken)
-            } else if (receiver != null && (!centerState.centeredOnReceiver || centerState.token != recenterToken)) {
+                map.tag = MapCenterState(true, receiver != null, recenterToken, selectedMac,
+                    focusToken, if (targetFocus != null) selectedMac else null)
+            } else if (focus != null && centerState.recenterToken != recenterToken) {
+                val center = receiver?.fix?.let { GeoPoint(it.lat, it.lng) } ?: focus
+                map.controller.setCenter(center)
+                map.tag = centerState.copy(recenterToken = recenterToken, focusToken = focusToken,
+                    selectedMac = selectedMac)
+            } else if (focus != null && (centerState.selectedMac != selectedMac ||
+                centerState.focusToken != focusToken ||
+                (targetFocus != null && centerState.focusedTarget != selectedMac))) {
+                map.controller.setCenter(focus)
+                map.tag = centerState.copy(selectedMac = selectedMac, focusToken = focusToken,
+                    focusedTarget = if (targetFocus != null) selectedMac else null)
+            } else if (receiver != null && !centerState.centeredOnReceiver && selectedMac == null) {
                 map.controller.setCenter(GeoPoint(receiver.fix.lat, receiver.fix.lng))
-                map.tag = MapCenterState(true, true, recenterToken)
+                map.tag = centerState.copy(centeredOnReceiver = true)
             }
             if (followReceiver && receiver != null) {
                 map.controller.setCenter(GeoPoint(receiver.fix.lat, receiver.fix.lng))
@@ -77,7 +92,9 @@ internal fun MonitorLocationMap(
 }
 
 private data class MapCenterState(val initialized: Boolean = false,
-                                  val centeredOnReceiver: Boolean = false, val token: String = "")
+                                  val centeredOnReceiver: Boolean = false, val recenterToken: String = "",
+                                  val selectedMac: String? = null, val focusToken: String = "",
+                                  val focusedTarget: String? = null)
 
 private class MonitorLocationOverlay(
     private val receiver: MonitorSelectedLocation?,

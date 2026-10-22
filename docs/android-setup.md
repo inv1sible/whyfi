@@ -95,9 +95,15 @@ WiFi scan-throttle path):
     device and its sampled-RSSI cones. Their labels use the known SSID/device
     name or vendor plus the last three MAC octets. Refresh and ⌖ Center are also
     in the bottom command bar; centering preserves map zoom. Channels remains available from Nearby.
-    Select a saved mission in **Missions** to jump to Location. Scrub or play
-    the timeline above the command bar; the map then shows only measurements
-    collected by that time and the latest relevant mission-log event.
+    Select a saved mission or one of its position targets in **Missions** to jump
+    to Location. The target opens centered on its estimate when geotagged
+    readings exist; otherwise the map says that no location was recorded.
+    During replay the bottom bar shows play/pause, mission time and status
+    instead of Start/Stop and PCAP. Its slider drives Location, Nearby and the
+    AP/station/category tabs together. Use **Live** to leave replay. Missions
+    has no bottom command bar. New missions save periodic device metadata
+    snapshots for those tabs; older missions can replay their geotagged
+    favorites but cannot reconstruct unrecorded device roles or associations.
     Stop monitoring and confirm the foreground notification clears when the
     service is otherwise idle. Open **Missions** to verify the PDF, log, and
     optional PCAP exist with nonzero sizes. The PDF includes a count of
@@ -111,7 +117,9 @@ WiFi scan-throttle path):
     OpenStreetMap source as Mission and are cached. If tiles are unavailable,
     the GPS overlay and coordinate estimate remain in the PDF. Choose a mission
     or one of its named favorites in Missions to open the interactive Location
-    replay; inspect the log or export the PCAP from the mission card.
+    replay; inspect the log or export the PCAP from the mission card. To remove
+    a local mission, choose **Delete local mission** and confirm; this deletes
+    its local PDF, log and PCAP but leaves any uploaded backend copy intact.
     The files live in the app-specific
     Android/data/com.whyfi.app/files/monitor-missions/<mission-id>/ directory
     and survive new captures and app updates; uninstalling the app removes

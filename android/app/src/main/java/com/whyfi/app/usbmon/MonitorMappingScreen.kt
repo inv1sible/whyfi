@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -33,7 +32,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -44,8 +42,6 @@ import com.whyfi.app.BuildConfig
 import com.whyfi.app.scan.LocationSnapshot
 import com.whyfi.app.scan.MonitorUiState
 import java.io.File
-import java.text.DateFormat
-import java.util.Date
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -67,9 +63,13 @@ internal fun MonitorMappingView(
     state: MonitorUiState,
     favorites: Set<String>,
     selectedMissionLogPath: String?,
+    replayMission: MonitorReplayMission?,
+    replayCutoffMs: Long,
+    replayPlaying: Boolean,
     selectedMac: String?,
     onTargetsChanged: (List<MonitorLocationTarget>) -> Unit,
     onReceiverAvailability: (Boolean) -> Unit,
+    onSummaryChanged: (String) -> Unit,
     refreshToken: Int,
     recenterToken: Int,
     showGeoDetails: Boolean,
@@ -122,7 +122,7 @@ internal fun MonitorMappingView(
     var data by remember { mutableStateOf<MapMissionData?>(null) }
     val sampleRevision = if (logPath == currentLog?.absolutePath) state.geoSamples else 0
     LaunchedEffect(logPath, sampleRevision, refreshToken) {
-        if (log == null) {
+        if (log == null || replay) {
             data = null
         } else {
             val loaded = withContext(Dispatchers.IO) {
@@ -132,30 +132,13 @@ internal fun MonitorMappingView(
             data = loaded
         }
     }
-    val shown = data?.takeIf { it.path == logPath }
+    val shown = if (replay) replayMission?.takeIf { it.log.absolutePath == logPath }?.let {
+        MapMissionData(it.log.absolutePath, it.samples, it.targets, it.labels, it.events)
+    } else data?.takeIf { it.path == logPath }
     val targets = (shown?.targets.orEmpty() +
         if (!replay && logPath == currentLog?.absolutePath) favorites else emptySet()).sorted()
     val mac = selectedMac?.takeIf { it in targets }
-    val timeline = remember(shown) {
-        val times = shown?.let { data -> data.samples.map { it.atMs } + data.events.map { it.atMs } }.orEmpty()
-        (times.minOrNull() ?: 0L) to (times.maxOrNull() ?: 0L)
-    }
-    var replayFraction by remember(selectedMissionLogPath) { mutableFloatStateOf(1f) }
-    var settledFraction by remember(selectedMissionLogPath) { mutableFloatStateOf(1f) }
-    var playing by remember(selectedMissionLogPath) { mutableStateOf(false) }
-    var scrubRecenter by remember(selectedMissionLogPath) { mutableIntStateOf(0) }
-    LaunchedEffect(replayFraction, replay) {
-        if (replay) { delay(120); settledFraction = replayFraction }
-    }
-    LaunchedEffect(playing, timeline, replay) {
-        val durationMs = timeline.second - timeline.first
-        while (replay && playing && durationMs > 0 && replayFraction < 1f) {
-            delay(500)
-            replayFraction = (replayFraction + 5_000f / durationMs).coerceAtMost(1f)
-            if (replayFraction >= 1f) playing = false
-        }
-    }
-    val cutoffMs = timeline.first + ((timeline.second - timeline.first) * settledFraction).toLong()
+    val cutoffMs = replayCutoffMs
     val readings = remember(shown, replay, cutoffMs) {
         shown?.samples?.let { all -> if (replay) all.filter { it.atMs <= cutoffMs } else all }.orEmpty()
     }
@@ -192,42 +175,40 @@ internal fun MonitorMappingView(
     }
     val estimates = estimated?.takeIf { it.first == estimateKey }?.second.orEmpty()
     val visibleEstimates = if (mac == null) estimates else estimates.filterKeys { it == mac }
+    val summary = if (replay) {
+        "${estimates.size}/${targets.size} estimates · ${readings.size} fixes"
+    } else if (receiver == null) {
+        "No recent fix · ${readings.size} samples"
+    } else {
+        "${receiver.fix.provider} ±${receiver.effectiveAccuracyM.toInt()} m · ${receiver.ageMs / 1_000}s · ${readings.size} samples"
+    }
+    LaunchedEffect(summary) { onSummaryChanged(summary) }
 
     Column(modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Box(Modifier.weight(1f)) {
-            MonitorLocationMap(mapReceiver, visibleEstimates, mac, route, displayLabels, Modifier.fillMaxSize(),
-                mapKey = logPath.orEmpty(), recenterToken = "$recenterToken:$scrubRecenter",
-                followReceiver = replay && playing)
+            if (mapReceiver != null || estimates.isNotEmpty()) {
+                MonitorLocationMap(mapReceiver, visibleEstimates, mac, route, displayLabels, Modifier.fillMaxSize(),
+                    mapKey = logPath.orEmpty(), recenterToken = recenterToken.toString(),
+                    focusToken = if (replay) replayCutoffMs.toString() else "",
+                    followReceiver = replay && replayPlaying && mac == null)
+                if (mac != null && estimates[mac] == null && route.isEmpty()) {
+                    Surface(Modifier.align(Alignment.TopCenter), tonalElevation = 4.dp) {
+                        Text("No location readings for ${displayLabels[mac]} at this point.",
+                            modifier = Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            } else {
+                Text(when {
+                    replay && shown == null -> "Loading mission map…"
+                    mac != null -> "No location readings for ${displayLabels[mac]} at this point."
+                    else -> "No location fix or device estimate available yet."
+                }, style = MaterialTheme.typography.bodySmall)
+            }
             SlidingGeoDetails(showGeoDetails, Modifier.align(Alignment.TopCenter)) {
                 GeoDetailsContent(fine, coarse, providerStatus, permitted, fixes, clockMs,
                     { permissionLauncher.launch(it) }, replay, replayReceiver, state, mac, route,
                     targets, estimates, displayLabels)
             }
-        }
-        Text(if (replay) {
-            "Mission ${log?.parentFile?.name?.take(8) ?: "unavailable"} · ${readings.size} readings so far"
-        } else if (receiver == null) "Own position: no recent fix · tap ⓘ for details"
-            else "Best fix: ${receiver.fix.provider} · ±${receiver.effectiveAccuracyM.toInt()} m · ${receiver.ageMs / 1_000} s old",
-            style = MaterialTheme.typography.bodySmall)
-        Text("${estimates.size}/${targets.size} pinned estimates · ${readings.size} location readings",
-            style = MaterialTheme.typography.bodySmall)
-        if (targets.isEmpty()) {
-            Text(if (replay) "No pinned device in this mission." else "Star an AP or station in Nearby to map it here.",
-                style = MaterialTheme.typography.bodySmall)
-        }
-        if (replay && timeline.second > timeline.first) {
-            val lastEvent = shown?.events?.lastOrNull { it.atMs <= cutoffMs }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                TextButton({
-                    if (replayFraction >= 1f) { replayFraction = 0f; settledFraction = 0f; scrubRecenter++ }
-                    playing = !playing
-                }) { Text(if (playing) "Pause" else "▶ 10×") }
-                Text(DateFormat.getTimeInstance(DateFormat.MEDIUM).format(Date(cutoffMs)) +
-                    (lastEvent?.let { " · ${replayEventText(it, displayLabels)}" } ?: ""),
-                    modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1)
-            }
-            Slider(replayFraction, onValueChange = { playing = false; replayFraction = it },
-                onValueChangeFinished = { settledFraction = replayFraction; scrubRecenter++ })
         }
     }
 }
@@ -313,19 +294,4 @@ private fun GeoDetailsContent(
                 }
             }
         }
-    }
-
-private fun replayEventText(event: MonitorMission.ReplayEvent, labels: Map<String, String>): String =
-    when (event.event) {
-        "monitor_started" -> "Capture started"
-        "monitor_finished" -> "Capture finished"
-        "favorite" -> {
-            val mac = event.details.substringBeforeLast(':')
-            val label = labels[mac] ?: MonitorMission.displayTarget(mac, null)
-            "${if (event.details.endsWith(":true")) "Pinned" else "Unpinned"} $label"
-        }
-        "channels_selected" -> "Channels ${event.details.take(30)}"
-        "channel_mode" -> "Channel mode ${event.details}"
-        "update_mode" -> "Display ${event.details}"
-        else -> event.event.replace('_', ' ')
     }

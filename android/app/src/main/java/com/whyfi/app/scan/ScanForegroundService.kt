@@ -625,20 +625,27 @@ class ScanForegroundService : Service() {
             val seenSampleTimes = mutableMapOf<String, Long>()
             val knownLabels = mutableMapOf<String, String>()
             val snapshotMutex = Mutex()
+            var lastSavedSnapshotAt = 0L
             var geoSampleCount = 0
             var geoDiagnostics = MonitorGeoDiagnostics()
             val sampledMacs = mutableSetOf<String>()
             val vendorTable = withContext(Dispatchers.IO) {
                 runCatching { assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
             }
-            suspend fun snapshot() = snapshotMutex.withLock {
+            suspend fun snapshot(forceSave: Boolean = false) = snapshotMutex.withLock {
                 if (locationSubscription == null) {
                     locationSubscription = LocationSnapshot.requestUpdates(applicationContext, includeFused = true, onLocation = onFix)
                 }
+                val deviceTsv = UsbMonitorNative.devices()
                 val raw = withContext(Dispatchers.Default) {
-                    SniffedDevices.parse(UsbMonitorNative.devices()).map { d ->
+                    SniffedDevices.parse(deviceTsv).map { d ->
                         d to SniffedDevices.guess(d) { vendorTable?.vendorOf(it) }
                     }
+                }
+                val nowMs = System.currentTimeMillis()
+                if (forceSave || nowMs - lastSavedSnapshotAt >= 5_000) {
+                    withContext(Dispatchers.IO) { MonitorMission.appendDeviceSnapshot(mission, deviceTsv) }
+                    lastSavedSnapshotAt = nowMs
                 }
                 val fixes = locations.get().values.map { fix ->
                     MonitorLocationCandidate(fix.provider ?: "unknown", fix.elapsedRealtimeNanos / 1_000_000,
@@ -731,7 +738,7 @@ class ScanForegroundService : Service() {
                         connection.fileDescriptor, cacheDir.absolutePath, "", mission.pcap?.absolutePath.orEmpty(), channels, 400, durationMs,
                     )
                 }
-                snapshot()
+                snapshot(forceSave = true)
             } catch (e: Exception) {
                 result = e.message ?: e.javaClass.simpleName
             } finally {

@@ -6,6 +6,7 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.graphics.RectF
+import android.os.SystemClock
 import com.whyfi.app.scan.MonitorUiState
 import java.io.File
 import java.io.IOException
@@ -28,6 +29,7 @@ object MonitorMission {
         val complete get() = report.isFile && log.isFile
     }
     data class ReplayEvent(val atMs: Long, val event: String, val details: String)
+    data class DeviceSnapshot(val atMs: Long, val clockMs: Long, val tsv: String)
 
     fun displayTarget(mac: String, name: String?): String =
         "${name?.trim()?.take(24)?.takeIf { it.isNotBlank() } ?: "Device"} · ${mac.takeLast(8).uppercase()}"
@@ -53,6 +55,20 @@ object MonitorMission {
     fun markUploaded(mission: Stored) {
         File(mission.directory, ".uploaded").writeText(System.currentTimeMillis().toString())
     }
+
+    /** Deletes only one UUID-named local mission; an active capture is never removable. */
+    fun delete(context: Context, mission: Stored, activeLogPath: String?): Boolean =
+        deleteDirectory(File(context.getExternalFilesDir(null), "monitor-missions"), mission.directory, activeLogPath)
+
+    internal fun deleteDirectory(root: File, directory: File, activeLogPath: String?): Boolean =
+        runCatching {
+            val resolved = directory.canonicalFile
+            if (resolved.parentFile != root.canonicalFile ||
+                runCatching { UUID.fromString(resolved.name) }.isFailure ||
+                activeLogPath?.let { File(it).canonicalFile == File(resolved, "mission.jsonl") } == true ||
+                !resolved.isDirectory) false
+            else resolved.deleteRecursively()
+        }.getOrDefault(false)
 
     fun create(context: Context, recordPcap: Boolean): Files {
         val directory = File(context.getExternalFilesDir(null), "monitor-missions/${UUID.randomUUID()}").apply { mkdirs() }
@@ -87,6 +103,40 @@ object MonitorMission {
         }
     }
 
+    /** Periodic full metadata snapshots make all device tabs replayable without PCAP decoding. */
+    fun appendDeviceSnapshot(files: Files, tsv: String) {
+        synchronized(logLock) {
+            files.log.appendText(JSONObject().put("at_ms", System.currentTimeMillis())
+                .put("clock_ms", SystemClock.uptimeMillis())
+                .put("event", "devices_snapshot").put("tsv", tsv).toString() + "\n")
+        }
+    }
+
+    fun readDeviceSnapshots(log: File): List<DeviceSnapshot> = log.useLines { lines ->
+        lines.mapNotNull { line ->
+            runCatching {
+                val row = JSONObject(line)
+                if (row.optString("event") != "devices_snapshot") return@runCatching null
+                DeviceSnapshot(row.optLong("at_ms"), row.optLong("clock_ms"), row.optString("tsv"))
+                    .takeIf { it.atMs > 0 }
+            }.getOrNull()
+        }.sortedBy { it.atMs }.toList()
+    }
+
+    fun readInitialFavorites(log: File): Set<String> = log.useLines { lines ->
+        val initial = mutableSetOf<String>()
+        var started = false
+        for (line in lines) {
+            val row = runCatching { JSONObject(line) }.getOrNull() ?: continue
+            when (row.optString("event")) {
+                "monitor_started" -> started = true
+                "mission_target" -> if (started) initial += row.optString("details")
+                else -> if (started) break
+            }
+        }
+        initial.filter(String::isNotBlank).toSet()
+    }
+
     fun readLabels(log: File): Map<String, String> = log.useLines { lines ->
         lines.mapNotNull { line ->
             runCatching {
@@ -104,7 +154,8 @@ object MonitorMission {
             runCatching {
                 val row = JSONObject(line)
                 val event = row.optString("event")
-                if (event == "geo_sample" || event == "device_identity" || event == "mission_target")
+                if (event == "geo_sample" || event == "device_identity" || event == "mission_target" ||
+                    event == "devices_snapshot")
                     return@runCatching null
                 ReplayEvent(row.optLong("at_ms"), event, row.optString("details"))
                     .takeIf { it.atMs > 0 && it.event.isNotBlank() }

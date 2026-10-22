@@ -16,7 +16,9 @@ import com.whyfi.app.data.SettingsRepository
 import java.io.File
 import java.text.DateFormat
 import java.util.Date
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 internal fun MissionView(
@@ -24,6 +26,8 @@ internal fun MissionView(
     settings: SettingsRepository,
     latestReportPath: String?,
     onOpenLocation: (String, String?) -> Unit,
+    onDeleted: (String) -> Unit,
+    activeLogPath: String?,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -31,6 +35,7 @@ internal fun MissionView(
     var uploading by remember { mutableStateOf<String?>(null) }
     var messages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var openLog by remember { mutableStateOf<String?>(null) }
+    var pendingDelete by remember { mutableStateOf<MonitorMission.Stored?>(null) }
     LaunchedEffect(latestReportPath) { missions = MonitorMission.list(context) }
 
     Column(modifier.verticalScroll(rememberScrollState()).padding(12.dp),
@@ -71,9 +76,14 @@ internal fun MissionView(
                     if (targets.isNotEmpty()) {
                         Text("Position estimates", style = MaterialTheme.typography.labelLarge)
                         val labels = remember(id, mission.log.lastModified()) { MonitorMission.readLabels(mission.log) }
+                        val sampleCounts = remember(id, mission.log.lastModified()) {
+                            MonitorMission.readSamples(mission.log).groupingBy { it.mac }.eachCount()
+                        }
                         targets.forEach { mac ->
-                            TextButton({ onOpenLocation(mission.log.absolutePath, mac) }) {
-                                Text(MonitorMission.displayTarget(mac, labels[mac]))
+                            TextButton({ onOpenLocation(mission.log.absolutePath, mac) },
+                                enabled = (sampleCounts[mac] ?: 0) > 0) {
+                                Text(MonitorMission.displayTarget(mac, labels[mac]) +
+                                    if ((sampleCounts[mac] ?: 0) > 0) "" else " · no location fix")
                             }
                         }
                     }
@@ -101,10 +111,33 @@ internal fun MissionView(
                             Text(if (uploading == id) "Uploading…" else if (mission.uploaded) "Upload again" else "Upload to backend")
                         }
                     }
+                    TextButton({ pendingDelete = mission },
+                        enabled = uploading == null && mission.log.absolutePath != activeLogPath) {
+                        Text("Delete local mission", color = MaterialTheme.colorScheme.error)
+                    }
                     messages[id]?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 }
             }
         }
+    }
+    pendingDelete?.let { mission ->
+        AlertDialog(onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete this mission?") },
+            text = { Text("PDF, log, PCAP and local upload marker will be removed from this phone. " +
+                if (mission.uploaded) "The uploaded copy on the backend remains." else "This cannot be undone.") },
+            confirmButton = { TextButton({
+                pendingDelete = null
+                scope.launch {
+                    val removed = withContext(Dispatchers.IO) {
+                        MonitorMission.delete(context, mission, activeLogPath)
+                    }
+                    if (removed) {
+                        onDeleted(mission.log.absolutePath)
+                        missions = MonitorMission.list(context)
+                    } else messages = messages + (mission.directory.name to "Could not delete this mission.")
+                }
+            }) { Text("Delete") } },
+            dismissButton = { TextButton({ pendingDelete = null }) { Text("Cancel") } })
     }
 }
 
