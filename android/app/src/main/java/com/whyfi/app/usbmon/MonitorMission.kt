@@ -32,7 +32,7 @@ object MonitorMission {
     data class DeviceSnapshot(val atMs: Long, val clockMs: Long, val tsv: String)
 
     fun displayTarget(mac: String, name: String?): String =
-        "${name?.trim()?.take(24)?.takeIf { it.isNotBlank() } ?: "Device"} · ${mac.takeLast(8).uppercase()}"
+        "${name?.trim()?.take(24)?.takeIf { it.isNotBlank() } ?: "Device"} · ${mac.uppercase()}"
 
     fun deviceName(device: SniffedDevices.Device, guess: SniffedDevices.Guess): String =
         device.ssid.takeIf { device.isAp && it.isNotBlank() }

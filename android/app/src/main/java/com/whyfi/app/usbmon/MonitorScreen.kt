@@ -134,13 +134,11 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             }
         } ?: activeReplay?.legacyDevicesAt(replayCutoffMs).orEmpty()
     }
-    val replayFavorites = activeReplay?.favoritesAt(replayCutoffMs).orEmpty() +
-        if (activeReplay?.snapshots?.isEmpty() == true) activeReplay.targets else emptySet()
     val replaying = selectedMissionLogPath != null
     val selected = MonitorTab.entries.firstOrNull { it.name == selectedName } ?: MonitorTab.NEARBY
     val tabs = MonitorTab.entries.toList()
-    val visibleDevices = (if (replaying) replayDevices else displayDevices).filter { it.second.kind in visibleKinds }
-    val shownFavorites = if (replaying) replayFavorites else favorites
+    val nearbyDevices = displayDevices.filter { it.second.kind in visibleKinds }
+    val categoryDevices = (if (replaying) replayDevices else displayDevices).filter { it.second.kind in visibleKinds }
     val newDevices = state.devices.count { incoming -> displayDevices.none { it.first.mac == incoming.first.mac } }
 
     val setChannels: (Set<Int>) -> Unit = {
@@ -208,50 +206,47 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
         ScrollableTabRow(tabs.indexOf(selected).coerceAtLeast(0), edgePadding = 0.dp) {
             tabs.forEach { tab ->
                 val count = when (tab) {
-                    MonitorTab.NEARBY -> visibleDevices.size
-                    MonitorTab.MAPPING -> 0
+                    MonitorTab.NEARBY, MonitorTab.MAPPING -> 0
                     MonitorTab.MISSIONS -> remember(missionRevision, state.reportPath, state.missionLogPath) {
                         MonitorMission.list(context).size
                     }
-                    else -> monitorRows(tab, visibleDevices).size
+                    else -> monitorRows(tab, categoryDevices).size
                 }
                 Tab(tab == selected, {
                     if (tab != MonitorTab.MAPPING) showLocationDetails = false
-                    if (tab == MonitorTab.MISSIONS) replayPlaying = false
+                    if (tab == MonitorTab.MISSIONS || tab == MonitorTab.NEARBY) replayPlaying = false
                     selectedName = tab.name
                 },
-                    text = { Text(if (tab == MonitorTab.MAPPING) tab.label else "${tab.label} ($count)") })
+                    text = { Text(if (tab == MonitorTab.MAPPING || tab == MonitorTab.NEARBY) tab.label else "${tab.label} ($count)") })
             }
         }
         if (selected == MonitorTab.NEARBY) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (!replaying) {
-                    Text("Updates", style = MaterialTheme.typography.bodySmall)
-                    TextButton({
-                        autoUpdate = !autoUpdate
-                        if (state.running) service?.logMonitorEvent("update_mode", if (autoUpdate) "auto" else "manual")
-                    }) { Text(if (autoUpdate) "Auto" else "Manual") }
-                    if (!autoUpdate) {
-                        IconButton({
-                            displayDevices = state.devices
-                            if (state.running) service?.logMonitorEvent("display_refresh")
-                        }, modifier = Modifier.size(40.dp).semantics {
-                            contentDescription = "Refresh displayed devices${if (newDevices > 0) ", $newDevices new" else ""}"
-                        }) { Text("⟳", style = MaterialTheme.typography.headlineSmall) }
-                    }
+                Text("Updates", style = MaterialTheme.typography.bodySmall)
+                TextButton({
+                    autoUpdate = !autoUpdate
+                    if (state.running) service?.logMonitorEvent("update_mode", if (autoUpdate) "auto" else "manual")
+                }) { Text(if (autoUpdate) "Auto" else "Manual") }
+                if (!autoUpdate) {
+                    IconButton({
+                        displayDevices = state.devices
+                        if (state.running) service?.logMonitorEvent("display_refresh")
+                    }, modifier = Modifier.size(40.dp).semantics {
+                        contentDescription = "Refresh displayed devices${if (newDevices > 0) ", $newDevices new" else ""}"
+                    }) { Text("⟳", style = MaterialTheme.typography.headlineSmall) }
                 }
                 Spacer(Modifier.weight(1f))
                 Text("Sort", style = MaterialTheme.typography.bodySmall)
                 TextButton({
                     sortName = if (nearbySort == NearbySort.RSSI) NearbySort.LAST_SEEN.name else NearbySort.RSSI.name
-                    if (state.running && !replaying) service?.logMonitorEvent("nearby_sort", sortName)
+                    if (state.running) service?.logMonitorEvent("nearby_sort", sortName)
                 }) { Text(if (nearbySort == NearbySort.RSSI) "RSSI ↓" else "Latest ↓") }
             }
         }
         if (selected == MonitorTab.NEARBY) {
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!replaying && (showUsb || selectedDevice == null)) {
+                if (showUsb || selectedDevice == null) {
                     UsbPanel(usbDevices, selectedDevice, state.running,
                         {
                             usbDevices = usbManager.deviceList.values.toList()
@@ -259,21 +254,17 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                         },
                         { selectedDevice = it; showUsb = false })
                 }
-                if (!replaying && showChannels) ChannelPanel(state, allChannels, channels, allMode,
+                if (showChannels) ChannelPanel(state, allChannels, channels, allMode,
                     { allMode = it; if (state.running) service?.logMonitorEvent("channel_mode", if (it) "all" else "selected") },
                     setChannels)
-                if (replaying && activeReplay?.snapshots?.isEmpty() == true) Text(
-                    "This older mission has no device snapshots. Only geotagged favorites can be reconstructed.",
-                    style = MaterialTheme.typography.bodySmall)
-                if (!replaying) error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                if (!replaying) state.reportPath?.let { Text("Capture saved. Open Missions to inspect or upload it.",
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                state.reportPath?.let { Text("Capture saved. Open Missions to inspect or upload it.",
                     style = MaterialTheme.typography.bodySmall) }
-                if (!replaying && state.pcapTruncated) Text("PCAP recording stopped at the 200 MB limit.", color = MaterialTheme.colorScheme.error)
-                NearbyView(visibleDevices, shownFavorites, toggleFavorite, nearbySort,
+                if (state.pcapTruncated) Text("PCAP recording stopped at the 200 MB limit.", color = MaterialTheme.colorScheme.error)
+                NearbyView(nearbyDevices, favorites, toggleFavorite, nearbySort,
                     showFavoriteCards, { showFavoriteCards = !showFavoriteCards },
                     showUnassociatedCards, { showUnassociatedCards = !showUnassociatedCards },
-                    showApCards, { showApCards = !showApCards }, favoritesEditable = !replaying,
-                    referenceMs = replayReferenceMs.takeIf { replaying })
+                    showApCards, { showApCards = !showApCards })
             }
         } else if (selected == MonitorTab.MISSIONS) {
             MissionView(context, settingsRepository, state.reportPath,
@@ -306,18 +297,18 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             if (replaying && activeReplay?.snapshots?.isEmpty() == true) Text(
                 "This older mission did not save device roles or category snapshots.",
                 modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
-            MonitorTable(selected, visibleDevices, Modifier.weight(1f).padding(12.dp),
+            MonitorTable(selected, categoryDevices, Modifier.weight(1f).padding(12.dp),
                 referenceMs = replayReferenceMs.takeIf { replaying })
         }
         if (selected != MonitorTab.MISSIONS) {
-            if (replaying && timeline.second > timeline.first) {
+            if (replaying && selected != MonitorTab.NEARBY && timeline.second > timeline.first) {
                 Slider(replayFraction, onValueChange = { replayPlaying = false; replayFraction = it },
                     onValueChangeFinished = { settledFraction = replayFraction },
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp))
+                    modifier = Modifier.fillMaxWidth().height(32.dp).padding(horizontal = 10.dp))
             }
             Surface(Modifier.fillMaxWidth(), tonalElevation = 5.dp, shadowElevation = 5.dp) {
                 Column(Modifier.padding(horizontal = 10.dp, vertical = 5.dp)) {
-                    if (replaying) {
+                    if (replaying && selected != MonitorTab.NEARBY) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton({
                                 if (replayFraction >= 1f) { replayFraction = 0f; settledFraction = 0f }
@@ -326,25 +317,21 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                                 modifier = Modifier.size(44.dp).semantics {
                                     contentDescription = if (replayPlaying) "Pause mission replay" else "Play mission replay at ten times speed"
                                 }) { Text(if (replayPlaying) "Ⅱ" else "▶", style = MaterialTheme.typography.titleLarge) }
-                            Column(Modifier.weight(1f)) {
-                                Text(activeReplay?.let { mission ->
-                                    "${mission.log.parentFile?.name?.take(8)} · ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(replayCutoffMs))}"
-                                } ?: "Loading mission…", style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                                Text(if (selected == MonitorTab.MAPPING) locationSummary
-                                    else "${replayDevices.size} devices · ${activeReplay?.samples?.count { it.atMs <= replayCutoffMs } ?: 0} location readings",
-                                    style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                            }
+                            Text(activeReplay?.let {
+                                "${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(replayCutoffMs))} · " +
+                                    if (selected == MonitorTab.MAPPING) locationSummary else "${replayDevices.size} devices"
+                            } ?: "Loading mission…", modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall, maxLines = 1)
                             TextButton({
                                 selectedMissionLogPath = null
                                 selectedLocationMac = null
                                 locationTargets = emptyList()
                                 locationHasReceiver = false
                             }) { Text("Live") }
-                        }
-                        if (selected == MonitorTab.MAPPING) Row(Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End) {
-                            LocationFooterControls(showLocationDetails, { showLocationDetails = !showLocationDetails },
-                                { locationRefresh++ }, { locationRecenter++ }, locationHasReceiver, true)
+                            if (selected == MonitorTab.MAPPING) {
+                                LocationFooterControls(showLocationDetails, { showLocationDetails = !showLocationDetails },
+                                    { locationRefresh++ }, { locationRecenter++ }, locationHasReceiver, true)
+                            }
                         }
                     } else {
                         Text(if (selected == MonitorTab.MAPPING) locationSummary
@@ -410,9 +397,12 @@ private fun LocationFooterControls(
     IconButton(onRefresh, modifier = Modifier.size(40.dp).semantics {
         contentDescription = "Refresh location and mission"
     }) { Text("⟳", style = MaterialTheme.typography.titleLarge) }
-    TextButton(onCenter, enabled = hasReceiver, modifier = Modifier.semantics {
-        contentDescription = if (replay) "Center replay position" else "Center on me"
-    }) { Text(if (replay) "⌖ Replay" else "⌖ Me") }
+    if (replay) IconButton(onCenter, enabled = hasReceiver, modifier = Modifier.size(40.dp).semantics {
+        contentDescription = "Center replay position"
+    }) { Text("⌖", style = MaterialTheme.typography.titleLarge) }
+    else TextButton(onCenter, enabled = hasReceiver, modifier = Modifier.semantics {
+        contentDescription = "Center on me"
+    }) { Text("⌖ Me") }
 }
 
 @Composable
@@ -542,10 +532,8 @@ private fun NearbyView(
     toggleUnassociated: () -> Unit,
     showAps: Boolean,
     toggleAps: () -> Unit,
-    favoritesEditable: Boolean = true,
-    referenceMs: Long? = null,
 ) {
-    val newest = referenceMs ?: devices.maxOfOrNull { it.first.lastMs } ?: 0
+    val newest = devices.maxOfOrNull { it.first.lastMs } ?: 0
     val order = nearbyOrder(sort)
     val pinned = devices.filter { it.first.mac in favorites }.sortedWith(order)
     val unassociated = devices.filter {
@@ -559,24 +547,21 @@ private fun NearbyView(
         NearbySectionHeader("Favorites", pinned.size, showFavorites, toggleFavorites)
         if (showFavorites) pinned.forEach { row ->
             DeviceCard(row, newest, true, onFavorite,
-                if (row.first.isAp) byBssid[row.first.mac].orEmpty() else emptyList(), favorites, sort,
-                favoritesEditable)
+                if (row.first.isAp) byBssid[row.first.mac].orEmpty() else emptyList(), favorites, sort)
         }
         HorizontalDivider()
     }
     NearbySectionHeader("Unassociated", unassociated.size, showUnassociated, toggleUnassociated)
     if (showUnassociated) {
         if (unassociated.isEmpty()) Text("No probing stations without an observed AP association.")
-        unassociated.forEach { DeviceCard(it, newest, false, onFavorite, sort = sort,
-            favoritesEditable = favoritesEditable) }
+        unassociated.forEach { DeviceCard(it, newest, false, onFavorite, sort = sort) }
     }
     HorizontalDivider()
     NearbySectionHeader("Access points", aps.size, showAps, toggleAps)
     if (showAps) {
         if (aps.isEmpty()) Text("No access points received yet.")
         aps.forEach { ap ->
-            DeviceCard(ap, newest, false, onFavorite, byBssid[ap.first.mac].orEmpty(), favorites, sort,
-                favoritesEditable)
+            DeviceCard(ap, newest, false, onFavorite, byBssid[ap.first.mac].orEmpty(), favorites, sort)
         }
     }
 }
@@ -609,7 +594,6 @@ private fun DeviceCard(
     stations: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>> = emptyList(),
     favorites: Set<String> = emptySet(),
     sort: NearbySort = NearbySort.RSSI,
-    favoritesEditable: Boolean = true,
 ) {
     var expanded by rememberSaveable(row.first.mac) { mutableStateOf(false) }
     val (device, guess) = row
@@ -625,7 +609,7 @@ private fun DeviceCard(
                     Text("${device.bestRssi?.let { "$it dBm" } ?: "RSSI ?"}$channel · ${relativeSeen(newest - device.lastMs)}",
                         style = MaterialTheme.typography.bodySmall)
                 }
-                TextButton({ onFavorite(device.mac) }, enabled = favoritesEditable) { Text(if (favorite) "★" else "☆") }
+                TextButton({ onFavorite(device.mac) }) { Text(if (favorite) "★" else "☆") }
             }
             if (expanded) {
                 Text("${device.mac} · ${guess.kind.label}", style = MaterialTheme.typography.bodySmall,
@@ -637,8 +621,7 @@ private fun DeviceCard(
                     HorizontalDivider()
                     Text("Associated stations (${stations.size})", style = MaterialTheme.typography.labelLarge)
                     stations.sortedWith(nearbyOrder(sort)).forEach {
-                        DeviceCard(it, newest, it.first.mac in favorites, onFavorite, sort = sort,
-                            favoritesEditable = favoritesEditable)
+                        DeviceCard(it, newest, it.first.mac in favorites, onFavorite, sort = sort)
                     }
                 }
             } else if (stations.isNotEmpty()) {

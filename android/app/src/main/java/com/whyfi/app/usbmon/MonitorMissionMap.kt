@@ -59,11 +59,22 @@ internal fun MonitorLocationMap(
             val focus = targetFocus
                 ?: receiver?.fix?.let { GeoPoint(it.lat, it.lng) }
                 ?: estimates.values.firstOrNull()?.let { GeoPoint(it.lat, it.lng) }
-            if (focus != null && !centerState.initialized) {
-                map.controller.setCenter(focus)
-                map.controller.setZoom(17.0)
+            val measurementPoints = selectedSamples.map { it.lat to it.lng } +
+                estimates.values.map { it.lat to it.lng }
+            val fitPoints = measurementPoints.ifEmpty {
+                receiver?.fix?.let { listOf(it.lat to it.lng) }.orEmpty()
+            }
+            val fit = monitorMapViewport(fitPoints,
+                map.width.takeIf { it > 0 } ?: map.resources.displayMetrics.widthPixels,
+                map.height.takeIf { it > 0 } ?: map.resources.displayMetrics.heightPixels / 2)
+            val shouldFit = !centerState.initialized || centerState.selectedMac != selectedMac ||
+                (!centerState.fittedMeasurements && selectedSamples.isNotEmpty())
+            if (fit != null && shouldFit) {
+                map.controller.setCenter(GeoPoint(fit.lat, fit.lng))
+                map.controller.setZoom(fit.zoom)
                 map.tag = MapCenterState(true, receiver != null, recenterToken, selectedMac,
-                    focusToken, if (targetFocus != null) selectedMac else null)
+                    focusToken, if (targetFocus != null) selectedMac else null,
+                    selectedSamples.isNotEmpty())
             } else if (focus != null && centerState.recenterToken != recenterToken) {
                 val center = receiver?.fix?.let { GeoPoint(it.lat, it.lng) } ?: focus
                 map.controller.setCenter(center)
@@ -94,7 +105,7 @@ internal fun MonitorLocationMap(
 private data class MapCenterState(val initialized: Boolean = false,
                                   val centeredOnReceiver: Boolean = false, val recenterToken: String = "",
                                   val selectedMac: String? = null, val focusToken: String = "",
-                                  val focusedTarget: String? = null)
+                                  val focusedTarget: String? = null, val fittedMeasurements: Boolean = false)
 
 private class MonitorLocationOverlay(
     private val receiver: MonitorSelectedLocation?,
@@ -144,14 +155,15 @@ private class MonitorLocationOverlay(
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 11f, paint)
             paint.color = Color.rgb(0, 110, 97)
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 8f, paint)
-            val suffix = mac.takeLast(8).uppercase()
-            val name = labels[mac]?.removeSuffix(" · $suffix")?.take(20) ?: "Device"
+            val fullMac = mac.uppercase()
+            val name = labels[mac]?.removeSuffix(" · $fullMac")?.take(20) ?: "Device"
             paint.textSize = 27f
             paint.setShadowLayer(3f, 1f, 1f, Color.WHITE)
-            val textX = if (p.x + 16 + max(paint.measureText(name), paint.measureText(suffix)) > mapView.width)
-                p.x - 16 - max(paint.measureText(name), paint.measureText(suffix)) else p.x + 16f
+            val labelWidth = max(paint.measureText(name), paint.measureText(fullMac))
+            val textX = (if (p.x + 16 + labelWidth > mapView.width) p.x - 16 - labelWidth else p.x + 16f)
+                .coerceIn(0f, max(0f, mapView.width - labelWidth))
             canvas.drawText(name, textX, p.y - 10f, paint)
-            canvas.drawText(suffix, textX, p.y + 20f, paint)
+            canvas.drawText(fullMac, textX, p.y + 20f, paint)
             paint.clearShadowLayer()
         }
     }

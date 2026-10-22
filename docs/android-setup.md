@@ -93,14 +93,16 @@ WiFi scan-throttle path):
     Pinned AP/station estimates and uncertainty circles appear on the same
     map; the favorite chips below the command bar filter All or one selected
     device and its sampled-RSSI cones. Their labels use the known SSID/device
-    name or vendor plus the last three MAC octets. Refresh and ⌖ Center are also
+    name or vendor plus the complete MAC address. The map initially fits the
+    visible measurements and keeps the chosen zoom when centered. Refresh and ⌖ Center are also
     in the bottom command bar; centering preserves map zoom. Channels remains available from Nearby.
     Select a saved mission or one of its position targets in **Missions** to jump
     to Location. The target opens centered on its estimate when geotagged
     readings exist; otherwise the map says that no location was recorded.
-    During replay the bottom bar shows play/pause, mission time and status
-    instead of Start/Stop and PCAP. Its slider drives Location, Nearby and the
-    AP/station/category tabs together. Use **Live** to leave replay. Missions
+    During replay the compact bottom bar shows play/pause, mission time and status
+    instead of Start/Stop and PCAP. Its slider drives Location and the
+    AP/station/category tabs together; Nearby remains live and has no replay counter.
+    Use **Live** to leave replay. Missions
     has no bottom command bar. New missions save periodic device metadata
     snapshots for those tabs; older missions can replay their geotagged
     favorites but cannot reconstruct unrecorded device roles or associations.
@@ -126,7 +128,7 @@ WiFi scan-throttle path):
     this app-specific directory, so export or upload first. PDFs created by
     older builds are not rewritten; if their logs contain `geo_sample` events,
     the Location tab can still display them. Older logs without device-name
-    records show a generic label and shortened MAC. A mission with no geotagged radio
+    records show a generic label and complete MAC. A mission with no geotagged radio
     readings cannot be localized retroactively from its PCAP alone.
 11. In Missions, tap **Upload to backend** on a completed capture. The WebUI's
     **Monitor Missions** page then lists the PDF, log, and optional PCAP for
