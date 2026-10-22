@@ -35,6 +35,7 @@ internal fun MissionView(
     var uploading by remember { mutableStateOf<String?>(null) }
     var messages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var openLog by remember { mutableStateOf<String?>(null) }
+    var logPreviews by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var pendingDelete by remember { mutableStateOf<MonitorMission.Stored?>(null) }
     LaunchedEffect(latestReportPath) { missions = MonitorMission.list(context) }
 
@@ -65,7 +66,19 @@ internal fun MissionView(
                         if (mission.report.isFile) TextButton({
                             messages = messages + (id to openReport(context, mission.report))
                         }) { Text("Open PDF") }
-                        if (mission.log.isFile) TextButton({ openLog = if (openLog == id) null else id }) { Text("View log") }
+                        if (mission.log.isFile) TextButton({
+                            if (openLog == id) openLog = null else {
+                                openLog = id
+                                logPreviews = logPreviews + (id to "Loading log…")
+                                scope.launch {
+                                    val preview = withContext(Dispatchers.IO) {
+                                        runCatching { MonitorMission.previewLog(mission.log) }
+                                            .getOrElse { "Could not read mission log." }
+                                    }
+                                    logPreviews = logPreviews + (id to preview)
+                                }
+                            }
+                        }) { Text("View log") }
                     }
                     if (mission.log.isFile) TextButton({ onOpenLocation(mission.log.absolutePath, null) }) {
                         Text("Replay on Location map")
@@ -88,7 +101,7 @@ internal fun MissionView(
                         }
                     }
                     if (openLog == id && mission.log.isFile) {
-                        Text(mission.log.readLines().takeLast(8).joinToString("\n"),
+                        Text(logPreviews[id].orEmpty(),
                             style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                     }
                     if (mission.pcap != null) {

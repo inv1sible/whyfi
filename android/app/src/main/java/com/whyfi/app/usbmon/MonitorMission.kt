@@ -137,6 +137,18 @@ object MonitorMission {
         initial.filter(String::isNotBlank).toSet()
     }
 
+    /** Bounded preview; metadata snapshots can make a log too large for readLines(). */
+    fun previewLog(log: File): String = log.useLines { lines ->
+        val tail = ArrayDeque<String>()
+        lines.forEach { line ->
+            if (!line.contains("\"devices_snapshot\"")) {
+                if (tail.size == 8) tail.removeFirst()
+                tail.addLast(line.take(400))
+            }
+        }
+        tail.joinToString("\n")
+    }
+
     fun readLabels(log: File): Map<String, String> = log.useLines { lines ->
         lines.mapNotNull { line ->
             runCatching {

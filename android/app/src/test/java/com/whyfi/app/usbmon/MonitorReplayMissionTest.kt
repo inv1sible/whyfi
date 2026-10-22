@@ -39,4 +39,15 @@ class MonitorReplayMissionTest {
             sibling.deleteRecursively()
         } finally { root.deleteRecursively() }
     }
+
+    @Test fun log_preview_skips_large_device_snapshots() {
+        val log = Files.createTempFile("whyfi-mission", ".jsonl").toFile()
+        try {
+            log.writeText("{\"event\":\"monitor_started\"}\n" +
+                "{\"event\":\"devices_snapshot\",\"tsv\":\"${"x".repeat(100_000)}\"}\n" +
+                "{\"event\":\"monitor_finished\"}\n")
+            assertFalse(MonitorMission.previewLog(log).contains("devices_snapshot"))
+            assertTrue(MonitorMission.previewLog(log).contains("monitor_finished"))
+        } finally { log.delete() }
+    }
 }
