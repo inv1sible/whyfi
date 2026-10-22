@@ -20,6 +20,8 @@ data class MonitorGeoSample(
     val gpsAccuracyM: Double,
     val rssi: Int,
     val channel: Int,
+    val locationSource: String = "",
+    val fixAgeMs: Long = 0,
 )
 
 data class MonitorHeatCell(val lat: Double, val lng: Double, val relativeFit: Double)
@@ -49,7 +51,6 @@ object MonitorLocalization {
     private const val GRID_STEPS = 25
     private const val HUBER_DB = 6.0
     private const val OUTLIER_DB = 18.0
-    private const val MAX_GPS_ACCURACY_M = 100.0
     private const val CELL_M = 6.0
 
     private data class Point(val x: Double, val y: Double, val rssi: Double, val accuracy: Double)
@@ -58,7 +59,8 @@ object MonitorLocalization {
     fun estimate(raw: List<MonitorGeoSample>, pathLossExponent: Double = 2.7): MonitorEstimate? {
         val usable = raw.filter {
             it.lat in -90.0..90.0 && it.lng in -180.0..180.0 &&
-                it.lat.isFinite() && it.lng.isFinite() && it.gpsAccuracyM in 0.0..MAX_GPS_ACCURACY_M &&
+                it.lat.isFinite() && it.lng.isFinite() && it.gpsAccuracyM.isFinite() && it.gpsAccuracyM >= 0.0 &&
+                it.fixAgeMs in 0..MonitorLocationPolicy.MAX_FIX_AGE_MS &&
                 it.rssi in -110..-5 && it.channel > 0
         }
         if (usable.isEmpty()) return null
@@ -79,7 +81,9 @@ object MonitorLocalization {
         val grouped = selected.groupBy { (x(it.lng) / CELL_M).roundToInt() to (y(it.lat) / CELL_M).roundToInt() }
             .values.map { bin ->
                 Point(median(bin.map { x(it.lng) }), median(bin.map { y(it.lat) }),
-                    median(bin.map { it.rssi.toDouble() }), median(bin.map { it.gpsAccuracyM }))
+                    median(bin.map { it.rssi.toDouble() }), median(bin.map {
+                        MonitorLocationPolicy.effectiveAccuracy(it.gpsAccuracyM, it.fixAgeMs)
+                    }))
             }
         val baselineWeights = grouped.map { exp((it.rssi - grouped.maxOf { p -> p.rssi }) / 12.0) }
         val baselineX = grouped.indices.sumOf { grouped[it].x * baselineWeights[it] } / baselineWeights.sum()
@@ -91,7 +95,8 @@ object MonitorLocalization {
         if (usable.size != selected.size) advice += "Mixed bands were heard; estimate uses $band readings only."
         if (grouped.size < 4) advice += "Take readings from at least four separated positions."
         if (spread < 20.0) advice += "Walk farther from the current measurement spot."
-        if (grouped.maxOf { it.accuracy } > 25.0) advice += "Wait for a more accurate GPS fix outdoors."
+        if (grouped.maxOf { it.accuracy } > 25.0)
+            advice += "Location is coarse; wait for better GPS/fused accuracy or measure across a wider area."
 
         val meanX = grouped.map { it.x }.average()
         val meanY = grouped.map { it.y }.average()
@@ -106,7 +111,8 @@ object MonitorLocalization {
 
         // One or two independent locations do not identify position and power
         // together. Still show the conservative centroid, explicitly provisional.
-        if (grouped.size < 3 || spread < 10.0 || !pathLossExponent.isFinite() || pathLossExponent !in 1.2..5.0) {
+        if (grouped.size < 3 || spread < 10.0 || grouped.maxOf { it.accuracy } > max(100.0, spread) ||
+            !pathLossExponent.isFinite() || pathLossExponent !in 1.2..5.0) {
             return MonitorEstimate(lat(baselineY), lng(baselineX), max(100.0, gpsFloor + spread),
                 grouped.size, spread, lat(baselineY), lng(baselineX), band, true,
                 advice + "This is a receiver-position hint, not a resolved transmitter location.", emptyList())
@@ -154,7 +160,7 @@ object MonitorLocalization {
         val heat = grid.map { MonitorHeatCell(lat(it.y), lng(it.x), exp(-max(0.0, it.cost - best.cost) / scoreScale)) }
         val plausible = grid.filter { it.cost - best.cost <= scoreScale * 1.4 }
         val fitRadius = plausible.maxOfOrNull { hypot(it.x - refined.x, it.y - refined.y) } ?: halfSpan
-        val underdetermined = collinear || grouped.size < 4
+        val underdetermined = collinear || grouped.size < 4 || grouped.maxOf { it.accuracy } > 100.0
         var uncertainty = max(gpsFloor, fitRadius + step)
         if (underdetermined) uncertainty = max(uncertainty, spread + 40.0)
         if (plausible.any { abs(it.x - meanX) >= halfSpan - step || abs(it.y - meanY) >= halfSpan - step }) {

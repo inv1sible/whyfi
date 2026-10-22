@@ -79,16 +79,21 @@ WiFi scan-throttle path):
     stations, and toggle type filters. Auto applies current observations to the RSSI/Latest sort;
     Manual freezes the display until the reload icon beside Manual is tapped.
     Check category tables and counts after switching. Star a device while
-    monitoring, keep precise location enabled, and walk through several
-    separated positions. The command bar shows the number of GPS-tagged
-    radio samples. Sampling begins after the device is starred; stale or
-    inaccurate GPS fixes are excluded.
+    monitoring and allow the location prompt; approximate location is usable
+    but produces a wider uncertainty region. Walk through several separated
+    positions. The command bar shows the number of location-tagged radio
+    samples and the currently selected GPS/network/fused source. Fixes up to
+    60 seconds from a packet can be paired, with their age added to the
+    uncertainty. Open **Map** during capture to inspect a favorite's evolving
+    estimate, or select an older saved mission there.
     Stop monitoring and confirm the foreground notification clears when the
     service is otherwise idle. Open **Missions** to verify the PDF, log, and
     optional PCAP exist with nonzero sizes. The PDF includes a count of
     observed EAPOL-Key frames; this count alone does not prove a complete
-    handshake or a usable WPA hash. Open the PDF to inspect each favorite's
-    map-backed position estimate, uncertainty, and route suggestions. Red
+    handshake or a usable WPA hash. The first pages of a newly generated PDF
+    list each pinned device's coordinates or the reason none could be
+    calculated; detail pages include map-backed estimates, uncertainty, and
+    route suggestions. Red
     heat shows relative RSSI-model fit, not calibrated probability; blue
     dots mark the phone's measurement positions. Map tiles use the same
     OpenStreetMap source as Mission and are cached. If tiles are unavailable,
@@ -97,7 +102,10 @@ WiFi scan-throttle path):
     The files live in the app-specific
     Android/data/com.whyfi.app/files/monitor-missions/<mission-id>/ directory
     and survive new captures and app updates; uninstalling the app removes
-    this app-specific directory, so export or upload first.
+    this app-specific directory, so export or upload first. PDFs created by
+    older builds are not rewritten; if their logs contain `geo_sample` events,
+    the Map tab can still display them. A mission with no geotagged radio
+    readings cannot be localized retroactively from its PCAP alone.
 11. In Missions, tap **Upload to backend** on a completed capture. The WebUI's
     **Monitor Missions** page then lists the PDF, log, and optional PCAP for
     authenticated download. Uploading never removes the phone's files.
@@ -107,7 +115,7 @@ WiFi scan-throttle path):
 
 ## Permissions this app requests
 
-`ACCESS_FINE_LOCATION`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_STATE`,
+`ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_STATE`,
 `READ_PHONE_STATE`, `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, `UWB_RANGING`
 (only if a "locate this device" action is used), `INTERNET`,
 `ACCESS_NETWORK_STATE`. On Android 9–11 (API 28–30) Bluetooth is instead

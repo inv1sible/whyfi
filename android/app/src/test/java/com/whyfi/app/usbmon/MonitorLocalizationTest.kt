@@ -38,8 +38,13 @@ class MonitorLocalizationTest {
         assertTrue(estimate.uncertaintyM >= 100)
     }
 
-    @Test fun poor_gps_is_rejected_but_single_good_point_gets_a_cautious_hint() {
-        assertEquals(null, MonitorLocalization.estimate(listOf(sample(0.0, 0.0, gpsAccuracy = 200.0))))
+    @Test fun coarse_assisted_location_still_gets_a_broad_provisional_estimate() {
+        val coarse = MonitorLocalization.estimate(listOf(sample(0.0, 0.0, gpsAccuracy = 200.0)))!!
+        assertTrue(coarse.provisional)
+        assertTrue(coarse.uncertaintyM >= 400.0)
+        val aged = MonitorLocalization.estimate(listOf(sample(0.0, 0.0, gpsAccuracy = 8.0)
+            .copy(locationSource = "network", fixAgeMs = 40_000)))!!
+        assertTrue(aged.uncertaintyM >= 176.0)
         val estimate = MonitorLocalization.estimate(listOf(sample(10.0, 20.0)))
         assertNotNull(estimate)
         assertTrue(estimate!!.advice.any { it.contains("separated") })

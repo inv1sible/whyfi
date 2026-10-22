@@ -6,6 +6,7 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <!-- Required by Android for WiFi/BLE/GNSS scan results, not just GPS -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <!-- Wi-Fi RTT/FTM ranging against 802.11mc-responder APs (see
          scan/FtmRangingManager.kt) — no extra runtime permission beyond

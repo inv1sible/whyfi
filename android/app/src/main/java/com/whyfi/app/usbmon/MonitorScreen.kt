@@ -1,8 +1,11 @@
 package com.whyfi.app.usbmon
 
+import android.Manifest
 import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
@@ -19,6 +22,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.scan.MonitorUiState
+import com.whyfi.app.scan.LocationSnapshot
 import com.whyfi.app.scan.ScanForegroundService
 import com.whyfi.app.ui.components.DataTable
 import com.whyfi.app.ui.components.DataTableRow
@@ -39,7 +43,7 @@ fun MonitorScreen(service: ScanForegroundService?, settingsRepository: SettingsR
 }
 
 private enum class MonitorTab(val label: String) {
-    NEARBY("Nearby"), MISSIONS("Missions"), ACCESS_POINTS("APs"), UNASSOCIATED("Unassociated"),
+    NEARBY("Nearby"), MAPPING("Map"), MISSIONS("Missions"), ACCESS_POINTS("APs"), UNASSOCIATED("Unassociated"),
     IOT("IoT"), CAMERAS("Cameras"), PHONES_LAPTOPS("Phones / laptops"), CLIENTS("Other clients"),
 }
 
@@ -87,7 +91,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
         settingsRepository.monitorFavoriteMacs = favorites
         if (state.running) service?.logMonitorEvent("favorite", "$mac:${mac in favorites}")
     }
-    val startMonitor: () -> Unit = start@{
+    val beginMonitor: () -> Unit = start@{
         val device = selectedDevice ?: run { showUsb = true; return@start }
         val currentService = service ?: return@start
         val selectedChannels = if (allMode) allChannels else channels
@@ -119,16 +123,36 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             finally { starting = false }
         }
     }
+    var pendingStart by remember { mutableStateOf(false) }
+    val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        if (pendingStart) {
+            pendingStart = false
+            beginMonitor()
+            if (!LocationSnapshot.hasLocationPermission(context)) {
+                error = listOfNotNull(error, "Location permission denied; capture can run, but the PDF will have no position data.")
+                    .joinToString(" · ")
+            }
+        }
+    }
+    val startMonitor: () -> Unit = {
+        if (!LocationSnapshot.hasLocationPermission(context)) {
+            pendingStart = true
+            locationLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION))
+        } else beginMonitor()
+    }
 
     Column(Modifier.fillMaxSize()) {
         ScrollableTabRow(tabs.indexOf(selected).coerceAtLeast(0), edgePadding = 0.dp) {
             tabs.forEach { tab ->
                 val count = when (tab) {
                     MonitorTab.NEARBY -> visibleDevices.size
+                    MonitorTab.MAPPING -> 0
                     MonitorTab.MISSIONS -> MonitorMission.list(context).size
                     else -> monitorRows(tab, visibleDevices).size
                 }
-                Tab(tab == selected, { selectedName = tab.name }, text = { Text("${tab.label} ($count)") })
+                Tab(tab == selected, { selectedName = tab.name },
+                    text = { Text(if (tab == MonitorTab.MAPPING) tab.label else "${tab.label} ($count)") })
             }
         }
         if (selected == MonitorTab.NEARBY) {
@@ -176,6 +200,8 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             }
         } else if (selected == MonitorTab.MISSIONS) {
             MissionView(context, settingsRepository, state.reportPath, Modifier.weight(1f))
+        } else if (selected == MonitorTab.MAPPING) {
+            MonitorMappingView(context, state, favorites, Modifier.weight(1f))
         } else {
             MonitorTable(selected, visibleDevices, Modifier.weight(1f).padding(12.dp))
         }
@@ -188,7 +214,8 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (state.running) Button({ service?.stopMonitor() },
-                        enabled = state.status != "Starting…" && state.status != "Stopping…") { Text("Stop") }
+                        enabled = state.status != "Starting…" && state.status != "Stopping…" &&
+                            state.status != "Saving report…") { Text("Stop") }
                     else Button(startMonitor, enabled = !starting && selectedDevice != null) {
                         Text(if (starting) "Starting…" else "Start")
                     }
@@ -201,7 +228,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 }
             }
         }
-        if (selected != MonitorTab.MISSIONS) {
+        if (selected != MonitorTab.MISSIONS && selected != MonitorTab.MAPPING) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 SniffedDevices.Kind.entries.forEach { kind ->
@@ -266,7 +293,7 @@ private fun monitorRows(
         MonitorTab.CAMERAS -> guess.kind == SniffedDevices.Kind.CAMERA
         MonitorTab.PHONES_LAPTOPS -> guess.kind == SniffedDevices.Kind.PHONE_LAPTOP
         MonitorTab.CLIENTS -> device.isClient && guess.kind == SniffedDevices.Kind.CLIENT
-        MonitorTab.NEARBY, MonitorTab.MISSIONS -> false
+        MonitorTab.NEARBY, MonitorTab.MAPPING, MonitorTab.MISSIONS -> false
     } }.sortedWith(
         compareByDescending<Pair<SniffedDevices.Device, SniffedDevices.Guess>> { it.first.lastMs }
             .thenByDescending { it.first.bestRssi ?: -1000 },

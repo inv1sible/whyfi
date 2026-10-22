@@ -81,13 +81,18 @@ authenticated downloads in the WebUI's Monitor Missions page. Successful
 upload marks the phone's copy but does not delete it.
 Pinned Nearby devices also produce bounded geotagged RSSI samples in the
 mission log. The native USB path supplies a recent radio RSSI and Android
-elapsed-time timestamp; the service only pairs it with a fresh, accurate
-location fix. The report groups spatially redundant readings, compares a
+elapsed-time timestamp; the service chooses among GPS, network and (API 31+)
+platform fused fixes by accuracy and age. It accepts coarse assisted fixes
+instead of suppressing an estimate, inflating uncertainty for weak or older
+fixes. The report groups spatially redundant readings, compares a
 signal-weighted centroid with a robust log-distance fit, and labels
 uncertainty and sampling advice. Its OpenStreetMap-backed heat layer is
-relative model fit, not a calibrated position probability. With no valid GPS
+relative model fit, not a calibrated position probability. A dedicated Map
+tab shows the current favorite during capture and reopens saved mission logs.
+The PDF prints target coordinates in its early overview before the device
+inventory, even if the target was unstarred later. With no usable location
 fix the report states why no coordinate estimate can be made; older missions
-cannot recover RSSI/GPS pairings from their raw PCAP.
+cannot recover RSSI/location pairings from their raw PCAP.
 
 ## Sighting tables
 

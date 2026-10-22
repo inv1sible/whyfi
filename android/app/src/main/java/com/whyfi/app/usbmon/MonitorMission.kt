@@ -63,7 +63,8 @@ object MonitorMission {
             files.log.appendText(samples.joinToString("", "", "") { sample ->
                 JSONObject().put("event", "geo_sample").put("at_ms", sample.atMs).put("mac", sample.mac)
                     .put("lat", sample.lat).put("lng", sample.lng).put("gps_accuracy_m", sample.gpsAccuracyM)
-                    .put("rssi", sample.rssi).put("channel", sample.channel).toString() + "\n"
+                    .put("rssi", sample.rssi).put("channel", sample.channel)
+                    .put("location_source", sample.locationSource).put("fix_age_ms", sample.fixAgeMs).toString() + "\n"
             })
         }
     }
@@ -74,19 +75,32 @@ object MonitorMission {
                 val row = JSONObject(line)
                 if (row.optString("event") != "geo_sample") return@runCatching null
                 MonitorGeoSample(row.getString("mac"), row.getLong("at_ms"), row.getDouble("lat"),
-                    row.getDouble("lng"), row.getDouble("gps_accuracy_m"), row.getInt("rssi"), row.getInt("channel"))
+                    row.getDouble("lng"), row.getDouble("gps_accuracy_m"), row.getInt("rssi"), row.getInt("channel"),
+                    row.optString("location_source"), row.optLong("fix_age_ms", 0))
             }.getOrNull()
         }.toList()
     }
 
     fun targets(log: File): Set<String> = log.useLines { lines ->
         lines.mapNotNull { line ->
-            runCatching { JSONObject(line).takeIf { it.optString("event") == "mission_target" }
-                ?.optString("details")?.takeIf(String::isNotBlank) }.getOrNull()
+            runCatching {
+                val row = JSONObject(line)
+                when (row.optString("event")) {
+                    "mission_target" -> row.optString("details")
+                    "geo_sample" -> row.optString("mac")
+                    "favorite" -> row.optString("details").takeIf { it.endsWith(":true") }
+                        ?.substringBeforeLast(':')
+                    else -> null
+                }?.takeIf(String::isNotBlank)
+            }.getOrNull()
         }.toSet()
     }
 
     fun writeReport(context: Context, files: Files, state: MonitorUiState, favorites: Set<String>) {
+        val geoSamples = readSamples(files.log)
+        val samplesByMac = geoSamples.groupBy { it.mac }
+        val targetMacs = (favorites + samplesByMac.keys).sorted()
+        val estimates = targetMacs.associateWith { MonitorLocalization.estimate(samplesByMac[it].orEmpty()) }
         val pdf = PdfDocument()
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         val ink = Color.rgb(24, 43, 51)
@@ -156,6 +170,15 @@ object MonitorMission {
         line("Key-frame count does not establish a complete WPA handshake or usable hash.", color = muted)
         line("Status: ${state.status}")
         line("Adapter: ${state.device.ifBlank { "unknown" }}")
+        section("Pinned device positions (${targetMacs.size})")
+        line("${geoSamples.size} location-tagged radio readings · GPS, network or fused source", color = muted)
+        if (targetMacs.isEmpty()) line("Star a device in Nearby to collect position readings.", color = muted)
+        targetMacs.forEach { mac ->
+            val estimate = estimates[mac]
+            if (estimate == null) line("$mac  No matching location fix; keep it starred and enable Location.", color = muted)
+            else line("$mac  %.6f, %.6f  uncertainty >=%.0f m%s".format(
+                estimate.lat, estimate.lng, estimate.uncertaintyM, if (estimate.provisional) " provisional" else ""))
+        }
         section("Evidence files")
         line("PCAP: ${files.pcap?.name ?: "not recorded"}  (${state.pcapBytes} bytes)" +
             if (state.pcapTruncated) " - 200 MB cap reached" else "")
@@ -170,23 +193,22 @@ object MonitorMission {
             line("${guess.kind.label}; frames ${device.frames}; probes ${device.probeRequests}; APs ${device.bssids.joinToString().ifBlank { "none observed" }}", 12f, muted)
             if (device.probed.isNotEmpty()) line("Probed: ${device.probed.joinToString().take(90)}", 12f, muted)
         }
-        val geoSamples = readSamples(files.log)
-        section("Favorite position estimates (${favorites.size})")
-        if (favorites.isEmpty()) line("Star devices in Nearby during capture to include position estimates.", color = muted)
-        favorites.sorted().forEach { mac ->
+        section("Position maps (${targetMacs.size})")
+        targetMacs.forEach { mac ->
             if (y > 355f) nextPage()
             val device = state.devices.firstOrNull { it.first.mac == mac }?.first
             section("${device?.ssid?.takeIf { it.isNotBlank() } ?: "Device"}  $mac")
-            val samples = geoSamples.filter { it.mac == mac }
-            val estimate = MonitorLocalization.estimate(samples)
+            val samples = samplesByMac[mac].orEmpty()
+            val estimate = estimates[mac]
             if (estimate == null) {
-                line("No GPS-tagged RSSI readings while this device was pinned.", color = muted)
-                line("Keep it pinned, enable precise location, and walk to several positions.", color = muted)
+                line("No location-tagged RSSI readings while this device was pinned.", color = muted)
+                line("Keep it pinned, enable Location, and walk to several positions.", color = muted)
             } else {
                 line("Estimated position: %.6f, %.6f  |  uncertainty at least %.0f m".format(
                     estimate.lat, estimate.lng, estimate.uncertaintyM))
                 line("${estimate.spatialGroups} independent places  |  %.0f m route span  |  ${estimate.band}".format(
                     estimate.receiverSpreadM), color = muted)
+                line("Location sources: ${samples.map { it.locationSource.ifBlank { "unknown" } }.distinct().joinToString()}", color = muted)
                 if (estimate.provisional) line("Provisional estimate: geometry or sample count is weak.", color = muted)
                 line("RSSI centroid baseline: %.6f, %.6f".format(estimate.baselineLat, estimate.baselineLng), color = muted)
                 val map = RectF(36f, y + 6f, 559f, y + 306f)

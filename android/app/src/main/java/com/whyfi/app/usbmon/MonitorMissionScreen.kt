@@ -82,7 +82,7 @@ internal fun MissionView(
                                 Text("%.6f, %.6f · uncertainty at least %.0f m · %d places".format(
                                     estimate.lat, estimate.lng, estimate.uncertaintyM, estimate.spatialGroups),
                                     style = MaterialTheme.typography.bodySmall)
-                                MonitorMissionMap(estimate, samples)
+                                MonitorMissionMap(estimate, samples, mapKey = "$id:$mac")
                                 estimate.advice.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
                             }
                         }

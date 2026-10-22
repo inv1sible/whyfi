@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Text
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -25,30 +26,35 @@ import org.osmdroid.views.overlay.Overlay
 
 /** Live mission review using the osmdroid tile map already used by Mission. */
 @Composable
-internal fun MonitorMissionMap(estimate: MonitorEstimate, samples: List<MonitorGeoSample>) {
-    Column {
-        AndroidView(modifier = Modifier.fillMaxWidth().height(280.dp), factory = { context ->
+internal fun MonitorMissionMap(
+    estimate: MonitorEstimate,
+    samples: List<MonitorGeoSample>,
+    modifier: Modifier = Modifier.height(280.dp),
+    mapKey: String = "",
+) {
+    Column(modifier) {
+        key(mapKey) { AndroidView(modifier = Modifier.fillMaxWidth().weight(1f), factory = { context ->
             Configuration.getInstance().userAgentValue = context.packageName
             Configuration.getInstance().osmdroidTileCache = File(context.cacheDir, "osmdroid")
             MapView(context).apply {
                 layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 setTileSource(TileSourceFactory.MAPNIK)
                 setMultiTouchControls(true)
+                controller.setCenter(GeoPoint(estimate.lat, estimate.lng))
+                val radius = max(estimate.uncertaintyM, estimate.receiverSpreadM)
+                controller.setZoom(when {
+                    radius > 600 -> 14.0
+                    radius > 300 -> 15.0
+                    radius > 140 -> 16.0
+                    radius > 60 -> 17.0
+                    else -> 18.0
+                })
             }
         }, update = { map ->
             map.overlays.clear()
-            map.overlays.add(MonitorEstimateOverlay(estimate, samples))
-            map.controller.setCenter(GeoPoint(estimate.lat, estimate.lng))
-            val radius = max(estimate.uncertaintyM, estimate.receiverSpreadM)
-            map.controller.setZoom(when {
-                radius > 600 -> 14.0
-                radius > 300 -> 15.0
-                radius > 140 -> 16.0
-                radius > 60 -> 17.0
-                else -> 18.0
-            })
+            map.overlays.add(MonitorEstimateOverlay(estimate, samples.takeLast(800)))
             map.invalidate()
-        })
+        }) }
         Text("© OpenStreetMap contributors · blue: receiver · teal: estimate/uncertainty · red: relative RSSI fit",
             style = MaterialTheme.typography.bodySmall)
     }

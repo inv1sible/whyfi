@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.os.Build
 import androidx.core.content.ContextCompat
 
 /** One-shot "roughly where am I right now" reads, shared by [ScanCoordinator]
@@ -15,6 +16,27 @@ import androidx.core.content.ContextCompat
  * which only ever needs the plain GPS/network pick — plus, for Mission
  * view's live "which way to walk" tracking, a continuous-updates variant. */
 object LocationSnapshot {
+
+    fun hasLocationPermission(context: Context): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /** All available platform fixes for Monitor's accuracy/age selection. */
+    @SuppressLint("MissingPermission")
+    fun lastKnownCandidates(context: Context): List<Location> {
+        if (!hasLocationPermission(context)) return emptyList()
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        return providers(includeFused = true).mapNotNull { provider ->
+            runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull()
+        }
+    }
+
+    private fun providers(includeFused: Boolean): List<String> =
+        listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER) +
+            if (includeFused && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                listOf(LocationManager.FUSED_PROVIDER) else emptyList()
 
     @SuppressLint("MissingPermission")
     fun lastKnown(context: Context): Location? {
@@ -39,15 +61,14 @@ object LocationSnapshot {
         context: Context,
         minTimeMs: Long = 3000L,
         minDistanceM: Float = 3f,
+        includeFused: Boolean = false,
         onLocation: (Location) -> Unit,
     ): AutoCloseable? {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
+        if (!hasLocationPermission(context)) {
             return null
         }
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+        val providers = providers(includeFused)
             .filter { runCatching { locationManager.isProviderEnabled(it) }.getOrDefault(false) }
         if (providers.isEmpty()) return null
 
