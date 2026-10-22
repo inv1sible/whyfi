@@ -63,6 +63,9 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     var allMode by rememberSaveable { mutableStateOf(true) }
     var showChannels by rememberSaveable { mutableStateOf(false) }
     var showUsb by rememberSaveable { mutableStateOf(selectedDevice == null) }
+    var showFavoriteCards by rememberSaveable { mutableStateOf(true) }
+    var showUnassociatedCards by rememberSaveable { mutableStateOf(true) }
+    var showApCards by rememberSaveable { mutableStateOf(true) }
     var favorites by remember { mutableStateOf(settingsRepository.monitorFavoriteMacs) }
     var visibleKinds by remember { mutableStateOf(SniffedDevices.Kind.entries.toSet()) }
     var autoUpdate by rememberSaveable { mutableStateOf(true) }
@@ -196,7 +199,10 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 state.reportPath?.let { Text("Capture saved. Open Missions to inspect or upload it.",
                     style = MaterialTheme.typography.bodySmall) }
                 if (state.pcapTruncated) Text("PCAP recording stopped at the 200 MB limit.", color = MaterialTheme.colorScheme.error)
-                NearbyView(visibleDevices, favorites, toggleFavorite, nearbySort)
+                NearbyView(visibleDevices, favorites, toggleFavorite, nearbySort,
+                    showFavoriteCards, { showFavoriteCards = !showFavoriteCards },
+                    showUnassociatedCards, { showUnassociatedCards = !showUnassociatedCards },
+                    showApCards, { showApCards = !showApCards })
             }
         } else if (selected == MonitorTab.MISSIONS) {
             MissionView(context, settingsRepository, state.reportPath, Modifier.weight(1f))
@@ -363,6 +369,12 @@ private fun NearbyView(
     favorites: Set<String>,
     onFavorite: (String) -> Unit,
     sort: NearbySort,
+    showFavorites: Boolean,
+    toggleFavorites: () -> Unit,
+    showUnassociated: Boolean,
+    toggleUnassociated: () -> Unit,
+    showAps: Boolean,
+    toggleAps: () -> Unit,
 ) {
     val newest = devices.maxOfOrNull { it.first.lastMs } ?: 0
     val order = nearbyOrder(sort)
@@ -375,20 +387,36 @@ private fun NearbyView(
         { it.first }, { it.second },
     )
     if (pinned.isNotEmpty()) {
-        Text("Favorites (${pinned.size})", style = MaterialTheme.typography.titleMedium)
-        pinned.forEach { row ->
-            DeviceCard(row, newest, true, onFavorite, if (row.first.isAp) byBssid[row.first.mac].orEmpty() else emptyList(), favorites, sort)
+        NearbySectionHeader("Favorites", pinned.size, showFavorites, toggleFavorites)
+        if (showFavorites) pinned.forEach { row ->
+            DeviceCard(row, newest, true, onFavorite,
+                if (row.first.isAp) byBssid[row.first.mac].orEmpty() else emptyList(), favorites, sort)
         }
         HorizontalDivider()
     }
-    Text("Unassociated (${unassociated.size})", style = MaterialTheme.typography.titleMedium)
-    if (unassociated.isEmpty()) Text("No probing stations without an observed AP association.")
-    unassociated.forEach { DeviceCard(it, newest, false, onFavorite, sort = sort) }
+    NearbySectionHeader("Unassociated", unassociated.size, showUnassociated, toggleUnassociated)
+    if (showUnassociated) {
+        if (unassociated.isEmpty()) Text("No probing stations without an observed AP association.")
+        unassociated.forEach { DeviceCard(it, newest, false, onFavorite, sort = sort) }
+    }
     HorizontalDivider()
-    Text("Access points (${aps.size})", style = MaterialTheme.typography.titleMedium)
-    if (aps.isEmpty()) Text("No access points received yet.")
-    aps.forEach { ap ->
-        DeviceCard(ap, newest, false, onFavorite, byBssid[ap.first.mac].orEmpty(), favorites, sort)
+    NearbySectionHeader("Access points", aps.size, showAps, toggleAps)
+    if (showAps) {
+        if (aps.isEmpty()) Text("No access points received yet.")
+        aps.forEach { ap ->
+            DeviceCard(ap, newest, false, onFavorite, byBssid[ap.first.mac].orEmpty(), favorites, sort)
+        }
+    }
+}
+
+@Composable
+private fun NearbySectionHeader(title: String, count: Int, expanded: Boolean, onClick: () -> Unit) {
+    TextButton(onClick, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically) {
+            Text("$title ($count)", style = MaterialTheme.typography.titleMedium)
+            Text(if (expanded) "▾" else "▸", style = MaterialTheme.typography.titleMedium)
+        }
     }
 }
 

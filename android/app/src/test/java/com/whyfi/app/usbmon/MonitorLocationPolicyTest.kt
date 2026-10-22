@@ -18,6 +18,14 @@ class MonitorLocationPolicyTest {
         assertEquals(28.0, selected.effectiveAccuracyM, 0.001)
     }
 
+    @Test fun fresh_assisted_fix_beats_stale_gps_when_effective_uncertainty_is_lower() {
+        val selected = MonitorLocationPolicy.select(
+            listOf(fix("gps", 50_000, 5.0), fix("fused", 99_000, 35.0)), 100_000,
+        )!!
+        assertEquals("fused", selected.fix.provider)
+        assertEquals(37.0, selected.effectiveAccuracyM, 0.001)
+    }
+
     @Test fun coarse_assisted_fix_is_kept_with_its_full_uncertainty() {
         val selected = MonitorLocationPolicy.select(listOf(fix("fused", 90_000, 350.0)), 100_000)!!
         assertEquals("fused", selected.fix.provider)

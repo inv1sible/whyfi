@@ -17,11 +17,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,6 +36,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.whyfi.app.BuildConfig
@@ -88,7 +92,7 @@ internal fun MonitorMappingView(
     val fixes = receiverFixes.groupBy { it.provider }.mapNotNull { (_, candidates) ->
         candidates.maxByOrNull { it.bootMs }
     }.sortedBy { it.provider }
-    val receiver = MonitorLocationPolicy.select(fixes, clockMs)
+    val receiver = MonitorLocationPolicy.select(receiverFixes, clockMs)
     val locationManager = remember(context) { context.getSystemService(Context.LOCATION_SERVICE) as LocationManager }
     val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER) +
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) listOf(LocationManager.FUSED_PROVIDER) else emptyList()
@@ -126,7 +130,7 @@ internal fun MonitorMappingView(
     val shown = data?.takeIf { it.path == logPath }
     val targets = (shown?.targets.orEmpty() +
         if (logPath == currentLog?.absolutePath) favorites else emptySet()).sorted()
-    val mac = selectedMac?.takeIf { it in targets } ?: targets.firstOrNull()
+    val mac = selectedMac?.takeIf { it in targets }
     val samples = remember(shown, mac) { shown?.samples?.filter { it.mac == mac }.orEmpty() }
     var estimates by remember { mutableStateOf<Map<String, MonitorEstimate>>(emptyMap()) }
     LaunchedEffect(shown, targets) {
@@ -137,17 +141,25 @@ internal fun MonitorMappingView(
             }.toMap()
         }
     }
+    val visibleEstimates = if (mac == null) estimates else estimates.filterKeys { it == mac }
     var recenter by remember { mutableIntStateOf(0) }
+    var showGeoDetails by remember { mutableStateOf(false) }
 
     Column(modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Location · v${BuildConfig.VERSION_CODE}", style = MaterialTheme.typography.titleMedium)
-            TextButton({ refresh++; recenter++; permissionRevision++ }) { Text("Refresh") }
-        }
-        TextButton({ menuOpen = true }) {
-            Text(if (logPath == currentLog?.absolutePath && currentLog != null) "Current capture ▾"
-                else if (log == null) "No mission yet ▾"
-                else "Saved mission ${log.parentFile?.name?.take(8).orEmpty()} ▾")
+            TextButton({ menuOpen = true }, modifier = Modifier.weight(1f)) {
+                Text(if (logPath == currentLog?.absolutePath && currentLog != null) "Current capture ▾"
+                    else if (log == null) "No mission yet ▾"
+                    else "Saved mission ${log.parentFile?.name?.take(8).orEmpty()} ▾", maxLines = 1)
+            }
+            IconButton({ refresh++; recenter++; permissionRevision++ },
+                modifier = Modifier.size(40.dp).semantics { contentDescription = "Refresh location and missions" }) {
+                Text("⟳", style = MaterialTheme.typography.titleLarge)
+            }
+            IconButton({ showGeoDetails = !showGeoDetails },
+                modifier = Modifier.size(40.dp).semantics {
+                    contentDescription = if (showGeoDetails) "Hide geolocation details" else "Show geolocation details"
+                }) { Text("🌐", style = MaterialTheme.typography.titleLarge) }
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             currentLog?.let {
@@ -163,29 +175,20 @@ internal fun MonitorMappingView(
                 })
             }
         }
-        Text(if (receiver == null) "Own position: no recent Android fix (last 60 s)"
-            else "Own position (${receiver.fix.provider}): %.6f, %.6f · ±%.0f m · %d s old".format(
-                receiver.fix.lat, receiver.fix.lng, receiver.fix.accuracyM, receiver.ageMs / 1_000),
+        Text(if (receiver == null) "Own position: no recent fix · tap 🌐 for details"
+            else "Best fix: ${receiver.fix.provider} · ±${receiver.effectiveAccuracyM.toInt()} m · ${receiver.ageMs / 1_000} s old",
             style = MaterialTheme.typography.bodySmall)
-        MonitorLocationMap(receiver, estimates, mac, samples, Modifier.weight(1f),
+        MonitorLocationMap(receiver, visibleEstimates, mac, samples, Modifier.weight(1f),
             mapKey = "$logPath:$recenter")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("${estimates.size}/${targets.size} pinned estimates · ${shown?.samples?.size ?: 0} saved readings",
                 style = MaterialTheme.typography.bodySmall)
             TextButton({ recenter++ }, enabled = receiver != null) { Text("Center on me") }
         }
-        if (targets.isNotEmpty()) {
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                targets.forEach { target ->
-                    FilterChip(target == mac, { selectedMac = target },
-                        label = { Text("$target (${shown?.samples?.count { it.mac == target } ?: 0})") })
-                }
-            }
-        }
-        Column(Modifier.fillMaxWidth().heightIn(max = 230.dp).verticalScroll(rememberScrollState()),
+        if (showGeoDetails) Column(Modifier.fillMaxWidth().heightIn(max = 230.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text("Android location diagnostics", style = MaterialTheme.typography.titleSmall)
+            Text("Android location diagnostics · app v${BuildConfig.VERSION_CODE}",
+                style = MaterialTheme.typography.titleSmall)
             Text("Permission: ${if (fine) "precise" else if (coarse) "approximate" else "none"} · $providerStatus",
                 style = MaterialTheme.typography.bodySmall)
             if (!permitted) TextButton({ permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,
@@ -232,6 +235,18 @@ internal fun MonitorMappingView(
                         if (estimate.provisional) " · provisional" else ""),
                         style = MaterialTheme.typography.bodySmall)
                     Text(estimate.advice.take(2).joinToString(" "), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        if (targets.isEmpty()) {
+            Text("Star an AP or station in Nearby to map it here.", style = MaterialTheme.typography.bodySmall)
+        } else {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(mac == null, { selectedMac = null }, label = { Text("All (${targets.size})") })
+                targets.forEach { target ->
+                    FilterChip(target == mac, { selectedMac = target },
+                        label = { Text("$target (${shown?.samples?.count { it.mac == target } ?: 0})") })
                 }
             }
         }

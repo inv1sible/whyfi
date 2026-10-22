@@ -75,8 +75,9 @@ WiFi scan-throttle path):
     channel panel can narrow the next session to selected or observed channels.
     Confirm the top view tabs and the fixed Start/Stop, PCAP, and channel
     controls remain visible while Nearby cards scroll. Location and Missions
-    sit next to Nearby. Favorite an AP or station, expand an AP to inspect associated
-    stations, and toggle type filters. Auto applies current observations to the RSSI/Latest sort;
+    sit next to Nearby. Tap the Favorites, Unassociated, or Access points
+    heading to hide/show its cards. Favorite an AP or station, expand an AP
+    to inspect associated stations, and toggle type filters. Auto applies current observations to the RSSI/Latest sort;
     Manual freezes the display until the reload icon beside Manual is tapped.
     Check category tables and counts after switching. Star a device while
     monitoring and allow the location prompt; approximate location is usable
@@ -85,11 +86,13 @@ WiFi scan-throttle path):
     samples and the currently selected GPS/network/fused source. Fixes up to
     60 seconds from a packet can be paired, with their age added to the
     uncertainty. Open **Location** beside Nearby to see the phone's Android
-    position on the map even before a radio sample is saved. The diagnostics
-    show permission, GPS/network/fused provider status, raw coordinates,
+    position on the map even before a radio sample is saved. The compact line
+    shows only the best recent fix by accuracy adjusted for age. Tap the globe
+    to expand diagnostics showing permission, provider status, raw coordinates,
     accuracy, fix age, and why pinned radio readings were not geotagged.
     Pinned AP/station estimates and uncertainty circles appear on the same
-    map; select one to inspect its signal-fit heatmap. Older saved missions
+    map; the favorite chips at the bottom filter All or one selected device
+    and its signal-fit heatmap. Older saved missions
     can also be selected there.
     Stop monitoring and confirm the foreground notification clears when the
     service is otherwise idle. Open **Missions** to verify the PDF, log, and
@@ -109,7 +112,7 @@ WiFi scan-throttle path):
     and survive new captures and app updates; uninstalling the app removes
     this app-specific directory, so export or upload first. PDFs created by
     older builds are not rewritten; if their logs contain `geo_sample` events,
-    the Map tab can still display them. A mission with no geotagged radio
+    the Location tab can still display them. A mission with no geotagged radio
     readings cannot be localized retroactively from its PCAP alone.
 11. In Missions, tap **Upload to backend** on a completed capture. The WebUI's
     **Monitor Missions** page then lists the PDF, log, and optional PCAP for
