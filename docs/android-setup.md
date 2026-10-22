@@ -88,12 +88,16 @@ WiFi scan-throttle path):
     uncertainty. Open **Location** beside Nearby to see the phone's Android
     position on the map even before a radio sample is saved. The compact line
     shows only the best recent fix by accuracy adjusted for age. Tap the globe
-    to expand diagnostics showing permission, provider status, raw coordinates,
+    in the bottom command bar to open diagnostics showing permission, provider status, raw coordinates,
     accuracy, fix age, and why pinned radio readings were not geotagged.
     Pinned AP/station estimates and uncertainty circles appear on the same
-    map; the favorite chips at the bottom filter All or one selected device
-    and its signal-fit heatmap. Older saved missions
-    can also be selected there.
+    map; the favorite chips below the command bar filter All or one selected
+    device and its signal-fit heatmap. Their labels use the known SSID/device
+    name or vendor plus the last three MAC octets. Center and refresh are also
+    in the bottom command bar, while Channels remains available from Nearby.
+    Select a saved mission in **Missions** to jump to Location. Scrub or play
+    the timeline above the command bar; the map then shows only measurements
+    collected by that time and the latest relevant mission-log event.
     Stop monitoring and confirm the foreground notification clears when the
     service is otherwise idle. Open **Missions** to verify the PDF, log, and
     optional PCAP exist with nonzero sizes. The PDF includes a count of
@@ -105,21 +109,24 @@ WiFi scan-throttle path):
     heat shows relative RSSI-model fit, not calibrated probability; blue
     dots mark the phone's measurement positions. Map tiles use the same
     OpenStreetMap source as Mission and are cached. If tiles are unavailable,
-    the GPS overlay and coordinate estimate remain in the PDF. Open a favorite
-    in Missions for an interactive map; inspect the log or export the PCAP.
+    the GPS overlay and coordinate estimate remain in the PDF. Choose a mission
+    or one of its named favorites in Missions to open the interactive Location
+    replay; inspect the log or export the PCAP from the mission card.
     The files live in the app-specific
     Android/data/com.whyfi.app/files/monitor-missions/<mission-id>/ directory
     and survive new captures and app updates; uninstalling the app removes
     this app-specific directory, so export or upload first. PDFs created by
     older builds are not rewritten; if their logs contain `geo_sample` events,
-    the Location tab can still display them. A mission with no geotagged radio
+    the Location tab can still display them. Older logs without device-name
+    records show a generic label and shortened MAC. A mission with no geotagged radio
     readings cannot be localized retroactively from its PCAP alone.
 11. In Missions, tap **Upload to backend** on a completed capture. The WebUI's
     **Monitor Missions** page then lists the PDF, log, and optional PCAP for
     authenticated download. Uploading never removes the phone's files.
     A retry uses the same mission ID and does not make a duplicate. The
     reverse proxy must allow a request body above the 200 MB PCAP cap.
-    Replay is not implemented yet.
+    Timeline replay covers saved geotagged readings and operator events; it
+    does not decode or reconstruct every PCAP frame.
 
 ## Permissions this app requests
 

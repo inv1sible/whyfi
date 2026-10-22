@@ -623,6 +623,7 @@ class ScanForegroundService : Service() {
             }
             var locationSubscription = LocationSnapshot.requestUpdates(applicationContext, includeFused = true, onLocation = onFix)
             val seenSampleTimes = mutableMapOf<String, Long>()
+            val knownLabels = mutableMapOf<String, String>()
             val snapshotMutex = Mutex()
             var geoSampleCount = 0
             var geoDiagnostics = MonitorGeoDiagnostics()
@@ -646,6 +647,16 @@ class ScanForegroundService : Service() {
                             fix.accuracy.toDouble() else 1_000.0)
                 }
                 val favorites = settingsRepository.monitorFavoriteMacs
+                val newLabels = raw.filter { it.first.mac in favorites }.mapNotNull { (device, guess) ->
+                    val name = MonitorMission.deviceName(device, guess)
+                    if (knownLabels[device.mac] == name) null else {
+                        knownLabels[device.mac] = name
+                        device.mac to name
+                    }
+                }
+                if (newLabels.isNotEmpty()) withContext(Dispatchers.IO) {
+                    newLabels.forEach { (mac, name) -> MonitorMission.appendIdentity(mission, mac, name) }
+                }
                 val heardFavorites = raw.map { it.first }.filter { it.mac in favorites }
                 geoDiagnostics = geoDiagnostics.copy(
                     favoriteDevicesHeard = heardFavorites.size,

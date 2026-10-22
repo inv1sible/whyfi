@@ -7,6 +7,7 @@ import android.view.ViewGroup
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.material3.Text
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -32,11 +33,13 @@ internal fun MonitorLocationMap(
     estimates: Map<String, MonitorEstimate>,
     selectedMac: String?,
     selectedSamples: List<MonitorGeoSample>,
+    labels: Map<String, String>,
     modifier: Modifier = Modifier.height(280.dp),
     mapKey: String = "",
+    followReceiver: Boolean = false,
 ) {
-    Column(modifier) {
-        key(mapKey) { AndroidView(modifier = Modifier.fillMaxWidth().weight(1f), factory = { context ->
+    Column(modifier.clipToBounds()) {
+        key(mapKey) { AndroidView(modifier = Modifier.fillMaxWidth().weight(1f).clipToBounds(), factory = { context ->
             Configuration.getInstance().userAgentValue = context.packageName
             Configuration.getInstance().osmdroidTileCache = File(context.cacheDir, "osmdroid")
             MapView(context).apply {
@@ -57,8 +60,11 @@ internal fun MonitorLocationMap(
                     map.tag = if (receiver != null) "receiver" else "estimate"
                 }
             }
+            if (followReceiver && receiver != null) {
+                map.controller.setCenter(GeoPoint(receiver.fix.lat, receiver.fix.lng))
+            }
             map.overlays.clear()
-            map.overlays.add(MonitorLocationOverlay(receiver, estimates, selectedMac, selectedSamples.takeLast(800)))
+            map.overlays.add(MonitorLocationOverlay(receiver, estimates, selectedMac, selectedSamples.takeLast(800), labels))
             map.invalidate()
         }) }
         Text("© OpenStreetMap contributors · blue: phone · teal: estimate/uncertainty · red: selected signal fit",
@@ -71,6 +77,7 @@ private class MonitorLocationOverlay(
     private val estimates: Map<String, MonitorEstimate>,
     private val selectedMac: String?,
     private val samples: List<MonitorGeoSample>,
+    private val labels: Map<String, String>,
 ) : Overlay() {
     override fun draw(canvas: Canvas, mapView: MapView, shadow: Boolean) {
         if (shadow) return
@@ -115,7 +122,7 @@ private class MonitorLocationOverlay(
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 8f, paint)
             paint.textSize = 32f
             paint.setShadowLayer(3f, 1f, 1f, Color.WHITE)
-            canvas.drawText(mac, p.x + 15f, p.y - 12f, paint)
+            canvas.drawText((labels[mac] ?: mac.takeLast(8)).take(34), p.x + 15f, p.y - 12f, paint)
             paint.clearShadowLayer()
         }
     }

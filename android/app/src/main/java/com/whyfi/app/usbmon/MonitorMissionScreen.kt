@@ -23,6 +23,7 @@ internal fun MissionView(
     context: Context,
     settings: SettingsRepository,
     latestReportPath: String?,
+    onOpenLocation: (String, String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -30,7 +31,6 @@ internal fun MissionView(
     var uploading by remember { mutableStateOf<String?>(null) }
     var messages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var openLog by remember { mutableStateOf<String?>(null) }
-    var mapTargets by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     LaunchedEffect(latestReportPath) { missions = MonitorMission.list(context) }
 
     Column(modifier.verticalScroll(rememberScrollState()).padding(12.dp),
@@ -62,28 +62,18 @@ internal fun MissionView(
                         }) { Text("Open PDF") }
                         if (mission.log.isFile) TextButton({ openLog = if (openLog == id) null else id }) { Text("View log") }
                     }
+                    if (mission.log.isFile) TextButton({ onOpenLocation(mission.log.absolutePath, null) }) {
+                        Text("Replay on Location map")
+                    }
                     val targets = if (mission.log.isFile) remember(id, mission.log.lastModified()) {
                         MonitorMission.targets(mission.log).sorted()
                     } else emptyList()
                     if (targets.isNotEmpty()) {
                         Text("Position estimates", style = MaterialTheme.typography.labelLarge)
+                        val labels = remember(id, mission.log.lastModified()) { MonitorMission.readLabels(mission.log) }
                         targets.forEach { mac ->
-                            TextButton({ mapTargets = mapTargets + (id to mac) }) { Text(mac) }
-                        }
-                        mapTargets[id]?.let { mac ->
-                            val samples = remember(id, mac, mission.log.lastModified()) {
-                                MonitorMission.readSamples(mission.log).filter { it.mac == mac }
-                            }
-                            val estimate = remember(samples) { MonitorLocalization.estimate(samples) }
-                            if (estimate == null) {
-                                Text("No GPS-tagged readings for this favorite. Keep it pinned and move through several positions.",
-                                    style = MaterialTheme.typography.bodySmall)
-                            } else {
-                                Text("%.6f, %.6f · uncertainty at least %.0f m · %d places".format(
-                                    estimate.lat, estimate.lng, estimate.uncertaintyM, estimate.spatialGroups),
-                                    style = MaterialTheme.typography.bodySmall)
-                                MonitorMissionMap(estimate, samples, mapKey = "$id:$mac")
-                                estimate.advice.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                            TextButton({ onOpenLocation(mission.log.absolutePath, mac) }) {
+                                Text(MonitorMission.displayTarget(mac, labels[mac]))
                             }
                         }
                     }

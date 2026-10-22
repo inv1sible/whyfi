@@ -27,6 +27,16 @@ object MonitorMission {
     ) {
         val complete get() = report.isFile && log.isFile
     }
+    data class ReplayEvent(val atMs: Long, val event: String, val details: String)
+
+    fun displayTarget(mac: String, name: String?): String =
+        "${name?.trim()?.take(24)?.takeIf { it.isNotBlank() } ?: "Device"} · ${mac.takeLast(8).uppercase()}"
+
+    fun deviceName(device: SniffedDevices.Device, guess: SniffedDevices.Guess): String =
+        device.ssid.takeIf { device.isAp && it.isNotBlank() }
+            ?: device.wpsName.takeIf { it.isNotBlank() }
+            ?: guess.vendor?.takeIf { it.isNotBlank() }
+            ?: guess.kind.label
 
     fun list(context: Context): List<Stored> {
         val root = File(context.getExternalFilesDir(null), "monitor-missions")
@@ -67,6 +77,39 @@ object MonitorMission {
                     .put("location_source", sample.locationSource).put("fix_age_ms", sample.fixAgeMs).toString() + "\n"
             })
         }
+    }
+
+    /** Persist a readable name alongside the MAC so saved missions keep their labels. */
+    fun appendIdentity(files: Files, mac: String, name: String) {
+        synchronized(logLock) {
+            files.log.appendText(JSONObject().put("at_ms", System.currentTimeMillis())
+                .put("event", "device_identity").put("mac", mac).put("name", name).toString() + "\n")
+        }
+    }
+
+    fun readLabels(log: File): Map<String, String> = log.useLines { lines ->
+        lines.mapNotNull { line ->
+            runCatching {
+                val row = JSONObject(line)
+                if (row.optString("event") != "device_identity") return@runCatching null
+                val mac = row.optString("mac")
+                val name = row.optString("name")
+                if (mac.isBlank() || name.isBlank()) null else mac to name
+            }.getOrNull()
+        }.toMap()
+    }
+
+    fun readReplayEvents(log: File): List<ReplayEvent> = log.useLines { lines ->
+        lines.mapNotNull { line ->
+            runCatching {
+                val row = JSONObject(line)
+                val event = row.optString("event")
+                if (event == "geo_sample" || event == "device_identity" || event == "mission_target")
+                    return@runCatching null
+                ReplayEvent(row.optLong("at_ms"), event, row.optString("details"))
+                    .takeIf { it.atMs > 0 && it.event.isNotBlank() }
+            }.getOrNull()
+        }.sortedBy { it.atMs }.toList()
     }
 
     fun readSamples(log: File): List<MonitorGeoSample> = log.useLines { lines ->

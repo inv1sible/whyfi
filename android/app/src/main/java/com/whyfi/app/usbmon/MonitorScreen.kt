@@ -79,6 +79,13 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     var recordPcap by rememberSaveable { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var selectedName by rememberSaveable { mutableStateOf(MonitorTab.NEARBY.name) }
+    var selectedMissionLogPath by remember { mutableStateOf<String?>(null) }
+    var selectedLocationMac by remember { mutableStateOf<String?>(null) }
+    var locationTargets by remember { mutableStateOf<List<MonitorLocationTarget>>(emptyList()) }
+    var locationHasReceiver by remember { mutableStateOf(false) }
+    var locationRefresh by remember { mutableIntStateOf(0) }
+    var locationRecenter by remember { mutableIntStateOf(0) }
+    var showLocationDetails by remember { mutableStateOf(false) }
     val selected = MonitorTab.entries.firstOrNull { it.name == selectedName } ?: MonitorTab.NEARBY
     val tabs = MonitorTab.entries.toList()
     val visibleDevices = displayDevices.filter { it.second.kind in visibleKinds }
@@ -154,7 +161,16 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                     MonitorTab.MISSIONS -> MonitorMission.list(context).size
                     else -> monitorRows(tab, visibleDevices).size
                 }
-                Tab(tab == selected, { selectedName = tab.name },
+                Tab(tab == selected, {
+                    if (tab == MonitorTab.MAPPING && selected != MonitorTab.MAPPING) {
+                        selectedMissionLogPath = null
+                        selectedLocationMac = null
+                        locationTargets = emptyList()
+                        locationHasReceiver = false
+                    }
+                    if (tab != MonitorTab.MAPPING) showLocationDetails = false
+                    selectedName = tab.name
+                },
                     text = { Text(if (tab == MonitorTab.MAPPING) tab.label else "${tab.label} ($count)") })
             }
         }
@@ -205,9 +221,20 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                     showApCards, { showApCards = !showApCards })
             }
         } else if (selected == MonitorTab.MISSIONS) {
-            MissionView(context, settingsRepository, state.reportPath, Modifier.weight(1f))
+            MissionView(context, settingsRepository, state.reportPath,
+                onOpenLocation = { path, mac ->
+                    selectedMissionLogPath = path
+                    selectedLocationMac = mac
+                    locationTargets = emptyList()
+                    locationHasReceiver = false
+                    selectedName = MonitorTab.MAPPING.name
+                    locationRecenter++
+                }, modifier = Modifier.weight(1f))
         } else if (selected == MonitorTab.MAPPING) {
-            MonitorMappingView(context, state, favorites, Modifier.weight(1f))
+            MonitorMappingView(context, state, favorites, selectedMissionLogPath, selectedLocationMac,
+                { locationTargets = it }, { locationHasReceiver = it }, locationRefresh, locationRecenter,
+                showLocationDetails, { showLocationDetails = false },
+                Modifier.weight(1f))
         } else {
             MonitorTable(selected, visibleDevices, Modifier.weight(1f).padding(12.dp))
         }
@@ -215,9 +242,6 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             Column(Modifier.padding(horizontal = 10.dp, vertical = 5.dp)) {
                 Text("${state.status} · ${state.frames} frames · ${state.geoSamples} location samples",
                     style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                if (state.running && state.geoStatus != "Location sampling active") {
-                    Text(state.geoStatus, style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (state.running) Button({ service?.stopMonitor() },
                         enabled = state.status != "Starting…" && state.status != "Stopping…" &&
@@ -228,13 +252,38 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                     Checkbox(recordPcap, { recordPcap = it }, enabled = !state.running)
                     Text("PCAP", style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.weight(1f))
-                    TextButton({ showChannels = !showChannels; selectedName = MonitorTab.NEARBY.name }) {
-                        Text(if (showChannels) "Channels ▼" else "Channels ▲")
+                    if (selected == MonitorTab.MAPPING) {
+                        TextButton({ locationRecenter++ }, enabled = locationHasReceiver, modifier = Modifier.semantics {
+                            contentDescription = if (selectedMissionLogPath == null) "Center on me" else "Center replay position"
+                        }) {
+                            Text(if (selectedMissionLogPath == null) "◎ Me" else "◎ Replay")
+                        }
+                        IconButton({ locationRefresh++ }, modifier = Modifier.size(40.dp).semantics {
+                            contentDescription = "Refresh location and mission"
+                        }) { Text("⟳", style = MaterialTheme.typography.titleLarge) }
+                        IconButton({ showLocationDetails = !showLocationDetails }, modifier = Modifier.size(40.dp).semantics {
+                            contentDescription = if (showLocationDetails) "Hide geolocation details" else "Show geolocation details"
+                        }) { Text("🌐", style = MaterialTheme.typography.titleLarge) }
+                    } else if (selected == MonitorTab.NEARBY) {
+                        TextButton({ showChannels = !showChannels }) {
+                            Text(if (showChannels) "Channels ▼" else "Channels ▲")
+                        }
                     }
                 }
             }
         }
-        if (selected != MonitorTab.MISSIONS && selected != MonitorTab.MAPPING) {
+        if (selected == MonitorTab.MAPPING && locationTargets.isNotEmpty()) {
+            val selectedTarget = selectedLocationMac?.takeIf { mac -> locationTargets.any { it.mac == mac } }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(selectedTarget == null, { selectedLocationMac = null },
+                    label = { Text("All (${locationTargets.size})") })
+                locationTargets.forEach { target ->
+                    FilterChip(selectedTarget == target.mac, { selectedLocationMac = target.mac },
+                        label = { Text("${target.label} (${target.readings})") })
+                }
+            }
+        } else if (selected != MonitorTab.MISSIONS && selected != MonitorTab.MAPPING) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 SniffedDevices.Kind.entries.forEach { kind ->
