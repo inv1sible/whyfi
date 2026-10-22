@@ -233,7 +233,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
         } else if (selected == MonitorTab.MAPPING) {
             MonitorMappingView(context, state, favorites, selectedMissionLogPath, selectedLocationMac,
                 { locationTargets = it }, { locationHasReceiver = it }, locationRefresh, locationRecenter,
-                showLocationDetails, { showLocationDetails = false },
+                showLocationDetails,
                 Modifier.weight(1f))
         } else {
             MonitorTable(selected, visibleDevices, Modifier.weight(1f).padding(12.dp))
@@ -253,17 +253,17 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                     Text("PCAP", style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.weight(1f))
                     if (selected == MonitorTab.MAPPING) {
-                        TextButton({ locationRecenter++ }, enabled = locationHasReceiver, modifier = Modifier.semantics {
-                            contentDescription = if (selectedMissionLogPath == null) "Center on me" else "Center replay position"
-                        }) {
-                            Text(if (selectedMissionLogPath == null) "◎ Me" else "◎ Replay")
-                        }
+                        IconButton({ showLocationDetails = !showLocationDetails }, modifier = Modifier.size(40.dp).semantics {
+                            contentDescription = if (showLocationDetails) "Hide geolocation details" else "Show geolocation details"
+                        }) { Text("ⓘ", style = MaterialTheme.typography.titleLarge) }
                         IconButton({ locationRefresh++ }, modifier = Modifier.size(40.dp).semantics {
                             contentDescription = "Refresh location and mission"
                         }) { Text("⟳", style = MaterialTheme.typography.titleLarge) }
-                        IconButton({ showLocationDetails = !showLocationDetails }, modifier = Modifier.size(40.dp).semantics {
-                            contentDescription = if (showLocationDetails) "Hide geolocation details" else "Show geolocation details"
-                        }) { Text("🌐", style = MaterialTheme.typography.titleLarge) }
+                        TextButton({ locationRecenter++ }, enabled = locationHasReceiver, modifier = Modifier.semantics {
+                            contentDescription = if (selectedMissionLogPath == null) "Center on me" else "Center replay position"
+                        }) {
+                            Text(if (selectedMissionLogPath == null) "⌖ Me" else "⌖ Replay")
+                        }
                     } else if (selected == MonitorTab.NEARBY) {
                         TextButton({ showChannels = !showChannels }) {
                             Text(if (showChannels) "Channels ▼" else "Channels ▲")

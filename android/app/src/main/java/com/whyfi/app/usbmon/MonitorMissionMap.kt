@@ -3,6 +3,7 @@ package com.whyfi.app.usbmon
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.PointF
 import android.view.ViewGroup
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -36,6 +37,7 @@ internal fun MonitorLocationMap(
     labels: Map<String, String>,
     modifier: Modifier = Modifier.height(280.dp),
     mapKey: String = "",
+    recenterToken: String = "",
     followReceiver: Boolean = false,
 ) {
     Column(modifier.clipToBounds()) {
@@ -48,17 +50,19 @@ internal fun MonitorLocationMap(
                 setMultiTouchControls(true)
                 controller.setCenter(GeoPoint(0.0, 0.0))
                 controller.setZoom(2.0)
-                tag = "none"
+                tag = MapCenterState()
             }
         }, update = { map ->
-            if (map.tag == "none" || (receiver != null && map.tag != "receiver")) {
-                val focus = receiver?.fix?.let { GeoPoint(it.lat, it.lng) }
-                    ?: estimates.values.firstOrNull()?.let { GeoPoint(it.lat, it.lng) }
-                if (focus != null) {
-                    map.controller.setCenter(focus)
-                    map.controller.setZoom(17.0)
-                    map.tag = if (receiver != null) "receiver" else "estimate"
-                }
+            val centerState = map.tag as? MapCenterState ?: MapCenterState()
+            val focus = receiver?.fix?.let { GeoPoint(it.lat, it.lng) }
+                ?: estimates.values.firstOrNull()?.let { GeoPoint(it.lat, it.lng) }
+            if (focus != null && !centerState.initialized) {
+                map.controller.setCenter(focus)
+                map.controller.setZoom(17.0)
+                map.tag = MapCenterState(true, receiver != null, recenterToken)
+            } else if (receiver != null && (!centerState.centeredOnReceiver || centerState.token != recenterToken)) {
+                map.controller.setCenter(GeoPoint(receiver.fix.lat, receiver.fix.lng))
+                map.tag = MapCenterState(true, true, recenterToken)
             }
             if (followReceiver && receiver != null) {
                 map.controller.setCenter(GeoPoint(receiver.fix.lat, receiver.fix.lng))
@@ -67,10 +71,13 @@ internal fun MonitorLocationMap(
             map.overlays.add(MonitorLocationOverlay(receiver, estimates, selectedMac, selectedSamples.takeLast(800), labels))
             map.invalidate()
         }) }
-        Text("© OpenStreetMap contributors · blue: phone · teal: estimate/uncertainty · red: selected signal fit",
+        Text("© OpenStreetMap contributors · blue: phone · teal: estimate/uncertainty · green→orange/red: sampled RSSI cones",
             style = MaterialTheme.typography.bodySmall)
     }
 }
+
+private data class MapCenterState(val initialized: Boolean = false,
+                                  val centeredOnReceiver: Boolean = false, val token: String = "")
 
 private class MonitorLocationOverlay(
     private val receiver: MonitorSelectedLocation?,
@@ -93,11 +100,11 @@ private class MonitorLocationOverlay(
             canvas.drawCircle(center.x.toFloat(), center.y.toFloat(), abs(edge.x - center.x).toFloat(), paint)
             paint.style = Paint.Style.FILL
         }
-        estimates[selectedMac]?.heat?.forEach { cell ->
-            if (cell.relativeFit < 0.08) return@forEach
-            val p = point(cell.lat, cell.lng)
-            paint.color = Color.argb((cell.relativeFit * 140).toInt().coerceIn(0, 140), 220, 48, 42)
-            canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 12f, paint)
+        estimates[selectedMac]?.let { estimate ->
+            MonitorSignalCones.draw(canvas, estimate, samples) { lat, lng ->
+                val p = point(lat, lng)
+                PointF(p.x.toFloat(), p.y.toFloat())
+            }
         }
         samples.forEach { sample ->
             val p = point(sample.lat, sample.lng)
@@ -164,7 +171,7 @@ internal fun MonitorMissionMap(
             map.overlays.add(MonitorEstimateOverlay(estimate, samples.takeLast(800)))
             map.invalidate()
         }) }
-        Text("© OpenStreetMap contributors · blue: receiver · teal: estimate/uncertainty · red: relative RSSI fit",
+        Text("© OpenStreetMap contributors · blue: receiver · teal: estimate/uncertainty · green→orange/red: sampled RSSI cones",
             style = MaterialTheme.typography.bodySmall)
     }
 }
@@ -178,11 +185,9 @@ private class MonitorEstimateOverlay(
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         val projection = mapView.projection
         fun at(lat: Double, lng: Double) = projection.toPixels(GeoPoint(lat, lng), null)
-        estimate.heat.forEach { cell ->
-            if (cell.relativeFit < 0.08) return@forEach
-            val point = at(cell.lat, cell.lng)
-            paint.color = Color.argb((cell.relativeFit * 140).toInt().coerceIn(0, 140), 220, 48, 42)
-            canvas.drawCircle(point.x.toFloat(), point.y.toFloat(), 12f, paint)
+        MonitorSignalCones.draw(canvas, estimate, samples) { lat, lng ->
+            val p = at(lat, lng)
+            PointF(p.x.toFloat(), p.y.toFloat())
         }
         samples.forEach { sample ->
             val point = at(sample.lat, sample.lng)

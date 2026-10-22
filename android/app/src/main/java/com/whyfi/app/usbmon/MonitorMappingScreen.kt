@@ -7,9 +7,13 @@ import android.location.Location
 import android.location.LocationManager
 import android.os.Build
 import android.os.SystemClock
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,10 +22,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -34,6 +37,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.whyfi.app.BuildConfig
@@ -57,7 +61,6 @@ private data class MapMissionData(
 internal data class MonitorLocationTarget(val mac: String, val label: String, val readings: Int)
 
 /** Live local map while capturing, with access to retained mission logs. */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun MonitorMappingView(
     context: Context,
@@ -70,7 +73,6 @@ internal fun MonitorMappingView(
     refreshToken: Int,
     recenterToken: Int,
     showGeoDetails: Boolean,
-    onDismissGeoDetails: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var permissionRevision by remember { mutableIntStateOf(0) }
@@ -192,13 +194,21 @@ internal fun MonitorMappingView(
     val visibleEstimates = if (mac == null) estimates else estimates.filterKeys { it == mac }
 
     Column(modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Box(Modifier.weight(1f)) {
+            MonitorLocationMap(mapReceiver, visibleEstimates, mac, route, displayLabels, Modifier.fillMaxSize(),
+                mapKey = logPath.orEmpty(), recenterToken = "$recenterToken:$scrubRecenter",
+                followReceiver = replay && playing)
+            SlidingGeoDetails(showGeoDetails, Modifier.align(Alignment.TopCenter)) {
+                GeoDetailsContent(fine, coarse, providerStatus, permitted, fixes, clockMs,
+                    { permissionLauncher.launch(it) }, replay, replayReceiver, state, mac, route,
+                    targets, estimates, displayLabels)
+            }
+        }
         Text(if (replay) {
             "Mission ${log?.parentFile?.name?.take(8) ?: "unavailable"} · ${readings.size} readings so far"
-        } else if (receiver == null) "Own position: no recent fix · tap 🌐 for details"
+        } else if (receiver == null) "Own position: no recent fix · tap ⓘ for details"
             else "Best fix: ${receiver.fix.provider} · ±${receiver.effectiveAccuracyM.toInt()} m · ${receiver.ageMs / 1_000} s old",
             style = MaterialTheme.typography.bodySmall)
-        MonitorLocationMap(mapReceiver, visibleEstimates, mac, route, displayLabels, Modifier.weight(1f),
-            mapKey = "$logPath:$recenterToken:$scrubRecenter", followReceiver = replay && playing)
         Text("${estimates.size}/${targets.size} pinned estimates · ${readings.size} location readings",
             style = MaterialTheme.typography.bodySmall)
         if (targets.isEmpty()) {
@@ -220,8 +230,29 @@ internal fun MonitorMappingView(
                 onValueChangeFinished = { settledFraction = replayFraction; scrubRecenter++ })
         }
     }
-    if (showGeoDetails) ModalBottomSheet(onDismissRequest = onDismissGeoDetails) {
-        Column(Modifier.fillMaxWidth().heightIn(max = 520.dp).verticalScroll(rememberScrollState()).padding(16.dp),
+}
+
+@Composable
+private fun SlidingGeoDetails(visible: Boolean, modifier: Modifier = Modifier,
+                              content: @Composable () -> Unit) {
+    AnimatedVisibility(visible, modifier = modifier,
+        enter = slideInVertically { -it }, exit = slideOutVertically { -it }) {
+        Surface(Modifier.fillMaxWidth(), tonalElevation = 6.dp, shadowElevation = 6.dp) {
+            content()
+        }
+    }
+}
+
+@Composable
+private fun GeoDetailsContent(
+    fine: Boolean, coarse: Boolean, providerStatus: String, permitted: Boolean,
+    fixes: List<MonitorLocationCandidate>, clockMs: Long,
+    requestPermission: (Array<String>) -> Unit,
+    replay: Boolean, replayReceiver: MonitorSelectedLocation?, state: MonitorUiState,
+    mac: String?, route: List<MonitorGeoSample>, targets: List<String>,
+    estimates: Map<String, MonitorEstimate>, displayLabels: Map<String, String>,
+) {
+        Column(Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp)) {
             if (replay) {
                 Text("Recorded receiver at selected time", style = MaterialTheme.typography.titleSmall)
@@ -234,7 +265,7 @@ internal fun MonitorMappingView(
                 style = MaterialTheme.typography.titleSmall)
             Text("Permission: ${if (fine) "precise" else if (coarse) "approximate" else "none"} · $providerStatus",
                 style = MaterialTheme.typography.bodySmall)
-            if (!permitted) TextButton({ permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,
+            if (!permitted) TextButton({ requestPermission(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.ACCESS_COARSE_LOCATION)) }) { Text("Grant location permission") }
             if (fixes.isEmpty()) Text("Android has delivered no GPS, network or fused fix. Check Location and permission in Android settings.",
                 style = MaterialTheme.typography.bodySmall)
@@ -283,7 +314,6 @@ internal fun MonitorMappingView(
             }
         }
     }
-}
 
 private fun replayEventText(event: MonitorMission.ReplayEvent, labels: Map<String, String>): String =
     when (event.event) {

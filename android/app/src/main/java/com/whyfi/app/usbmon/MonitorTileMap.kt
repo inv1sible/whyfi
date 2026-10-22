@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.PointF
 import android.graphics.RectF
 import java.io.File
 import java.net.HttpURLConnection
@@ -98,12 +99,8 @@ internal object MonitorTileMap {
                 tilesDrawn++
             }
         }
-        // Relative model fit: red cells show where the observed RSSI pattern
-        // fits best. These are deliberately not labeled as probabilities.
-        estimate.heat.forEach { cell ->
-            if (cell.relativeFit < 0.08) return@forEach
-            paint.color = Color.argb((min(0.68, cell.relativeFit * 0.55) * 255).toInt(), 220, 48, 42)
-            canvas.drawCircle(px(cell.lng), py(cell.lat), 9f, paint)
+        MonitorSignalCones.draw(canvas, estimate, samples) { lat, lng ->
+            PointF(px(lng), py(lat))
         }
         samples.forEach { sample ->
             paint.color = Color.WHITE
@@ -130,7 +127,7 @@ internal object MonitorTileMap {
         canvas.drawRect(area.left, area.bottom - 18f, area.right, area.bottom, paint)
         paint.color = Color.rgb(35, 55, 60)
         paint.textSize = 9f
-        canvas.drawText("© OpenStreetMap contributors  |  blue: receiver  |  teal: estimate/uncertainty  |  red: relative RSSI fit",
+        canvas.drawText("© OpenStreetMap contributors  |  blue: receiver  |  teal: estimate  |  green→red: sampled RSSI cones",
             area.left + 5f, area.bottom - 5f, paint)
         canvas.restore()
         return tilesDrawn

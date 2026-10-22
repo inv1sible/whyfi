@@ -258,7 +258,8 @@ object MonitorMission {
                 MonitorTileMap.draw(context, page!!.canvas, map, estimate, samples)
                 y = map.bottom + 15f
                 estimate.advice.forEach { line(it, color = muted) }
-                line("Heat colors show relative model fit, not a calibrated probability.", color = muted)
+                line("Cones run from the estimated device position toward sampled receiver positions.", color = muted)
+                line("Green to orange/red shows relative RSSI; cone direction is not an antenna bearing.", color = muted)
             }
         }
         section("Interpretation")

@@ -86,15 +86,15 @@ WiFi scan-throttle path):
     samples and the currently selected GPS/network/fused source. Fixes up to
     60 seconds from a packet can be paired, with their age added to the
     uncertainty. Open **Location** beside Nearby to see the phone's Android
-    position on the map even before a radio sample is saved. The compact line
-    shows only the best recent fix by accuracy adjusted for age. Tap the globe
-    in the bottom command bar to open diagnostics showing permission, provider status, raw coordinates,
+    position on the map even before a radio sample is saved. The compact line below the legend
+    shows only the best recent fix by accuracy adjusted for age. Tap ⓘ
+    in the bottom command bar to slide down diagnostics showing permission, provider status, raw coordinates,
     accuracy, fix age, and why pinned radio readings were not geotagged.
     Pinned AP/station estimates and uncertainty circles appear on the same
     map; the favorite chips below the command bar filter All or one selected
-    device and its signal-fit heatmap. Their labels use the known SSID/device
-    name or vendor plus the last three MAC octets. Center and refresh are also
-    in the bottom command bar, while Channels remains available from Nearby.
+    device and its sampled-RSSI cones. Their labels use the known SSID/device
+    name or vendor plus the last three MAC octets. Refresh and ⌖ Center are also
+    in the bottom command bar; centering preserves map zoom. Channels remains available from Nearby.
     Select a saved mission in **Missions** to jump to Location. Scrub or play
     the timeline above the command bar; the map then shows only measurements
     collected by that time and the latest relevant mission-log event.
@@ -105,8 +105,8 @@ WiFi scan-throttle path):
     handshake or a usable WPA hash. The first pages of a newly generated PDF
     list each pinned device's coordinates or the reason none could be
     calculated; detail pages include map-backed estimates, uncertainty, and
-    route suggestions. Red
-    heat shows relative RSSI-model fit, not calibrated probability; blue
+    route suggestions. Green-to-orange/red cones show relative RSSI toward sampled positions,
+    not a measured antenna bearing; blue
     dots mark the phone's measurement positions. Map tiles use the same
     OpenStreetMap source as Mission and are cached. If tiles are unavailable,
     the GPS overlay and coordinate estimate remain in the PDF. Choose a mission
