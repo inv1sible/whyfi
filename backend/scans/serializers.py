@@ -505,6 +505,7 @@ class LANObservationInputSerializer(serializers.Serializer):
     hostname = serializers.CharField(max_length=255, allow_blank=True, default="")
     vendor_oui = serializers.CharField(max_length=8, allow_blank=True, default="")
     open_ports = serializers.ListField(child=serializers.IntegerField(), default=list)
+    onvif = serializers.DictField(child=serializers.CharField(max_length=2048, allow_blank=True), default=dict)
     response_time_ms = serializers.FloatField(required=False, allow_null=True)
     banner = serializers.CharField(max_length=255, allow_blank=True, default="")
     device_type_guess = serializers.ChoiceField(
@@ -756,6 +757,7 @@ class ScanSessionIngestSerializer(serializers.Serializer):
                 hostname=item.get("hostname", ""),
                 vendor_oui=item.get("vendor_oui", ""),
                 open_ports=item.get("open_ports", []),
+                onvif=item.get("onvif", {}),
                 response_time_ms=item.get("response_time_ms"),
                 banner=item.get("banner", ""),
                 device_type_guess=item.get("device_type_guess", LANObservation.DeviceType.UNKNOWN),

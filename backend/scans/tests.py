@@ -147,6 +147,19 @@ class ScanSessionIngestTests(TestCase):
         self.assertEqual(session.lan_observations.count(), 1)
         self.assertTrue(AccessPoint.objects.filter(bssid="aa:bb:cc:dd:ee:ff").exists())
 
+    def test_lan_onvif_evidence_is_preserved(self):
+        payload = self._payload("scan-onvif")
+        payload["lan_observations"][0]["onvif"] = {
+            "endpoint": "urn:uuid:camera-1",
+            "types": "tds:Device",
+            "scopes": "onvif://www.onvif.org/name/Front%20Door",
+            "xaddrs": "http://192.168.1.42/onvif/device_service",
+        }
+        response = self.client.post("/api/v1/scan-sessions/", payload, format="json")
+        self.assertEqual(response.status_code, 201, response.content)
+        observation = ScanSession.objects.get(client_scan_id="scan-onvif").lan_observations.get()
+        self.assertEqual(observation.onvif["endpoint"], "urn:uuid:camera-1")
+
     def test_ingest_stores_location_accuracy_and_provider(self):
         self.client.post("/api/v1/scan-sessions/", self._payload("scan-loc"), format="json")
         session = ScanSession.objects.get(client_scan_id="scan-loc")

@@ -31,6 +31,17 @@ object SniffedDevices {
         val lastRssi: Int? = null,
         val lastRssiBootMs: Long? = null,
         val lastRssiChannel: Int? = null,
+        val wpsPrimaryType: String = "",
+        val wpsModelNumber: String = "",
+        val wpsSerial: String = "",
+        val wpsConfigMethods: String = "",
+        val wpsState: String = "",
+        val wpsLocked: String = "",
+        val security: String = "",
+        val akms: String = "",
+        val pairwiseCiphers: String = "",
+        val groupCipher: String = "",
+        val pmf: String = "",
     ) {
         val isAp get() = roles and ROLE_AP != 0
         val isClient get() = roles and ROLE_CLIENT != 0
@@ -38,6 +49,21 @@ object SniffedDevices {
         /** Locally administered bit: a randomized ("private") MAC. */
         val randomized get() = mac.substring(0, 2).toInt(16) and 0x02 != 0
         val wps get() = listOf(wpsManufacturer, wpsModel, wpsName).filter { it.isNotBlank() }.distinct().joinToString(" · ")
+        val securityDetails get() = listOf(
+            security, akms.takeIf { it.isNotBlank() }?.let { "AKM $it" },
+            pairwiseCiphers.takeIf { it.isNotBlank() }?.let { "pairwise $it" },
+            groupCipher.takeIf { it.isNotBlank() }?.let { "group $it" },
+            pmf.takeIf { it.isNotBlank() }?.let { "PMF $it" },
+        ).filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
+        val wpsDetails get() = listOf(
+            wps.takeIf { it.isNotBlank() },
+            wpsPrimaryType.takeIf { it.isNotBlank() }?.let { "type $it" },
+            wpsModelNumber.takeIf { it.isNotBlank() }?.let { "model #$it" },
+            wpsSerial.takeIf { it.isNotBlank() }?.let { "serial $it" },
+            wpsConfigMethods.takeIf { it.isNotBlank() }?.let { "config 0x$it" },
+            wpsState.takeIf { it.isNotBlank() }?.let { "state $it" },
+            wpsLocked.takeIf { it.isNotBlank() }?.let { "setup locked $it" },
+        ).filterNotNull().joinToString(" · ")
     }
 
     enum class Kind(val label: String) {
@@ -66,6 +92,17 @@ object SniffedDevices {
                 lastRssi = f.getOrNull(17)?.toIntOrNull(),
                 lastRssiBootMs = f.getOrNull(18)?.toLongOrNull()?.takeIf { it > 0 },
                 lastRssiChannel = f.getOrNull(19)?.toIntOrNull()?.takeIf { it > 0 },
+                wpsPrimaryType = f.getOrNull(20).orEmpty(),
+                wpsModelNumber = f.getOrNull(21).orEmpty(),
+                wpsSerial = f.getOrNull(22).orEmpty(),
+                wpsConfigMethods = f.getOrNull(23).orEmpty(),
+                wpsState = f.getOrNull(24).orEmpty(),
+                wpsLocked = f.getOrNull(25).orEmpty(),
+                security = f.getOrNull(26).orEmpty(),
+                akms = f.getOrNull(27).orEmpty(),
+                pairwiseCiphers = f.getOrNull(28).orEmpty(),
+                groupCipher = f.getOrNull(29).orEmpty(),
+                pmf = f.getOrNull(30).orEmpty(),
             )
         }.getOrNull()
     }.toList()
@@ -101,6 +138,10 @@ object SniffedDevices {
         val reasons = mutableListOf<String>()
         vendor?.let { reasons += "vendor: $it" }
         if (d.wps.isNotEmpty()) reasons += "announces itself as: ${d.wps}"
+        if (d.wpsPrimaryType.startsWith("4:")) {
+            reasons += "WPS primary device type: camera"
+            return Guess(Kind.CAMERA, vendor, reasons)
+        }
         val identity = "${d.wps} ${d.ssid}"
         val camera = (vendor != null && CAMERA_VENDORS.containsMatchIn(vendor)) || CAMERA_WORDS.containsMatchIn(identity)
         val streaming = d.bytesUp >= STREAM_UP_BYTES && d.bytesUp >= 4 * d.bytesDown

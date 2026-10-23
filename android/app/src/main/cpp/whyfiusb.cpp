@@ -132,7 +132,9 @@ struct Device {
     std::set<std::string> probed;    // network names asked for (clients)
     bool wildcardProbe = false;
     std::set<std::string> bssids;    // APs this client exchanged data with
-    std::string wpsName, wpsManufacturer, wpsModel;
+    std::string wpsName, wpsManufacturer, wpsModel, wpsModelNumber, wpsSerial;
+    std::string wpsPrimaryType, wpsConfigMethods, wpsState, wpsLocked;
+    std::string security, akms, pairwiseCiphers, groupCipher, pmf;
     long long firstMs = 0, lastMs = 0;
 };
 
@@ -209,8 +211,69 @@ struct Ies {
     std::string ssid;
     bool hasSsid = false, wildcard = false;
     int channel = 0;  // DS Parameter Set (2.4 GHz) or HT Operation primary channel
-    std::string wpsName, wpsManufacturer, wpsModel;
+    std::string wpsName, wpsManufacturer, wpsModel, wpsModelNumber, wpsSerial;
+    std::string wpsPrimaryType, wpsConfigMethods, wpsState, wpsLocked;
+    std::string security, akms, pairwiseCiphers, groupCipher, pmf;
 };
+
+std::string hexValue(const uint8_t *p, size_t n) {
+    std::string value;
+    char b[3];
+    for (size_t i = 0; i < n; i++) {
+        std::snprintf(b, sizeof b, "%02x", p[i]);
+        value += b;
+    }
+    return value;
+}
+
+std::string suite(const uint8_t *p, bool akm) {
+    if (!((p[0] == 0x00 && p[1] == 0x0f && p[2] == 0xac) ||
+          (p[0] == 0x00 && p[1] == 0x50 && p[2] == 0xf2))) return hexValue(p, 4);
+    if (akm) {
+        switch (p[3]) {
+            case 1: return "802.1X"; case 2: return "PSK"; case 3: return "FT-802.1X";
+            case 4: return "FT-PSK"; case 5: return "802.1X-SHA256"; case 6: return "PSK-SHA256";
+            case 8: return "SAE"; case 9: return "FT-SAE"; case 11: return "Suite-B";
+            case 12: return "Suite-B-192"; case 18: return "OWE";
+            default: return hexValue(p, 4);
+        }
+    }
+    switch (p[3]) {
+        case 1: return "WEP40"; case 2: return "TKIP"; case 4: return "CCMP-128";
+        case 5: return "WEP104"; case 8: return "GCMP-128"; case 9: return "GCMP-256";
+        case 10: return "CCMP-256"; default: return hexValue(p, 4);
+    }
+}
+
+void parseSecurity(const uint8_t *p, size_t n, Ies &out, const char *protocol) {
+    if (n < 8 || p[0] != 1 || p[1] != 0) return;
+    size_t i = 2;
+    const std::string group = suite(p + i, false); i += 4;
+    auto list = [&](bool akm, std::string &target) -> bool {
+        if (i + 2 > n) return false;
+        const size_t count = p[i] | (static_cast<size_t>(p[i + 1]) << 8); i += 2;
+        if (count > (n - i) / 4) return false;
+        for (size_t j = 0; j < count; j++, i += 4) {
+            const auto name = suite(p + i, akm);
+            if (target.find(name) == std::string::npos) {
+                if (!target.empty()) target += "+";
+                target += name;
+            }
+        }
+        return true;
+    };
+    std::string pairwise, akms;
+    if (!list(false, pairwise) || !list(true, akms)) return;
+    if (!out.security.empty()) out.security += "+";
+    out.security += protocol;
+    out.groupCipher = group;
+    out.pairwiseCiphers = pairwise;
+    out.akms = akms;
+    if (i + 2 <= n && protocol[0] == 'R') {
+        const int caps = p[i] | (p[i + 1] << 8);
+        out.pmf = (caps & 0x40) ? "required" : ((caps & 0x80) ? "capable" : "disabled");
+    }
+}
 
 // WPS attributes (big-endian type/length) inside vendor IE 00:50:F2 type 4.
 void parseWps(const uint8_t *p, size_t n, Ies &out) {
@@ -222,6 +285,14 @@ void parseWps(const uint8_t *p, size_t n, Ies &out) {
         if (type == 0x1011) out.wpsName = clean(v, len);
         else if (type == 0x1021) out.wpsManufacturer = clean(v, len);
         else if (type == 0x1023) out.wpsModel = clean(v, len);
+        else if (type == 0x1024) out.wpsModelNumber = clean(v, len);
+        else if (type == 0x1042) out.wpsSerial = clean(v, len);
+        else if (type == 0x1054 && len == 8) out.wpsPrimaryType =
+            std::to_string((v[0] << 8) | v[1]) + ":" + hexValue(v + 2, 4) + ":" +
+            std::to_string((v[6] << 8) | v[7]);
+        else if (type == 0x1008 && len == 2) out.wpsConfigMethods = hexValue(v, 2);
+        else if (type == 0x1044 && len == 1) out.wpsState = v[0] == 2 ? "configured" : (v[0] == 1 ? "unconfigured" : hexValue(v, 1));
+        else if (type == 0x1057 && len == 1) out.wpsLocked = v[0] ? "yes" : "no";
         i += 4 + len;
     }
 }
@@ -241,6 +312,10 @@ Ies parseIes(const uint8_t *p, size_t n) {
             out.channel = v[0];
         } else if (id == 61 && len >= 1 && out.channel == 0) {
             out.channel = v[0];
+        } else if (id == 48) {
+            parseSecurity(v, len, out, "RSN");
+        } else if (id == 221 && len >= 4 && v[0] == 0x00 && v[1] == 0x50 && v[2] == 0xF2 && v[3] == 0x01) {
+            parseSecurity(v + 4, len - 4, out, "WPA");
         } else if (id == 221 && len >= 4 && v[0] == 0x00 && v[1] == 0x50 && v[2] == 0xF2 && v[3] == 0x04) {
             parseWps(v + 4, len - 4, out);
         }
@@ -253,6 +328,19 @@ void applyWps(Device *dv, const Ies &ies) {
     if (!ies.wpsName.empty()) dv->wpsName = ies.wpsName;
     if (!ies.wpsManufacturer.empty()) dv->wpsManufacturer = ies.wpsManufacturer;
     if (!ies.wpsModel.empty()) dv->wpsModel = ies.wpsModel;
+    if (!ies.wpsModelNumber.empty()) dv->wpsModelNumber = ies.wpsModelNumber;
+    if (!ies.wpsSerial.empty()) dv->wpsSerial = ies.wpsSerial;
+    if (!ies.wpsPrimaryType.empty()) dv->wpsPrimaryType = ies.wpsPrimaryType;
+    if (!ies.wpsConfigMethods.empty()) dv->wpsConfigMethods = ies.wpsConfigMethods;
+    if (!ies.wpsState.empty()) dv->wpsState = ies.wpsState;
+    if (!ies.wpsLocked.empty()) dv->wpsLocked = ies.wpsLocked;
+    if (!ies.security.empty()) {
+        dv->security = ies.security;
+        dv->akms = ies.akms;
+        dv->pairwiseCiphers = ies.pairwiseCiphers;
+        dv->groupCipher = ies.groupCipher;
+        dv->pmf = ies.pmf;
+    }
 }
 
 // Count cleartext EAPOL-Key data frames, including QoS and four-address data.
@@ -327,6 +415,8 @@ void onFrame(const Packet &packet) {
                 dv->roles |= ROLE_AP;
                 if (!ies.ssid.empty()) dv->ssid = ies.ssid;
                 applyWps(dv, ies);
+                if (ies.security.empty() && dv->security.empty())
+                    dv->security = ((d[34] | (d[35] << 8)) & 0x10) ? "Protected (legacy/unknown)" : "Open";
             }
         } else if (subtype == 4) {  // probe request: addr2 is the searching client
             g_stats[PROBE_REQ]++;
@@ -568,7 +658,9 @@ Java_com_whyfi_app_usbmon_UsbMonitorNative_perChannel(JNIEnv *env, jobject) {
 // mac, roles, frames, probeReqs, bytesUp, bytesDown, bestRssi (or empty),
 // channels (comma), ssid, probed (|-joined), wildcard (0/1), bssids (comma),
 // wpsName, wpsManufacturer, wpsModel, firstMs, lastMs,
-// lastRssi, lastRssiBootMs (Android elapsed-realtime clock), lastRssiChannel
+// lastRssi, lastRssiBootMs (Android elapsed-realtime clock), lastRssiChannel,
+// wpsPrimaryType, wpsModelNumber, wpsSerial, wpsConfigMethods, wpsState,
+// wpsLocked, security, akms, pairwiseCiphers, groupCipher, pmf
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_whyfi_app_usbmon_UsbMonitorNative_devices(JNIEnv *env, jobject) {
     std::string out;
@@ -591,7 +683,10 @@ Java_com_whyfi_app_usbmon_UsbMonitorNative_devices(JNIEnv *env, jobject) {
                    std::to_string(dv.lastMs) + '\t' +
                    (dv.lastRssi == -1000 ? "" : std::to_string(dv.lastRssi)) + '\t' +
                    std::to_string(dv.lastRssiBootMs) + '\t' +
-                   std::to_string(dv.lastRssiChannel) + '\n';
+                   std::to_string(dv.lastRssiChannel) + '\t' + dv.wpsPrimaryType + '\t' +
+                   dv.wpsModelNumber + '\t' + dv.wpsSerial + '\t' + dv.wpsConfigMethods + '\t' +
+                   dv.wpsState + '\t' + dv.wpsLocked + '\t' + dv.security + '\t' + dv.akms + '\t' +
+                   dv.pairwiseCiphers + '\t' + dv.groupCipher + '\t' + dv.pmf + '\n';
         }
     }
     // NewStringUTF wants modified UTF-8; clean() already reduced names to

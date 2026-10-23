@@ -233,5 +233,6 @@ object LatestScanFetcher {
             responseTimeMs = responseTimeMs,
             banner = banner,
             deviceTypeGuess = deviceTypeGuess,
+            onvif = onvif,
         )
 }

@@ -490,6 +490,8 @@ private fun MonitorTable(
                 TableColumn("Manufacturer", 180.dp),
                 TableColumn("RSSI", 70.dp),
                 TableColumn("Channel", 80.dp),
+                TableColumn("Security", 170.dp),
+                TableColumn("WPS", 180.dp),
                 TableColumn("Seen", 76.dp),
                 TableColumn("Activity", 190.dp),
             ),
@@ -503,6 +505,8 @@ private fun MonitorTable(
                         guess.vendor ?: "—",
                         device.bestRssi?.let { "$it dBm" } ?: "—",
                         device.channels.joinToString().ifBlank { "—" },
+                        device.securityDetails.ifBlank { "—" },
+                        device.wpsDetails.ifBlank { "—" },
                         relativeSeen(newest - device.lastMs),
                         SniffedDevices.activity(device).ifBlank { guess.kind.label },
                     ),
@@ -634,6 +638,12 @@ private fun DeviceCard(
                     fontFamily = FontFamily.Monospace)
                 SniffedDevices.activity(device).takeIf { it.isNotBlank() }?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall)
+                }
+                device.securityDetails.takeIf { it.isNotBlank() }?.let {
+                    Text("Security: $it", style = MaterialTheme.typography.bodySmall)
+                }
+                device.wpsDetails.takeIf { it.isNotBlank() }?.let {
+                    Text("WPS: $it", style = MaterialTheme.typography.bodySmall)
                 }
                 if (stations.isNotEmpty()) {
                     HorizontalDivider()

@@ -109,6 +109,7 @@ data class LanObservationDto(
     @SerializedName("response_time_ms") val responseTimeMs: Double? = null,
     @SerializedName("banner") val banner: String = "",
     @SerializedName("device_type_guess") val deviceTypeGuess: String = "UNKNOWN",
+    @SerializedName("onvif") val onvif: Map<String, String> = emptyMap(),
 )
 
 data class ScanSessionResponse(
@@ -415,6 +416,7 @@ data class LanObservationResponseDto(
     @SerializedName("response_time_ms") val responseTimeMs: Double? = null,
     @SerializedName("banner") val banner: String = "",
     @SerializedName("device_type_guess") val deviceTypeGuess: String = "UNKNOWN",
+    @SerializedName("onvif") val onvif: Map<String, String> = emptyMap(),
     @SerializedName("observed_at") val observedAt: String? = null,
     @SerializedName("latitude") val latitude: Double? = null,
     @SerializedName("longitude") val longitude: Double? = null,

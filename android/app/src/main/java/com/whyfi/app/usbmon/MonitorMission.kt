@@ -298,6 +298,8 @@ object MonitorMission {
             line("${device.mac}  ${device.ssid.ifBlank { guess.vendor ?: guess.kind.label }}  ${device.bestRssi ?: "?"} dBm  ch ${device.channels.joinToString()}")
             line("${guess.kind.label}; frames ${device.frames}; probes ${device.probeRequests}; APs ${device.bssids.joinToString().ifBlank { "none observed" }}", 12f, muted)
             if (device.probed.isNotEmpty()) line("Probed: ${device.probed.joinToString().take(90)}", 12f, muted)
+            device.securityDetails.split(" · ").filter { it.isNotBlank() }.forEach { line("Security: $it", 12f, muted) }
+            device.wpsDetails.split(" · ").filter { it.isNotBlank() }.forEach { line("WPS: $it", 12f, muted) }
         }
         section("Position maps (${targetMacs.size})")
         targetMacs.forEach { mac ->

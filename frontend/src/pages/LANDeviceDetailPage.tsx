@@ -289,6 +289,9 @@ export function LANDeviceDetailPage() {
               id: o.id,
               hostname: o.hostname || "—",
               openPorts: o.open_ports.length > 0 ? o.open_ports.join(", ") : "—",
+              onvif: o.onvif && Object.keys(o.onvif).length > 0
+                ? Object.entries(o.onvif).filter(([, value]) => value).map(([key, value]) => `${key}: ${value}`).join(" · ")
+                : "—",
               responseTimeMs: o.response_time_ms,
               latitude: o.latitude ?? null,
               longitude: o.longitude ?? null,
@@ -297,6 +300,7 @@ export function LANDeviceDetailPage() {
           columns={[
             { key: "hostname", label: "Hostname" },
             { key: "openPorts", label: "Open ports", hideMobile: true },
+            { key: "onvif", label: "ONVIF", hideMobile: true },
             {
               key: "responseTimeMs",
               label: "Response time",

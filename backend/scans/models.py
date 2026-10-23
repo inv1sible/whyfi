@@ -368,6 +368,7 @@ class LANObservation(models.Model):
     hostname = models.CharField(max_length=255, blank=True)
     vendor_oui = models.CharField(max_length=8, blank=True)
     open_ports = models.JSONField(default=list, blank=True)
+    onvif = models.JSONField(default=dict, blank=True)
     response_time_ms = models.FloatField(null=True, blank=True)
     banner = models.CharField(max_length=255, blank=True)
     device_type_guess = models.CharField(max_length=16, choices=DeviceType.choices, default=DeviceType.UNKNOWN)

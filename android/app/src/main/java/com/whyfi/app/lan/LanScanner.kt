@@ -74,8 +74,10 @@ class LanScanner(private val context: Context) {
             // An empty result must mean "swept the subnet, nobody answered" —
             // never "couldn't sweep". Callers check unavailableReason() first;
             // this is the belt-and-braces half of the same contract.
-            val hosts = (resolveSubnet() as? SubnetResolution.Hosts)?.addresses
+            val subnet = resolveSubnet() as? SubnetResolution.Hosts
                 ?: return@withContext emptyList()
+            val hosts = subnet.addresses
+            val onvif = OnvifDiscovery.discover(subnet.localAddress, hosts.mapNotNull { it.hostAddress }.toSet())
             val arpTable = readArpTable()
             var checked = 0
 
@@ -85,7 +87,8 @@ class LanScanner(private val context: Context) {
                     async {
                         val ipAddress: String = host.hostAddress ?: return@async null
                         val (openPorts, responseTimeMs) = probeHost(host)
-                        val alive = openPorts.isNotEmpty() || pingReachable(host)
+                        val onvifMatch = onvif[ipAddress]
+                        val alive = onvifMatch != null || openPorts.isNotEmpty() || pingReachable(host)
                         checked++
                         onProgress(checked, hosts.size)
                         if (!alive) return@async null
@@ -100,7 +103,8 @@ class LanScanner(private val context: Context) {
                             openPorts = openPorts,
                             responseTimeMs = responseTimeMs,
                             banner = banner,
-                            deviceTypeGuess = guessDeviceType(openPorts, banner),
+                            deviceTypeGuess = if (onvifMatch != null) "CAMERA" else guessDeviceType(openPorts, banner),
+                            onvif = onvifMatch?.fields().orEmpty(),
                         )
                     }
                 }
@@ -299,7 +303,7 @@ class LanScanner(private val context: Context) {
     }
 
     private sealed interface SubnetResolution {
-        data class Hosts(val addresses: List<InetAddress>) : SubnetResolution
+        data class Hosts(val addresses: List<InetAddress>, val localAddress: InetAddress) : SubnetResolution
         data class Unavailable(val reason: String) : SubnetResolution
     }
 
@@ -339,6 +343,7 @@ class LanScanner(private val context: Context) {
             )
                 runCatching { InetAddress.getByAddress(bytes) }.getOrNull()
             },
+            InetAddress.getByName(chosen.address),
         )
     }
 

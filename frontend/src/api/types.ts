@@ -280,6 +280,7 @@ export interface LANObservation {
   hostname: string;
   vendor_oui: string;
   open_ports: number[];
+  onvif: Record<string, string>;
   response_time_ms: number | null;
   banner: string;
   device_type_guess: string;

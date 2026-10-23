@@ -46,7 +46,7 @@ fun LanScreen(service: ScanForegroundService?, uiState: ScanUiState) {
         Text("LAN scanner", style = MaterialTheme.typography.headlineSmall)
         Text(
             "Sweeps the WiFi network you're currently connected to for other devices (TCP-connect probe on common " +
-                "ports — no root needed, but MAC addresses usually aren't available on modern Android without it). " +
+            "ports plus ONVIF discovery — no root needed, but MAC addresses usually aren't available on modern Android without it). " +
                 "This is slower than a regular scan — keeps going even if you switch tabs or apps.",
         )
 
@@ -130,6 +130,10 @@ private fun LanDeviceRow(device: LanObservationDto) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            if (device.onvif.isNotEmpty()) {
+                Text("ONVIF: ${device.onvif["name"]?.takeIf { it.isNotBlank() } ?: "device discovered"}",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         Text(deviceTypeLabel(device.deviceTypeGuess), style = MaterialTheme.typography.labelMedium)
