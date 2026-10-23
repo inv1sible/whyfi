@@ -111,7 +111,12 @@ internal fun MonitorMappingView(
     val fixes = receiverFixes.groupBy { it.provider }.mapNotNull { (_, candidates) ->
         candidates.maxByOrNull { it.bootMs }
     }.sortedBy { it.provider }
-    val receiver = MonitorLocationPolicy.select(receiverFixes, clockMs)
+    val rawReceiver = MonitorLocationPolicy.select(receiverFixes, clockMs)
+    var liveAnchor by remember { mutableStateOf<MonitorLocationCandidate?>(null) }
+    LaunchedEffect(rawReceiver?.fix?.bootMs, rawReceiver?.fix?.provider, selectedMissionLogPath) {
+        liveAnchor = if (selectedMissionLogPath != null || rawReceiver == null) null
+            else MonitorLocationPolicy.stabilize(liveAnchor, rawReceiver.fix)
+    }
     val locationManager = remember(context) { context.getSystemService(Context.LOCATION_SERVICE) as LocationManager }
     val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER) +
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) listOf(LocationManager.FUSED_PROVIDER) else emptyList()
@@ -168,14 +173,16 @@ internal fun MonitorMappingView(
     val replayReceiver = rawReceiverPath.lastOrNull()?.let { latest ->
         MonitorLocationPolicy.select(rawReceiverPath.map { it.candidate() },
             latest.bootMs + (cutoffMs - latest.atMs).coerceAtLeast(0))
-    } ?: readings.takeIf { receiverPath.isEmpty() }?.maxByOrNull { it.atMs }?.let { sample ->
+    }?.let { MonitorLocationPolicy.displayAt(it, receiverPath.lastOrNull()?.candidate()) }
+        ?: readings.takeIf { receiverPath.isEmpty() }?.maxByOrNull { it.atMs }?.let { sample ->
         MonitorSelectedLocation(
             MonitorLocationCandidate(sample.locationSource.ifBlank { "recorded" }, 0L,
                 sample.lat, sample.lng, sample.gpsAccuracyM, sample.speedMps), sample.fixAgeMs,
             MonitorLocationPolicy.effectiveAccuracy(sample.gpsAccuracyM, sample.fixAgeMs, sample.speedMps),
         )
     }
-    val mapReceiver = if (replay) replayReceiver else receiver
+    val mapReceiver = if (replay) replayReceiver else MonitorLocationPolicy.displayAt(rawReceiver,
+        liveAnchor ?: receiverPath.lastOrNull()?.candidate())
     val liveLabels = state.devices.associate { (device, guess) -> device.mac to MonitorMission.deviceName(device, guess) }
     val displayLabels = targets.associateWith { target ->
         MonitorMission.displayTarget(target,
@@ -200,11 +207,11 @@ internal fun MonitorMappingView(
     val estimates = estimated?.takeIf { it.first == estimateKey }?.second.orEmpty()
     val visibleEstimates = if (mac == null) estimates else estimates.filterKeys { it == mac }
     val summary = if (replay) {
-        "$locatedApCount APs with phone positions · ${rawReceiverPath.size} receiver fixes"
-    } else if (receiver == null) {
+        "${if (mapReceiver?.held == true) "Position held · " else ""}$locatedApCount APs with phone positions · ${rawReceiverPath.size} receiver fixes"
+    } else if (mapReceiver == null) {
         "No recent fix · $locatedApCount APs with phone positions"
     } else {
-        "${receiver.fix.provider} ±${receiver.effectiveAccuracyM.toInt()} m · $locatedApCount APs with phone positions"
+        "${mapReceiver.fix.provider} ±${mapReceiver.effectiveAccuracyM.toInt()} m${if (mapReceiver.held) " · position held" else ""} · $locatedApCount APs with phone positions"
     }
     LaunchedEffect(summary) { onSummaryChanged(summary) }
 
@@ -263,8 +270,9 @@ private fun GeoDetailsContent(
             if (replay) {
                 Text("Recorded receiver at selected time", style = MaterialTheme.typography.titleSmall)
                 Text(replayReceiver?.let { selected ->
-                    "${selected.fix.provider}: %.6f, %.6f · ±%.0f m · fix age %d s".format(
-                        selected.fix.lat, selected.fix.lng, selected.effectiveAccuracyM, selected.ageMs / 1_000)
+                    "${selected.fix.provider}: %.6f, %.6f · ±%.0f m · fix age %d s%s".format(
+                        selected.fix.lat, selected.fix.lng, selected.effectiveAccuracyM, selected.ageMs / 1_000,
+                        if (selected.held) " · position held within reported accuracy" else "")
                 } ?: "No geotagged reading before this point.", style = MaterialTheme.typography.bodySmall)
             }
             Text("Android location diagnostics · app v${BuildConfig.VERSION_CODE}",

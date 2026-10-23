@@ -44,11 +44,32 @@ class MonitorLocationPolicyTest {
         assertEquals(1_360.0, selected.effectiveAccuracyM, 0.001)
     }
 
-    @Test fun route_keeps_only_the_best_available_fix_at_each_update() {
+    @Test fun route_does_not_jump_to_a_worse_overlapping_fix() {
         val gps = MonitorReceiverFix(1_000, 100_000, "gps", 48.0, 11.0, 8.0, 0.0)
-        val poorNetwork = MonitorReceiverFix(2_000, 101_000, "network", 48.1, 11.1, 300.0, 0.0)
+        val poorNetwork = MonitorReceiverFix(2_000, 101_000, "network", 48.0002, 11.0002, 300.0, 0.0)
         val betterNetwork = poorNetwork.copy(atMs = 62_000, bootMs = 161_000, accuracyM = 40.0)
-        assertEquals(listOf(gps, betterNetwork), MonitorLocationPolicy.bestRoute(
+        assertEquals(listOf(gps), MonitorLocationPolicy.bestRoute(
             listOf(poorNetwork, betterNetwork, gps)))
+    }
+
+    @Test fun stationary_jitter_is_held_until_a_more_precise_fix_arrives() {
+        val anchor = fix("gps", 100_000, 20.0)
+        val jitter = fix("fused", 103_000, 60.0).copy(lat = 48.0002, speedMps = 3.0)
+        assertEquals(anchor, MonitorLocationPolicy.stabilize(anchor, jitter))
+        val displayed = MonitorLocationPolicy.displayAt(
+            MonitorSelectedLocation(jitter, 0, jitter.accuracyM), anchor)!!
+        assertTrue(displayed.held)
+        assertEquals(anchor.lat, displayed.fix.lat, 0.0)
+        assertTrue(displayed.effectiveAccuracyM >= jitter.accuracyM)
+        val precise = fix("gps", 106_000, 8.0).copy(lat = 48.0001)
+        assertEquals(precise, MonitorLocationPolicy.stabilize(anchor, precise))
+    }
+
+    @Test fun driving_speed_or_clear_displacement_resumes_tracking() {
+        val anchor = fix("gps", 100_000, 50.0)
+        val driving = fix("gps", 103_000, 55.0).copy(lat = 48.0002, speedMps = 12.0)
+        assertEquals(driving, MonitorLocationPolicy.stabilize(anchor, driving))
+        val far = fix("network", 120_000, 90.0).copy(lat = 48.005, speedMps = 0.0)
+        assertEquals(far, MonitorLocationPolicy.stabilize(anchor, far))
     }
 }

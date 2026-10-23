@@ -88,10 +88,9 @@ WiFi scan-throttle path):
     but produces a wider uncertainty region. Walk through several separated
     positions. The command bar shows the number of location-tagged radio
     samples and the currently selected GPS/network/fused source. Fixes up to
-    180 seconds from a packet can be paired, with speed-aware travel uncertainty added to the
-    uncertainty. Open **Location** beside Nearby to see the phone's Android
+    180 seconds from a packet can be paired, with speed-aware travel uncertainty added. Open **Location** beside Nearby to see the phone's Android
     position on the map even before a radio sample is saved. The compact line below the legend
-    shows only the best recent fix by accuracy adjusted for age. Tap ⓘ
+    shows the best recent fix by accuracy adjusted for age. The phone marker and replay route hold their position when a new fix falls within the previous fix's uncertainty; better accuracy or convincing movement resumes updates. Raw fixes remain in the mission log, and AP correlations still use those raw fixes. Tap ⓘ
     in the bottom command bar to slide down diagnostics showing permission, provider status, raw coordinates,
     accuracy, fix age, and why pinned radio readings were not geotagged.
     Pinned AP/station estimates and uncertainty circles appear on the same
