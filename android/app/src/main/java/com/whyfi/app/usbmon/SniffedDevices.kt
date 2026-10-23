@@ -64,6 +64,20 @@ object SniffedDevices {
             wpsState.takeIf { it.isNotBlank() }?.let { "state $it" },
             wpsLocked.takeIf { it.isNotBlank() }?.let { "setup locked $it" },
         ).filterNotNull().joinToString(" · ")
+        val securityAlerts: List<String> get() {
+            if (!isAp) return emptyList()
+            return buildList {
+                if (security == "Open") add("Open Wi-Fi")
+                if (security == "Protected (legacy/unknown)" || security.contains("WPA")) add("Legacy protection")
+                if (pairwiseCiphers.contains("TKIP") || groupCipher.contains("TKIP") ||
+                    pairwiseCiphers.contains("WEP") || groupCipher.contains("WEP")) add("Legacy cipher")
+                if (pmf == "disabled" && security.contains("RSN")) add("PMF off")
+                if (wpsDetails.isNotBlank()) {
+                    add("WPS advertised")
+                    if (wpsLocked == "no") add("WPS setup not locked")
+                }
+            }
+        }
     }
 
     enum class Kind(val label: String) {

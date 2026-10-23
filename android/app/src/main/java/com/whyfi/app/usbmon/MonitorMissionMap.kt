@@ -3,6 +3,7 @@ package com.whyfi.app.usbmon
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PointF
 import android.view.ViewGroup
 import androidx.compose.foundation.layout.Column
@@ -40,6 +41,7 @@ internal fun MonitorLocationMap(
     recenterToken: String = "",
     focusToken: String = "",
     followReceiver: Boolean = false,
+    receiverPath: List<MonitorReceiverFix> = emptyList(),
 ) {
     Column(modifier.clipToBounds()) {
         key(mapKey) { AndroidView(modifier = Modifier.fillMaxWidth().weight(1f).clipToBounds(), factory = { context ->
@@ -58,21 +60,30 @@ internal fun MonitorLocationMap(
             val targetFocus = estimates[selectedMac]?.let { GeoPoint(it.lat, it.lng) }
             val focus = targetFocus
                 ?: receiver?.fix?.let { GeoPoint(it.lat, it.lng) }
+                ?: receiverPath.lastOrNull()?.let { GeoPoint(it.lat, it.lng) }
                 ?: estimates.values.firstOrNull()?.let { GeoPoint(it.lat, it.lng) }
             // A long mission may span a large area; open near its latest measurements.
             val recentSamples = selectedSamples.takeLast(16)
             val measurementPoints = recentSamples.map { it.lat to it.lng } +
-                if (selectedMac != null) estimates[selectedMac]?.let { listOf(it.lat to it.lng) }.orEmpty()
-                else if (recentSamples.isEmpty()) estimates.values.map { it.lat to it.lng } else emptyList()
+                (if (selectedMac == null && recentSamples.isEmpty())
+                    receiverPath.takeLast(16).map { it.lat to it.lng } else emptyList()) +
+                (if (selectedMac != null) estimates[selectedMac]?.let { listOf(it.lat to it.lng) }.orEmpty()
+                else if (recentSamples.isEmpty()) estimates.values.map { it.lat to it.lng } else emptyList())
             val fitPoints = measurementPoints.ifEmpty {
                 receiver?.fix?.let { listOf(it.lat to it.lng) }.orEmpty()
             }
             val fit = monitorMapViewport(fitPoints,
                 map.width.takeIf { it > 0 } ?: map.resources.displayMetrics.widthPixels,
                 map.height.takeIf { it > 0 } ?: map.resources.displayMetrics.heightPixels / 2)
-            val shouldFit = !centerState.initialized || centerState.selectedMac != selectedMac ||
+            val shouldFit = !followReceiver && (!centerState.initialized || centerState.selectedMac != selectedMac ||
                 (!centerState.fittedMeasurements && selectedSamples.isNotEmpty())
-            if (fit != null && shouldFit) {
+            )
+            if (followReceiver && !centerState.initialized && receiver != null) {
+                map.controller.setCenter(GeoPoint(receiver.fix.lat, receiver.fix.lng))
+                map.controller.setZoom(17.0)
+                map.tag = centerState.copy(initialized = true, centeredOnReceiver = true,
+                    recenterToken = recenterToken, selectedMac = selectedMac)
+            } else if (fit != null && shouldFit) {
                 map.controller.setCenter(GeoPoint(fit.lat, fit.lng))
                 map.controller.setZoom(fit.zoom)
                 map.tag = MapCenterState(true, receiver != null, recenterToken, selectedMac,
@@ -97,7 +108,8 @@ internal fun MonitorLocationMap(
                 map.controller.setCenter(GeoPoint(receiver.fix.lat, receiver.fix.lng))
             }
             map.overlays.clear()
-            map.overlays.add(MonitorLocationOverlay(receiver, estimates, selectedMac, selectedSamples.takeLast(800), labels))
+            map.overlays.add(MonitorLocationOverlay(receiver, estimates, selectedMac,
+                selectedSamples.takeLast(800), labels, receiverPath.takeLast(800)))
             map.invalidate()
         }) }
         Text("© OpenStreetMap contributors · blue: phone · teal: estimate/uncertainty · green→orange/red: sampled RSSI cones",
@@ -116,6 +128,7 @@ private class MonitorLocationOverlay(
     private val selectedMac: String?,
     private val samples: List<MonitorGeoSample>,
     private val labels: Map<String, String>,
+    private val receiverPath: List<MonitorReceiverFix>,
 ) : Overlay() {
     override fun draw(canvas: Canvas, mapView: MapView, shadow: Boolean) {
         if (shadow) return
@@ -129,6 +142,19 @@ private class MonitorLocationOverlay(
             paint.style = Paint.Style.STROKE
             paint.strokeWidth = 3f
             canvas.drawCircle(center.x.toFloat(), center.y.toFloat(), abs(edge.x - center.x).toFloat(), paint)
+            paint.style = Paint.Style.FILL
+        }
+        if (receiverPath.isNotEmpty()) {
+            val path = Path()
+            receiverPath.forEachIndexed { index, fix ->
+                val p = point(fix.lat, fix.lng)
+                if (index == 0) path.moveTo(p.x.toFloat(), p.y.toFloat())
+                else path.lineTo(p.x.toFloat(), p.y.toFloat())
+            }
+            paint.color = Color.argb(170, 0, 94, 158)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 4f
+            canvas.drawPath(path, paint)
             paint.style = Paint.Style.FILL
         }
         estimates[selectedMac]?.let { estimate ->

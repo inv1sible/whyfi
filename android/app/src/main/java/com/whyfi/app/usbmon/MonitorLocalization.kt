@@ -22,6 +22,7 @@ data class MonitorGeoSample(
     val channel: Int,
     val locationSource: String = "",
     val fixAgeMs: Long = 0,
+    val speedMps: Double = 0.0,
 )
 
 data class MonitorHeatCell(val lat: Double, val lng: Double, val relativeFit: Double)
@@ -82,7 +83,7 @@ object MonitorLocalization {
             .values.map { bin ->
                 Point(median(bin.map { x(it.lng) }), median(bin.map { y(it.lat) }),
                     median(bin.map { it.rssi.toDouble() }), median(bin.map {
-                        MonitorLocationPolicy.effectiveAccuracy(it.gpsAccuracyM, it.fixAgeMs)
+                        MonitorLocationPolicy.effectiveAccuracy(it.gpsAccuracyM, it.fixAgeMs, it.speedMps)
                     }))
             }
         val baselineWeights = grouped.map { exp((it.rssi - grouped.maxOf { p -> p.rssi }) / 12.0) }

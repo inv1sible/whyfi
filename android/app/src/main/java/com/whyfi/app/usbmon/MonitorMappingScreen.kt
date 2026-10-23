@@ -52,6 +52,7 @@ private data class MapMissionData(
     val targets: Set<String>,
     val labels: Map<String, String>,
     val events: List<MonitorMission.ReplayEvent>,
+    val receiverFixes: List<MonitorReceiverFix>,
 )
 
 internal data class MonitorLocationTarget(val mac: String, val label: String, val readings: Int)
@@ -65,10 +66,9 @@ internal fun MonitorMappingView(
     selectedMissionLogPath: String?,
     replayMission: MonitorReplayMission?,
     replayCutoffMs: Long,
-    replayPlaying: Boolean,
+    followReceiver: Boolean,
     selectedMac: String?,
     onTargetsChanged: (List<MonitorLocationTarget>) -> Unit,
-    onReceiverAvailability: (Boolean) -> Unit,
     onSummaryChanged: (String) -> Unit,
     refreshToken: Int,
     recenterToken: Int,
@@ -90,7 +90,8 @@ internal fun MonitorMappingView(
         liveFixes = LocationSnapshot.lastKnownCandidates(context).associateBy { it.provider ?: "unknown" }
         val subscription = LocationSnapshot.requestUpdates(context, includeFused = true) { fix ->
             val provider = fix.provider ?: "unknown"
-            liveFixes = liveFixes + (provider to Location(fix))
+            if ((liveFixes[provider]?.elapsedRealtimeNanos ?: 0L) < fix.elapsedRealtimeNanos)
+                liveFixes = liveFixes + (provider to Location(fix))
         }
         onDispose { subscription?.close() }
     }
@@ -102,7 +103,9 @@ internal fun MonitorMappingView(
             MonitorLocationCandidate(fix.provider ?: "unknown", fix.elapsedRealtimeNanos / 1_000_000,
                 fix.latitude, fix.longitude,
                 if (fix.hasAccuracy() && fix.accuracy.isFinite() && fix.accuracy >= 0f)
-                    fix.accuracy.toDouble() else 1_000.0)
+                    fix.accuracy.toDouble() else 1_000.0,
+                if (fix.hasSpeed() && fix.speed.isFinite() && fix.speed >= 0f)
+                    fix.speed.toDouble() else 15.0)
         }
     val fixes = receiverFixes.groupBy { it.provider }.mapNotNull { (_, candidates) ->
         candidates.maxByOrNull { it.bootMs }
@@ -120,20 +123,22 @@ internal fun MonitorMappingView(
     val log = if (replay) selectedMissionLogPath?.let(::File)?.takeIf { it.isFile } else currentLog
     val logPath = log?.absolutePath
     var data by remember { mutableStateOf<MapMissionData?>(null) }
-    val sampleRevision = if (logPath == currentLog?.absolutePath) state.geoSamples else 0
+    val sampleRevision = if (logPath == currentLog?.absolutePath)
+        state.geoSamples to state.locationFixes.maxOfOrNull { it.bootMs } else null
     LaunchedEffect(logPath, sampleRevision, refreshToken) {
         if (log == null || replay) {
             data = null
         } else {
             val loaded = withContext(Dispatchers.IO) {
                 MapMissionData(log.absolutePath, MonitorMission.readSamples(log), MonitorMission.targets(log),
-                    MonitorMission.readLabels(log), MonitorMission.readReplayEvents(log))
+                    MonitorMission.readLabels(log), MonitorMission.readReplayEvents(log),
+                    MonitorMission.readReceiverFixes(log))
             }
             data = loaded
         }
     }
     val shown = if (replay) replayMission?.takeIf { it.log.absolutePath == logPath }?.let {
-        MapMissionData(it.log.absolutePath, it.samples, it.targets, it.labels, it.events)
+        MapMissionData(it.log.absolutePath, it.samples, it.targets, it.labels, it.events, it.receiverFixes)
     } else data?.takeIf { it.path == logPath }
     val targets = (shown?.targets.orEmpty() +
         if (!replay && logPath == currentLog?.absolutePath) favorites else emptySet()).sorted()
@@ -142,16 +147,22 @@ internal fun MonitorMappingView(
     val readings = remember(shown, replay, cutoffMs) {
         shown?.samples?.let { all -> if (replay) all.filter { it.atMs <= cutoffMs } else all }.orEmpty()
     }
+    val rawReceiverPath = shown?.receiverFixes?.let { all ->
+        if (replay) all.filter { it.atMs <= cutoffMs } else all
+    }.orEmpty()
+    val receiverPath = remember(rawReceiverPath) { MonitorLocationPolicy.bestRoute(rawReceiverPath) }
     val route = if (mac == null) readings else readings.filter { it.mac == mac }
-    val replayReceiver = readings.maxByOrNull { it.atMs }?.let { sample ->
+    val replayReceiver = rawReceiverPath.lastOrNull()?.let { latest ->
+        MonitorLocationPolicy.select(rawReceiverPath.map { it.candidate() },
+            latest.bootMs + (cutoffMs - latest.atMs).coerceAtLeast(0))
+    } ?: readings.takeIf { receiverPath.isEmpty() }?.maxByOrNull { it.atMs }?.let { sample ->
         MonitorSelectedLocation(
             MonitorLocationCandidate(sample.locationSource.ifBlank { "recorded" }, 0L,
-                sample.lat, sample.lng, sample.gpsAccuracyM), sample.fixAgeMs,
-            MonitorLocationPolicy.effectiveAccuracy(sample.gpsAccuracyM, sample.fixAgeMs),
+                sample.lat, sample.lng, sample.gpsAccuracyM, sample.speedMps), sample.fixAgeMs,
+            MonitorLocationPolicy.effectiveAccuracy(sample.gpsAccuracyM, sample.fixAgeMs, sample.speedMps),
         )
     }
     val mapReceiver = if (replay) replayReceiver else receiver
-    LaunchedEffect(mapReceiver != null) { onReceiverAvailability(mapReceiver != null) }
     val liveLabels = state.devices.associate { (device, guess) -> device.mac to MonitorMission.deviceName(device, guess) }
     val displayLabels = targets.associateWith { target ->
         MonitorMission.displayTarget(target,
@@ -176,21 +187,22 @@ internal fun MonitorMappingView(
     val estimates = estimated?.takeIf { it.first == estimateKey }?.second.orEmpty()
     val visibleEstimates = if (mac == null) estimates else estimates.filterKeys { it == mac }
     val summary = if (replay) {
-        "${estimates.size}/${targets.size} estimates · ${readings.size} fixes"
+        "${estimates.size}/${targets.size} estimates · ${readings.size} device readings · ${receiverPath.size} receiver fixes"
     } else if (receiver == null) {
-        "No recent fix · ${readings.size} samples"
+        "No recent fix · ${readings.size} device readings · ${receiverPath.size} receiver fixes"
     } else {
-        "${receiver.fix.provider} ±${receiver.effectiveAccuracyM.toInt()} m · ${receiver.ageMs / 1_000}s · ${readings.size} samples"
+        "${receiver.fix.provider} ±${receiver.effectiveAccuracyM.toInt()} m · ${receiver.ageMs / 1_000}s · ${readings.size} device readings"
     }
     LaunchedEffect(summary) { onSummaryChanged(summary) }
 
     Column(modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Box(Modifier.weight(1f)) {
-            if (mapReceiver != null || estimates.isNotEmpty()) {
+            if (mapReceiver != null || estimates.isNotEmpty() || receiverPath.isNotEmpty()) {
                 MonitorLocationMap(mapReceiver, visibleEstimates, mac, route, displayLabels, Modifier.fillMaxSize(),
                     mapKey = logPath.orEmpty(), recenterToken = recenterToken.toString(),
-                    focusToken = if (replay) replayCutoffMs.toString() else "",
-                    followReceiver = replay && replayPlaying && mac == null)
+                    focusToken = if (replay && followReceiver) replayCutoffMs.toString() else "",
+                    followReceiver = followReceiver && mac == null,
+                    receiverPath = receiverPath)
                 if (mac != null && estimates[mac] == null && route.isEmpty()) {
                     Surface(Modifier.align(Alignment.TopCenter), tonalElevation = 4.dp) {
                         Text("No location readings for ${displayLabels[mac]} at this point.",
@@ -201,7 +213,7 @@ internal fun MonitorMappingView(
                 Text(when {
                     replay && shown == null -> "Loading mission map…"
                     mac != null -> "No location readings for ${displayLabels[mac]} at this point."
-                    else -> "No location fix or device estimate available yet."
+                    else -> "No receiver location or device estimate available yet."
                 }, style = MaterialTheme.typography.bodySmall)
             }
             SlidingGeoDetails(showGeoDetails, Modifier.align(Alignment.TopCenter)) {
@@ -263,7 +275,7 @@ private fun GeoDetailsContent(
                     style = MaterialTheme.typography.bodySmall)
                 Text("Pinned devices heard: ${diagnostics.favoriteDevicesHeard} · without RSSI: ${diagnostics.favoriteWithoutRssi} · " +
                     "new signal readings: ${diagnostics.radioReadings} · saved: ${state.geoSamples} · " +
-                    "no matching fix: ${diagnostics.noMatchingFix} · no RSSI: ${diagnostics.missingRssi} · " +
+                    "awaiting fix: ${diagnostics.noMatchingFix} · no RSSI: ${diagnostics.missingRssi} · " +
                     "no channel: ${diagnostics.missingChannel} · limit: ${diagnostics.sampleCap}",
                     style = MaterialTheme.typography.bodySmall)
                 Text(state.geoStatus, style = MaterialTheme.typography.bodySmall)
@@ -275,7 +287,7 @@ private fun GeoDetailsContent(
                 Text(when {
                     device == null -> "$mac: no frames heard during this capture yet"
                     bootMs == null -> "$mac: heard, but no RSSI timestamp from adapter"
-                    matchingFix == null -> "$mac: last RSSI ${((clockMs - bootMs) / 1_000).coerceAtLeast(0)} s ago; no Android fix within 60 s of that reading"
+                    matchingFix == null -> "$mac: last RSSI ${((clockMs - bootMs) / 1_000).coerceAtLeast(0)} s ago; no Android fix within ${MonitorLocationPolicy.MAX_FIX_AGE_MS / 1_000} s of that reading"
                     else -> "$mac: last RSSI ${((clockMs - bootMs) / 1_000).coerceAtLeast(0)} s ago on channel ${device.lastRssiChannel}; matching ${matchingFix.fix.provider} fix ±${matchingFix.effectiveAccuracyM.toInt()} m"
                 }, style = MaterialTheme.typography.bodySmall)
             }

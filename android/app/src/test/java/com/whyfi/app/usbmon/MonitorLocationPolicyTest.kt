@@ -33,8 +33,22 @@ class MonitorLocationPolicyTest {
     }
 
     @Test fun old_or_invalid_fixes_cannot_be_attached_to_a_packet() {
-        assertNull(MonitorLocationPolicy.select(listOf(fix("network", 1_000, 50.0)), 100_000))
+        assertNull(MonitorLocationPolicy.select(listOf(fix("network", 1_000, 50.0)), 200_000))
         assertNull(MonitorLocationPolicy.select(listOf(fix("fused", 100_000, Double.NaN)), 100_000))
         assertTrue(MonitorLocationPolicy.select(listOf(fix("network", 60_000, 200.0)), 100_000) != null)
+    }
+
+    @Test fun driving_speed_expands_uncertainty_for_delayed_fixes() {
+        val driving = fix("gps", 100_000, 10.0).copy(speedMps = 30.0)
+        val selected = MonitorLocationPolicy.select(listOf(driving), 130_000)!!
+        assertEquals(1_360.0, selected.effectiveAccuracyM, 0.001)
+    }
+
+    @Test fun route_keeps_only_the_best_available_fix_at_each_update() {
+        val gps = MonitorReceiverFix(1_000, 100_000, "gps", 48.0, 11.0, 8.0, 0.0)
+        val poorNetwork = MonitorReceiverFix(2_000, 101_000, "network", 48.1, 11.1, 300.0, 0.0)
+        val betterNetwork = poorNetwork.copy(atMs = 62_000, bootMs = 161_000, accuracyM = 40.0)
+        assertEquals(listOf(gps, betterNetwork), MonitorLocationPolicy.bestRoute(
+            listOf(poorNetwork, betterNetwork, gps)))
     }
 }

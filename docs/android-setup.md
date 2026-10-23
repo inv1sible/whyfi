@@ -88,7 +88,7 @@ WiFi scan-throttle path):
     but produces a wider uncertainty region. Walk through several separated
     positions. The command bar shows the number of location-tagged radio
     samples and the currently selected GPS/network/fused source. Fixes up to
-    60 seconds from a packet can be paired, with their age added to the
+    180 seconds from a packet can be paired, with speed-aware travel uncertainty added to the
     uncertainty. Open **Location** beside Nearby to see the phone's Android
     position on the map even before a radio sample is saved. The compact line below the legend
     shows only the best recent fix by accuracy adjusted for age. Tap ⓘ
@@ -99,8 +99,7 @@ WiFi scan-throttle path):
     device and its sampled-RSSI cones. Their labels use the known SSID/device
     name or vendor plus the complete MAC address. The map opens around the most
     recent measurement points so a long mission does not force a distant view;
-    older points remain available by panning or zooming out. It keeps the chosen zoom when centered. Refresh and ⌖ Center are also
-    in the bottom command bar; centering preserves map zoom. Channels remains available from Nearby.
+    older points remain available by panning or zooming out. Android receiver fixes are saved independently of favorites, so a mission can show the phone's route even without a device estimate. The ⌖ button follows the phone or replay position while active and keeps the chosen zoom; tap it again to stop following. Refresh is also in the bottom command bar. Channels remains available from Nearby.
     Select a saved mission or one of its position targets in **Missions** to jump
     to Location. The target opens centered on its estimate when geotagged
     readings exist; otherwise the map says that no location was recorded.
@@ -133,8 +132,7 @@ WiFi scan-throttle path):
     this app-specific directory, so export or upload first. PDFs created by
     older builds are not rewritten; if their logs contain `geo_sample` events,
     the Location tab can still display them. Older logs without device-name
-    records show a generic label and complete MAC. A mission with no geotagged radio
-    readings cannot be localized retroactively from its PCAP alone.
+    records show a generic label and complete MAC. New logs retain receiver fixes and device snapshots, so a delayed Android fix can be paired with a pinned radio reading during replay. A mission with neither geotagged radio readings nor receiver fixes cannot be localized retroactively from its PCAP alone; backend postprocessing would need separately recorded position data.
 11. In Missions, tap **Upload to backend** on a completed capture. The WebUI's
     **Monitor Missions** page then lists the PDF, log, and optional PCAP for
     authenticated download. Uploading never removes the phone's files.

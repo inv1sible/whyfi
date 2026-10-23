@@ -31,6 +31,7 @@ import com.whyfi.app.ui.MainActivity
 import com.whyfi.app.usbmon.OuiTable
 import com.whyfi.app.usbmon.MonitorMission
 import com.whyfi.app.usbmon.MonitorGeoSample
+import com.whyfi.app.usbmon.MonitorReceiverFix
 import com.whyfi.app.usbmon.MonitorLocationCandidate
 import com.whyfi.app.usbmon.MonitorLocationPolicy
 import com.whyfi.app.usbmon.SniffedDevices
@@ -611,8 +612,9 @@ class ScanForegroundService : Service() {
             pcapPath = mission.pcap?.absolutePath, missionLogPath = mission.log.absolutePath)
         updateNotification("Monitoring WiFi on ${channels.size} channels…")
         serviceScope.launch {
-            val locations = AtomicReference(LocationSnapshot.lastKnownCandidates(applicationContext)
-                .associateBy { it.provider ?: "unknown" })
+            val initialFixes = LocationSnapshot.lastKnownCandidates(applicationContext)
+            val locations = AtomicReference(initialFixes.associateBy { it.provider ?: "unknown" })
+            val locationHistory = AtomicReference(initialFixes)
             val onFix: (Location) -> Unit = { fix ->
                 locations.updateAndGet { previous ->
                     val provider = fix.provider ?: "unknown"
@@ -620,9 +622,18 @@ class ScanForegroundService : Service() {
                     if (old == null || fix.elapsedRealtimeNanos >= old.elapsedRealtimeNanos)
                         previous + (provider to Location(fix)) else previous
                 }
+                locationHistory.updateAndGet { previous ->
+                    val last = previous.lastOrNull { it.provider == fix.provider }
+                    if (last == null || fix.elapsedRealtimeNanos > last.elapsedRealtimeNanos)
+                        (previous + Location(fix)).takeLast(512) else previous
+                }
             }
             var locationSubscription = LocationSnapshot.requestUpdates(applicationContext, includeFused = true, onLocation = onFix)
             val seenSampleTimes = mutableMapOf<String, Long>()
+            val countedSampleTimes = mutableMapOf<String, Long>()
+            val savedFixTimes = initialFixes.associate { (it.provider ?: "unknown") to
+                it.elapsedRealtimeNanos / 1_000_000 }.toMutableMap()
+            val awaitingFix = mutableMapOf<String, Long>()
             val knownLabels = mutableMapOf<String, String>()
             val snapshotMutex = Mutex()
             var lastSavedSnapshotAt = 0L
@@ -647,11 +658,37 @@ class ScanForegroundService : Service() {
                     withContext(Dispatchers.IO) { MonitorMission.appendDeviceSnapshot(mission, deviceTsv) }
                     lastSavedSnapshotAt = nowMs
                 }
-                val fixes = locations.get().values.map { fix ->
+                fun candidate(fix: Location) = MonitorLocationCandidate(fix.provider ?: "unknown",
+                    fix.elapsedRealtimeNanos / 1_000_000, fix.latitude, fix.longitude,
+                    if (fix.hasAccuracy() && fix.accuracy.isFinite() && fix.accuracy >= 0f)
+                        fix.accuracy.toDouble() else 1_000.0,
+                    if (fix.hasSpeed() && fix.speed.isFinite() && fix.speed >= 0f)
+                        fix.speed.toDouble() else 15.0)
+                val history = locationHistory.get()
+                val freshReceiverFixes = history.mapNotNull { fix ->
+                    val provider = fix.provider ?: "unknown"
+                    val bootMs = fix.elapsedRealtimeNanos / 1_000_000
+                    if (bootMs <= (savedFixTimes[provider] ?: 0L)) return@mapNotNull null
+                    val selected = candidate(fix)
+                    if (!selected.lat.isFinite() || !selected.lng.isFinite() ||
+                        selected.lat !in -90.0..90.0 || selected.lng !in -180.0..180.0) return@mapNotNull null
+                    val wallMs = System.currentTimeMillis() - SystemClock.elapsedRealtime() + bootMs
+                    MonitorReceiverFix(wallMs, bootMs, provider, selected.lat, selected.lng,
+                        selected.accuracyM, selected.speedMps)
+                }
+                if (freshReceiverFixes.isNotEmpty()) {
+                    withContext(Dispatchers.IO) { MonitorMission.appendReceiverFixes(mission, freshReceiverFixes) }
+                    freshReceiverFixes.forEach { fix -> savedFixTimes[fix.provider] =
+                        maxOf(savedFixTimes[fix.provider] ?: 0L, fix.bootMs) }
+                }
+                val fixes = history.map(::candidate)
+                val latestFixes = locations.get().values.map { fix ->
                     MonitorLocationCandidate(fix.provider ?: "unknown", fix.elapsedRealtimeNanos / 1_000_000,
                         fix.latitude, fix.longitude,
                         if (fix.hasAccuracy() && fix.accuracy.isFinite() && fix.accuracy >= 0f)
-                            fix.accuracy.toDouble() else 1_000.0)
+                            fix.accuracy.toDouble() else 1_000.0,
+                        if (fix.hasSpeed() && fix.speed.isFinite() && fix.speed >= 0f)
+                            fix.speed.toDouble() else 15.0)
                 }
                 val favorites = settingsRepository.monitorFavoriteMacs
                 val newLabels = raw.filter { it.first.mac in favorites }.mapNotNull { (device, guess) ->
@@ -673,8 +710,10 @@ class ScanForegroundService : Service() {
                 val newSamples = raw.mapNotNull { (device, _) ->
                     val bootMs = device.lastRssiBootMs ?: return@mapNotNull null
                     if (device.mac !in favorites || bootMs <= (seenSampleTimes[device.mac] ?: 0L)) return@mapNotNull null
-                    seenSampleTimes[device.mac] = bootMs
-                    geoDiagnostics = geoDiagnostics.copy(radioReadings = geoDiagnostics.radioReadings + 1)
+                    if (bootMs > (countedSampleTimes[device.mac] ?: 0L)) {
+                        countedSampleTimes[device.mac] = bootMs
+                        geoDiagnostics = geoDiagnostics.copy(radioReadings = geoDiagnostics.radioReadings + 1)
+                    }
                     val rssi = device.lastRssi ?: run {
                         geoDiagnostics = geoDiagnostics.copy(missingRssi = geoDiagnostics.missingRssi + 1)
                         return@mapNotNull null
@@ -688,20 +727,24 @@ class ScanForegroundService : Service() {
                         return@mapNotNull null
                     }
                     val selectedFix = MonitorLocationPolicy.select(fixes, bootMs) ?: run {
-                        geoDiagnostics = geoDiagnostics.copy(noMatchingFix = geoDiagnostics.noMatchingFix + 1)
+                        awaitingFix[device.mac] = bootMs
                         return@mapNotNull null
                     }
+                    seenSampleTimes[device.mac] = bootMs
+                    awaitingFix.remove(device.mac)
                     val wallMs = System.currentTimeMillis() - SystemClock.elapsedRealtime() + bootMs
                     acceptedThisSnapshot++
                     MonitorGeoSample(device.mac, wallMs, selectedFix.fix.lat, selectedFix.fix.lng,
-                        selectedFix.fix.accuracyM, rssi, channel, selectedFix.fix.provider, selectedFix.ageMs)
+                        selectedFix.fix.accuracyM, rssi, channel, selectedFix.fix.provider,
+                        selectedFix.ageMs, selectedFix.fix.speedMps)
                 }
                 if (newSamples.isNotEmpty()) {
                     withContext(Dispatchers.IO) { MonitorMission.appendSamples(mission, newSamples) }
                     geoSampleCount += newSamples.size
                     sampledMacs += newSamples.map { it.mac }
                 }
-                val currentFix = MonitorLocationPolicy.select(fixes, SystemClock.elapsedRealtime())
+                geoDiagnostics = geoDiagnostics.copy(noMatchingFix = awaitingFix.size)
+                val currentFix = MonitorLocationPolicy.select(latestFixes, SystemClock.elapsedRealtime())
                 val frames = UsbMonitorNative.stats().getOrElse(UsbMonitorNative.Stat.TOTAL.ordinal) { 0 }
                 val nativeStats = UsbMonitorNative.stats()
                 val channelFrames = UsbMonitorNative.perChannel().asList().chunked(2)
@@ -713,7 +756,7 @@ class ScanForegroundService : Service() {
                         pcapTruncated = nativeStats.getOrElse(UsbMonitorNative.Stat.PCAP_TRUNCATED.ordinal) { 0 } != 0L,
                         eapolKeyFrames = nativeStats.getOrElse(UsbMonitorNative.Stat.EAPOL_KEY_FRAMES.ordinal) { 0 },
                         geoSamples = geoSampleCount,
-                        locationFixes = fixes,
+                        locationFixes = latestFixes,
                         locationUpdatesRegistered = locationSubscription != null,
                         geoDiagnostics = geoDiagnostics,
                         geoStatus = when {

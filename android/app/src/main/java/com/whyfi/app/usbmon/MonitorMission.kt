@@ -90,7 +90,20 @@ object MonitorMission {
                 JSONObject().put("event", "geo_sample").put("at_ms", sample.atMs).put("mac", sample.mac)
                     .put("lat", sample.lat).put("lng", sample.lng).put("gps_accuracy_m", sample.gpsAccuracyM)
                     .put("rssi", sample.rssi).put("channel", sample.channel)
-                    .put("location_source", sample.locationSource).put("fix_age_ms", sample.fixAgeMs).toString() + "\n"
+                    .put("location_source", sample.locationSource).put("fix_age_ms", sample.fixAgeMs)
+                    .put("speed_mps", sample.speedMps).toString() + "\n"
+            })
+        }
+    }
+
+    fun appendReceiverFixes(files: Files, fixes: List<MonitorReceiverFix>) {
+        if (fixes.isEmpty()) return
+        synchronized(logLock) {
+            files.log.appendText(fixes.joinToString("") { fix ->
+                JSONObject().put("event", "receiver_fix").put("at_ms", fix.atMs)
+                    .put("boot_ms", fix.bootMs).put("provider", fix.provider)
+                    .put("lat", fix.lat).put("lng", fix.lng).put("accuracy_m", fix.accuracyM)
+                    .put("speed_mps", fix.speedMps).toString() + "\n"
             })
         }
     }
@@ -107,7 +120,7 @@ object MonitorMission {
     fun appendDeviceSnapshot(files: Files, tsv: String) {
         synchronized(logLock) {
             files.log.appendText(JSONObject().put("at_ms", System.currentTimeMillis())
-                .put("clock_ms", SystemClock.uptimeMillis())
+                .put("clock_ms", SystemClock.elapsedRealtime())
                 .put("event", "devices_snapshot").put("tsv", tsv).toString() + "\n")
         }
     }
@@ -166,7 +179,7 @@ object MonitorMission {
             runCatching {
                 val row = JSONObject(line)
                 val event = row.optString("event")
-                if (event == "geo_sample" || event == "device_identity" || event == "mission_target" ||
+                if (event == "geo_sample" || event == "receiver_fix" || event == "device_identity" || event == "mission_target" ||
                     event == "devices_snapshot")
                     return@runCatching null
                 ReplayEvent(row.optLong("at_ms"), event, row.optString("details"))
@@ -175,16 +188,35 @@ object MonitorMission {
         }.sortedBy { it.atMs }.toList()
     }
 
-    fun readSamples(log: File): List<MonitorGeoSample> = log.useLines { lines ->
+    fun readReceiverFixes(log: File): List<MonitorReceiverFix> = log.useLines { lines ->
         lines.mapNotNull { line ->
             runCatching {
                 val row = JSONObject(line)
-                if (row.optString("event") != "geo_sample") return@runCatching null
-                MonitorGeoSample(row.getString("mac"), row.getLong("at_ms"), row.getDouble("lat"),
-                    row.getDouble("lng"), row.getDouble("gps_accuracy_m"), row.getInt("rssi"), row.getInt("channel"),
-                    row.optString("location_source"), row.optLong("fix_age_ms", 0))
+                if (row.optString("event") != "receiver_fix") return@runCatching null
+                MonitorReceiverFix(row.getLong("at_ms"), row.getLong("boot_ms"),
+                    row.getString("provider"), row.getDouble("lat"), row.getDouble("lng"),
+                    row.getDouble("accuracy_m"), row.optDouble("speed_mps", 15.0))
             }.getOrNull()
-        }.toList()
+        }.sortedBy { it.bootMs }.toList()
+    }
+
+    fun readSamples(log: File): List<MonitorGeoSample> {
+        val saved = log.useLines { lines ->
+            lines.mapNotNull { line ->
+                runCatching {
+                    val row = JSONObject(line)
+                    if (row.optString("event") != "geo_sample") return@runCatching null
+                    MonitorGeoSample(row.getString("mac"), row.getLong("at_ms"), row.getDouble("lat"),
+                        row.getDouble("lng"), row.getDouble("gps_accuracy_m"), row.getInt("rssi"), row.getInt("channel"),
+                        row.optString("location_source"), row.optLong("fix_age_ms", 0),
+                        row.optDouble("speed_mps", 0.0))
+                }.getOrNull()
+            }.toList()
+        }
+        val fixes = readReceiverFixes(log)
+        if (fixes.isEmpty()) return saved
+        return MonitorSampleReconciler.reconcile(saved, fixes, readDeviceSnapshots(log),
+            readInitialFavorites(log), readReplayEvents(log))
     }
 
     fun targets(log: File): Set<String> = log.useLines { lines ->
@@ -204,6 +236,7 @@ object MonitorMission {
 
     fun writeReport(context: Context, files: Files, state: MonitorUiState, favorites: Set<String>) {
         val geoSamples = readSamples(files.log)
+        val receiverFixes = readReceiverFixes(files.log)
         val samplesByMac = geoSamples.groupBy { it.mac }
         val targetMacs = (favorites + samplesByMac.keys).sorted()
         val estimates = targetMacs.associateWith { MonitorLocalization.estimate(samplesByMac[it].orEmpty()) }
@@ -278,6 +311,9 @@ object MonitorMission {
         line("Adapter: ${state.device.ifBlank { "unknown" }}")
         section("Pinned device positions (${targetMacs.size})")
         line("${geoSamples.size} location-tagged radio readings · GPS, network or fused source", color = muted)
+        line("${receiverFixes.size} Android receiver fixes recorded for the mission route", color = muted)
+        if (receiverFixes.isEmpty() && geoSamples.isEmpty())
+            line("No Android fix was recorded; PCAP alone cannot recover the phone's route.", color = muted)
         if (targetMacs.isEmpty()) line("Star a device in Nearby to collect position readings.", color = muted)
         targetMacs.forEach { mac ->
             val estimate = estimates[mac]

@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.scan.MonitorUiState
@@ -92,9 +93,9 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     var replayPlaying by remember { mutableStateOf(false) }
     var selectedLocationMac by remember { mutableStateOf<String?>(null) }
     var locationTargets by remember { mutableStateOf<List<MonitorLocationTarget>>(emptyList()) }
-    var locationHasReceiver by remember { mutableStateOf(false) }
     var locationRefresh by remember { mutableIntStateOf(0) }
     var locationRecenter by remember { mutableIntStateOf(0) }
+    var followMe by rememberSaveable { mutableStateOf(false) }
     var showLocationDetails by remember { mutableStateOf(false) }
     var locationSummary by remember { mutableStateOf("") }
     var missionRevision by remember { mutableIntStateOf(0) }
@@ -275,7 +276,6 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                     settledFraction = 1f
                     replayPlaying = false
                     locationTargets = emptyList()
-                    locationHasReceiver = false
                     selectedName = MonitorTab.MAPPING.name
                     locationRecenter++
                 }, onDeleted = { path ->
@@ -289,8 +289,8 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 modifier = Modifier.weight(1f))
         } else if (selected == MonitorTab.MAPPING) {
             MonitorMappingView(context, state, favorites, selectedMissionLogPath, activeReplay,
-                replayCutoffMs, replayPlaying, selectedLocationMac,
-                { locationTargets = it }, { locationHasReceiver = it }, { locationSummary = it }, locationRefresh, locationRecenter,
+                replayCutoffMs, followMe, selectedLocationMac,
+                { locationTargets = it }, { locationSummary = it }, locationRefresh, locationRecenter,
                 showLocationDetails,
                 Modifier.weight(1f))
         } else {
@@ -326,11 +326,13 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                                 selectedMissionLogPath = null
                                 selectedLocationMac = null
                                 locationTargets = emptyList()
-                                locationHasReceiver = false
                             }) { Text("Live") }
                             if (selected == MonitorTab.MAPPING) {
                                 LocationFooterControls(showLocationDetails, { showLocationDetails = !showLocationDetails },
-                                    { locationRefresh++ }, { locationRecenter++ }, locationHasReceiver, true)
+                                    { locationRefresh++ }, followMe, { enabled ->
+                                        followMe = enabled
+                                        if (enabled) { selectedLocationMac = null; locationRecenter++ }
+                                    })
                             }
                         }
                     } else {
@@ -354,7 +356,10 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                             Spacer(Modifier.weight(1f))
                             if (selected == MonitorTab.MAPPING) {
                                 LocationFooterControls(showLocationDetails, { showLocationDetails = !showLocationDetails },
-                                    { locationRefresh++ }, { locationRecenter++ }, locationHasReceiver, false)
+                                    { locationRefresh++ }, followMe, { enabled ->
+                                        followMe = enabled
+                                        if (enabled) { selectedLocationMac = null; locationRecenter++ }
+                                    })
                             } else if (selected == MonitorTab.NEARBY) {
                                 TextButton({ showChannels = !showChannels }) {
                                     Text(if (showChannels) "Channels ▼" else "Channels ▲")
@@ -372,7 +377,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 FilterChip(selectedTarget == null, { selectedLocationMac = null },
                     label = { Text("All (${locationTargets.size})") })
                 locationTargets.forEach { target ->
-                    FilterChip(selectedTarget == target.mac, { selectedLocationMac = target.mac },
+                    FilterChip(selectedTarget == target.mac, { selectedLocationMac = target.mac; followMe = false },
                         label = { Text("${target.label} (${target.readings})") })
                 }
             }
@@ -393,8 +398,8 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
 
 @Composable
 private fun LocationFooterControls(
-    detailsOpen: Boolean, onDetails: () -> Unit, onRefresh: () -> Unit, onCenter: () -> Unit,
-    hasReceiver: Boolean, replay: Boolean,
+    detailsOpen: Boolean, onDetails: () -> Unit, onRefresh: () -> Unit,
+    followMe: Boolean, onFollowChange: (Boolean) -> Unit,
 ) {
     IconButton(onDetails, modifier = Modifier.size(40.dp).semantics {
         contentDescription = if (detailsOpen) "Hide geolocation details" else "Show geolocation details"
@@ -402,12 +407,12 @@ private fun LocationFooterControls(
     IconButton(onRefresh, modifier = Modifier.size(40.dp).semantics {
         contentDescription = "Refresh location and mission"
     }) { Text("⟳", style = MaterialTheme.typography.titleLarge) }
-    if (replay) IconButton(onCenter, enabled = hasReceiver, modifier = Modifier.size(40.dp).semantics {
-        contentDescription = "Center replay position"
-    }) { Text("⌖", style = MaterialTheme.typography.titleLarge) }
-    else TextButton(onCenter, enabled = hasReceiver, modifier = Modifier.semantics {
-        contentDescription = "Center on me"
-    }) { Text("⌖ Me") }
+    IconToggleButton(followMe, onFollowChange, modifier = Modifier.size(40.dp).semantics {
+        contentDescription = if (followMe) "Stop following my position" else "Follow my position"
+    }) {
+        Text("⌖", style = MaterialTheme.typography.titleLarge,
+            color = if (followMe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 }
 
 @Composable
@@ -627,11 +632,26 @@ private fun DeviceCard(
                 Column(Modifier.weight(1f)) {
                     Text(device.ssid.takeIf { it.isNotBlank() } ?: guess.vendor ?: "unknown device",
                         style = MaterialTheme.typography.titleSmall)
-                    val channel = if (device.isAp) " · ch ${device.channels.joinToString("/").ifBlank { "?" }}" else ""
-                    Text("${device.bestRssi?.let { "$it dBm" } ?: "RSSI ?"}$channel · ${relativeSeen(newest - device.lastMs)}",
+                    val channel = if (device.isAp) device.channels.joinToString("/")
+                        else device.lastRssiChannel?.toString() ?: device.channels.joinToString("/")
+                    Text("${device.bestRssi?.let { "$it dBm" } ?: "RSSI ?"} · ch ${channel.ifBlank { "?" }} · ${relativeSeen(newest - device.lastMs)}",
                         style = MaterialTheme.typography.bodySmall)
                 }
                 TextButton({ onFavorite(device.mac) }) { Text(if (favorite) "★" else "☆") }
+            }
+            if (device.isAp || device.security.isNotBlank() || device.wpsDetails.isNotBlank()) {
+                val wps = when {
+                    device.wpsState.isNotBlank() -> "WPS ${device.wpsState}"
+                    device.wpsDetails.isNotBlank() -> "WPS advertised"
+                    else -> "WPS —"
+                }
+                Text("${device.security.ifBlank { "Security —" }} · $wps",
+                    style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (device.securityAlerts.isNotEmpty()) {
+                Text("⚠ ${device.securityAlerts.joinToString(" · ")}",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             if (expanded) {
                 Text("${device.mac} · ${guess.kind.label}", style = MaterialTheme.typography.bodySmall,

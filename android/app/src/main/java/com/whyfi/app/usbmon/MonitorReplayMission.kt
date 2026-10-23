@@ -13,9 +13,11 @@ internal data class MonitorReplayMission(
     val snapshots: List<MonitorMission.DeviceSnapshot>,
     val initialFavorites: Set<String>,
     val vendors: OuiTable?,
+    val receiverFixes: List<MonitorReceiverFix> = emptyList(),
 ) {
     val timeline: Pair<Long, Long> by lazy {
-        val times = samples.map { it.atMs } + events.map { it.atMs } + snapshots.map { it.atMs }
+        val times = samples.map { it.atMs } + events.map { it.atMs } + snapshots.map { it.atMs } +
+            receiverFixes.map { it.atMs }
         (times.minOrNull() ?: 0L) to (times.maxOrNull() ?: 0L)
     }
 
@@ -50,7 +52,8 @@ internal data class MonitorReplayMission(
             val vendors = runCatching { context.assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
             return MonitorReplayMission(log, MonitorMission.readSamples(log), MonitorMission.targets(log),
                 MonitorMission.readLabels(log), MonitorMission.readReplayEvents(log),
-                MonitorMission.readDeviceSnapshots(log), MonitorMission.readInitialFavorites(log), vendors)
+                MonitorMission.readDeviceSnapshots(log), MonitorMission.readInitialFavorites(log), vendors,
+                MonitorMission.readReceiverFixes(log))
         }
     }
 }

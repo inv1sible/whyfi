@@ -11,6 +11,7 @@ class SniffedDevicesMetadataTest {
         assertEquals(SniffedDevices.Kind.CAMERA, SniffedDevices.guess(d) { null }.kind)
         assertTrue(d.securityDetails.contains("PMF capable"))
         assertTrue(d.wpsDetails.contains("4:0050f204:1"))
+        assertTrue(d.securityAlerts.contains("WPS setup not locked"))
     }
 
     @Test fun `old mission snapshots remain readable`() {
