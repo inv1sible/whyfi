@@ -53,6 +53,7 @@ private data class MapMissionData(
     val labels: Map<String, String>,
     val events: List<MonitorMission.ReplayEvent>,
     val receiverFixes: List<MonitorReceiverFix>,
+    val accessPointSamples: List<MonitorGeoSample>,
 )
 
 internal data class MonitorLocationTarget(val mac: String, val label: String, val readings: Int)
@@ -124,7 +125,7 @@ internal fun MonitorMappingView(
     val logPath = log?.absolutePath
     var data by remember { mutableStateOf<MapMissionData?>(null) }
     val sampleRevision = if (logPath == currentLog?.absolutePath)
-        state.geoSamples to state.locationFixes.maxOfOrNull { it.bootMs } else null
+        Triple(state.geoSamples, state.locationFixes.maxOfOrNull { it.bootMs }, state.snapshotRevisionMs) else null
     LaunchedEffect(logPath, sampleRevision, refreshToken) {
         if (log == null || replay) {
             data = null
@@ -132,25 +133,37 @@ internal fun MonitorMappingView(
             val loaded = withContext(Dispatchers.IO) {
                 MapMissionData(log.absolutePath, MonitorMission.readSamples(log), MonitorMission.targets(log),
                     MonitorMission.readLabels(log), MonitorMission.readReplayEvents(log),
-                    MonitorMission.readReceiverFixes(log))
+                    MonitorMission.readReceiverFixes(log), MonitorMission.readAccessPointSamples(log))
             }
             data = loaded
         }
     }
     val shown = if (replay) replayMission?.takeIf { it.log.absolutePath == logPath }?.let {
-        MapMissionData(it.log.absolutePath, it.samples, it.targets, it.labels, it.events, it.receiverFixes)
+        MapMissionData(it.log.absolutePath, it.samples, it.targets, it.labels, it.events,
+            it.receiverFixes, it.accessPointSamples)
     } else data?.takeIf { it.path == logPath }
-    val targets = (shown?.targets.orEmpty() +
-        if (!replay && logPath == currentLog?.absolutePath) favorites else emptySet()).sorted()
+    val favoriteTargets = shown?.targets.orEmpty() +
+        if (!replay && logPath == currentLog?.absolutePath) favorites else emptySet()
+    val targets = (favoriteTargets + listOfNotNull(selectedMac)).sorted()
     val mac = selectedMac?.takeIf { it in targets }
     val cutoffMs = replayCutoffMs
-    val readings = remember(shown, replay, cutoffMs) {
-        shown?.samples?.let { all -> if (replay) all.filter { it.atMs <= cutoffMs } else all }.orEmpty()
+    val readings = remember(shown, replay, cutoffMs, selectedMac, favoriteTargets) {
+        val savedReadings = shown?.samples?.let { all ->
+            if (replay) all.filter { it.atMs <= cutoffMs } else all
+        }.orEmpty()
+        val apReadings = shown?.accessPointSamples.orEmpty().filter { sample ->
+            (sample.mac in favoriteTargets || sample.mac == selectedMac) &&
+                (!replay || sample.atMs <= cutoffMs)
+        }
+        val apMacs = apReadings.mapTo(mutableSetOf()) { it.mac }
+        savedReadings.filter { it.mac !in apMacs } + apReadings
     }
     val rawReceiverPath = shown?.receiverFixes?.let { all ->
         if (replay) all.filter { it.atMs <= cutoffMs } else all
     }.orEmpty()
     val receiverPath = remember(rawReceiverPath) { MonitorLocationPolicy.bestRoute(rawReceiverPath) }
+    val locatedApCount = shown?.accessPointSamples.orEmpty().asSequence()
+        .filter { !replay || it.atMs <= cutoffMs }.map { it.mac }.distinct().count()
     val route = if (mac == null) readings else readings.filter { it.mac == mac }
     val replayReceiver = rawReceiverPath.lastOrNull()?.let { latest ->
         MonitorLocationPolicy.select(rawReceiverPath.map { it.candidate() },
@@ -187,11 +200,11 @@ internal fun MonitorMappingView(
     val estimates = estimated?.takeIf { it.first == estimateKey }?.second.orEmpty()
     val visibleEstimates = if (mac == null) estimates else estimates.filterKeys { it == mac }
     val summary = if (replay) {
-        "${estimates.size}/${targets.size} estimates · ${readings.size} device readings · ${receiverPath.size} receiver fixes"
+        "$locatedApCount APs with phone positions · ${rawReceiverPath.size} receiver fixes"
     } else if (receiver == null) {
-        "No recent fix · ${readings.size} device readings · ${receiverPath.size} receiver fixes"
+        "No recent fix · $locatedApCount APs with phone positions"
     } else {
-        "${receiver.fix.provider} ±${receiver.effectiveAccuracyM.toInt()} m · ${receiver.ageMs / 1_000}s · ${readings.size} device readings"
+        "${receiver.fix.provider} ±${receiver.effectiveAccuracyM.toInt()} m · $locatedApCount APs with phone positions"
     }
     LaunchedEffect(summary) { onSummaryChanged(summary) }
 

@@ -41,4 +41,19 @@ class MonitorSampleReconcilerTest {
             listOf(snapshot, staleAfterPin, pinnedSnapshot, laterSnapshot), emptySet(), changes)
         assertEquals(listOf(204_000L), recovered.map { it.atMs - 800_000L })
     }
+
+    @Test fun `access points are correlated without favorites but clients are excluded`() {
+        val client = tsv.replace("\t1\t3\t", "\t2\t3\t").replace(mac, "00:11:22:33:44:66")
+        val samples = MonitorSampleReconciler.accessPoints(listOf(delayedFix),
+            listOf(snapshot.copy(tsv = "$tsv\n$client"), snapshot.copy(atMs = 1_002_000, clockMs = 202_000)))
+        assertEquals(1, samples.size)
+        assertEquals(mac, samples.single().mac)
+        assertEquals(995_000L, samples.single().atMs)
+        assertEquals(6_000L, samples.single().fixAgeMs)
+    }
+
+    @Test fun `old uptime snapshots cannot create false AP locations`() {
+        assertTrue(MonitorSampleReconciler.accessPoints(listOf(delayedFix),
+            listOf(snapshot.copy(clockMs = 10_000))).isEmpty())
+    }
 }

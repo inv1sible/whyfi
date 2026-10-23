@@ -97,7 +97,7 @@ WiFi scan-throttle path):
     Pinned AP/station estimates and uncertainty circles appear on the same
     map; the favorite chips below the command bar filter All or one selected
     device and its sampled-RSSI cones. Their labels use the known SSID/device
-    name or vendor plus the complete MAC address. The map opens around the most
+    name or vendor plus the complete MAC address. Every AP with an RSSI timestamp is also paired with the recorded phone fixes even if it was never starred. Search the AP table and tap a row to open its location readings and provisional estimate on the map. A single sighting only marks the receiver area, not the AP's proven position. The map opens around the most
     recent measurement points so a long mission does not force a distant view;
     older points remain available by panning or zooming out. Android receiver fixes are saved independently of favorites, so a mission can show the phone's route even without a device estimate. The ⌖ button follows the phone or replay position while active and keeps the chosen zoom; tap it again to stop following. Refresh is also in the bottom command bar. Channels remains available from Nearby.
     Select a saved mission or one of its position targets in **Missions** to jump
@@ -116,7 +116,7 @@ WiFi scan-throttle path):
     observed EAPOL-Key frames; this count alone does not prove a complete
     handshake or a usable WPA hash. The first pages of a newly generated PDF
     list each pinned device's coordinates or the reason none could be
-    calculated; detail pages include map-backed estimates, uncertainty, and
+    calculated; the AP observations section lists receiver-correlated position hints for all observed APs. Detail pages for pinned devices include map-backed estimates, uncertainty, and
     route suggestions. Green-to-orange/red cones show relative RSSI toward sampled positions,
     not a measured antenna bearing; blue
     dots mark the phone's measurement positions. Map tiles use the same

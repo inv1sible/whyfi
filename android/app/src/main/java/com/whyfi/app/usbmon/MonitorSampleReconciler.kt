@@ -4,6 +4,29 @@ import kotlin.math.abs
 
 /** Pairs retained radio snapshots with receiver fixes for pinned mission targets. */
 internal object MonitorSampleReconciler {
+    /** Correlate every AP RSSI observation with the phone's recorded position, regardless of favorites. */
+    fun accessPoints(
+        receiverFixes: List<MonitorReceiverFix>,
+        snapshots: List<MonitorMission.DeviceSnapshot>,
+    ): List<MonitorGeoSample> {
+        if (receiverFixes.isEmpty()) return emptyList()
+        val candidates = receiverFixes.map { it.candidate() }
+        val seen = mutableSetOf<Pair<String, Long>>()
+        return snapshots.flatMap { snapshot ->
+            SniffedDevices.parse(snapshot.tsv).mapNotNull { device ->
+                val bootMs = device.lastRssiBootMs ?: return@mapNotNull null
+                if (!device.isAp || device.lastRssi == null || device.lastRssiChannel == null ||
+                    snapshot.clockMs <= 0 || bootMs > snapshot.clockMs + 2_000 ||
+                    !seen.add(device.mac to bootMs)) return@mapNotNull null
+                val selected = MonitorLocationPolicy.select(candidates, bootMs) ?: return@mapNotNull null
+                MonitorGeoSample(device.mac, snapshot.atMs - snapshot.clockMs + bootMs,
+                    selected.fix.lat, selected.fix.lng, selected.fix.accuracyM,
+                    device.lastRssi, device.lastRssiChannel, selected.fix.provider,
+                    selected.ageMs, selected.fix.speedMps)
+            }
+        }.sortedBy { it.atMs }
+    }
+
     fun reconcile(
         saved: List<MonitorGeoSample>,
         receiverFixes: List<MonitorReceiverFix>,

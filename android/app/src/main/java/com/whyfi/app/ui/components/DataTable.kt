@@ -56,6 +56,8 @@ data class DataTableRow(
      * else = the last result, shown in place of the prompt until the row is
      * ranged again. */
     val rangeStatus: String? = null,
+    /** Optional row action, used to open an observed AP on the mission map. */
+    val onClick: (() -> Unit)? = null,
 )
 
 private val BADGE_COLUMN_WIDTH = 62.dp
@@ -188,7 +190,9 @@ fun DataTable(
             // A crash is a much worse answer than two indistinguishable rows.
             itemsIndexed(visibleRows, key = { index, row -> "$index:${row.key}" }) { _, row ->
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                        .then(row.onClick?.let { Modifier.clickable(onClick = it) } ?: Modifier)
+                        .padding(vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (showFavoriteColumn) {

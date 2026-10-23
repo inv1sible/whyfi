@@ -298,7 +298,13 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 "This older mission did not save device roles or category snapshots.",
                 modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
             MonitorTable(selected, categoryDevices, Modifier.weight(1f).padding(12.dp),
-                referenceMs = replayReferenceMs.takeIf { replaying })
+                referenceMs = replayReferenceMs.takeIf { replaying },
+                onOpenApLocation = { mac ->
+                    selectedLocationMac = mac
+                    followMe = false
+                    selectedName = MonitorTab.MAPPING.name
+                    locationRecenter++
+                })
         }
         if (selected != MonitorTab.MISSIONS) {
             if (replaying && selected != MonitorTab.NEARBY && timeline.second > timeline.first) {
@@ -477,6 +483,7 @@ private fun MonitorTable(
     devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>>,
     modifier: Modifier,
     referenceMs: Long? = null,
+    onOpenApLocation: (String) -> Unit = {},
 ) {
     val rows = monitorRows(tab, devices)
     val newest = referenceMs ?: rows.maxOfOrNull { it.first.lastMs } ?: 0
@@ -503,9 +510,11 @@ private fun MonitorTable(
             rows = rows.map { (device, guess) ->
                 DataTableRow(
                     key = device.mac,
+                    onClick = if (tab == MonitorTab.ACCESS_POINTS) { { onOpenApLocation(device.mac) } } else null,
                     cells = listOf(
-                        device.ssid.takeIf { it.isNotEmpty() } ?: device.wpsName.takeIf { it.isNotEmpty() }
-                            ?: if (device.randomized) "private MAC" else "unknown",
+                        (device.ssid.takeIf { it.isNotEmpty() } ?: device.wpsName.takeIf { it.isNotEmpty() }
+                            ?: if (device.randomized) "private MAC" else "unknown") +
+                            if (tab == MonitorTab.ACCESS_POINTS) "  ↗ map" else "",
                         device.mac,
                         guess.vendor ?: "—",
                         device.bestRssi?.let { "$it dBm" } ?: "—",

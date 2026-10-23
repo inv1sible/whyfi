@@ -219,6 +219,10 @@ object MonitorMission {
             readInitialFavorites(log), readReplayEvents(log))
     }
 
+    /** Derived, not written over the raw evidence: AP observations need no favorite flag. */
+    fun readAccessPointSamples(log: File): List<MonitorGeoSample> =
+        MonitorSampleReconciler.accessPoints(readReceiverFixes(log), readDeviceSnapshots(log))
+
     fun targets(log: File): Set<String> = log.useLines { lines ->
         lines.mapNotNull { line ->
             runCatching {
@@ -236,8 +240,10 @@ object MonitorMission {
 
     fun writeReport(context: Context, files: Files, state: MonitorUiState, favorites: Set<String>) {
         val geoSamples = readSamples(files.log)
+        val apSamples = readAccessPointSamples(files.log)
         val receiverFixes = readReceiverFixes(files.log)
         val samplesByMac = geoSamples.groupBy { it.mac }
+        val apSamplesByMac = apSamples.groupBy { it.mac }
         val targetMacs = (favorites + samplesByMac.keys).sorted()
         val estimates = targetMacs.associateWith { MonitorLocalization.estimate(samplesByMac[it].orEmpty()) }
         val pdf = PdfDocument()
@@ -320,6 +326,17 @@ object MonitorMission {
             if (estimate == null) line("$mac  No matching location fix; keep it starred and enable Location.", color = muted)
             else line("$mac  %.6f, %.6f  uncertainty >=%.0f m%s".format(
                 estimate.lat, estimate.lng, estimate.uncertaintyM, if (estimate.provisional) " provisional" else ""))
+        }
+        section("Access point observations (${apSamplesByMac.size})")
+        line("${apSamples.size} AP signal readings matched to Android receiver fixes, including non-favorites.", color = muted)
+        line("Coordinates below are receiver-derived hints; one sighting cannot locate an AP.", color = muted)
+        apSamplesByMac.entries.sortedByDescending { it.value.size }.forEach { (mac, samples) ->
+            val estimate = MonitorLocalization.estimate(samples) ?: return@forEach
+            val name = state.devices.firstOrNull { it.first.mac == mac }?.first?.ssid
+                ?.takeIf { it.isNotBlank() }?.take(18) ?: "AP"
+            line("$name $mac  ${samples.size} readings  %.5f, %.5f  >=%.0f m%s".format(
+                estimate.lat, estimate.lng, estimate.uncertaintyM,
+                if (estimate.provisional) " receiver hint" else " estimate"))
         }
         section("Evidence files")
         line("PCAP: ${files.pcap?.name ?: "not recorded"}  (${state.pcapBytes} bytes)" +

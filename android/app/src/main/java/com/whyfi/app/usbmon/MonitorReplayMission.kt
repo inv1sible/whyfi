@@ -14,10 +14,11 @@ internal data class MonitorReplayMission(
     val initialFavorites: Set<String>,
     val vendors: OuiTable?,
     val receiverFixes: List<MonitorReceiverFix> = emptyList(),
+    val accessPointSamples: List<MonitorGeoSample> = emptyList(),
 ) {
     val timeline: Pair<Long, Long> by lazy {
         val times = samples.map { it.atMs } + events.map { it.atMs } + snapshots.map { it.atMs } +
-            receiverFixes.map { it.atMs }
+            receiverFixes.map { it.atMs } + accessPointSamples.map { it.atMs }
         (times.minOrNull() ?: 0L) to (times.maxOrNull() ?: 0L)
     }
 
@@ -50,10 +51,18 @@ internal data class MonitorReplayMission(
     companion object {
         fun load(context: Context, log: File): MonitorReplayMission {
             val vendors = runCatching { context.assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
+            val snapshots = MonitorMission.readDeviceSnapshots(log)
+            val names = snapshots.lastOrNull()?.let { latest ->
+                SniffedDevices.parse(latest.tsv).associate { device ->
+                    device.mac to MonitorMission.deviceName(device,
+                        SniffedDevices.guess(device) { vendors?.vendorOf(it) })
+                }
+            }.orEmpty() + MonitorMission.readLabels(log)
+            val receiverFixes = MonitorMission.readReceiverFixes(log)
             return MonitorReplayMission(log, MonitorMission.readSamples(log), MonitorMission.targets(log),
-                MonitorMission.readLabels(log), MonitorMission.readReplayEvents(log),
-                MonitorMission.readDeviceSnapshots(log), MonitorMission.readInitialFavorites(log), vendors,
-                MonitorMission.readReceiverFixes(log))
+                names, MonitorMission.readReplayEvents(log), snapshots,
+                MonitorMission.readInitialFavorites(log), vendors, receiverFixes,
+                MonitorSampleReconciler.accessPoints(receiverFixes, snapshots))
         }
     }
 }
