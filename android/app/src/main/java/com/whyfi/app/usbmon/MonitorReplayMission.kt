@@ -15,10 +15,17 @@ internal data class MonitorReplayMission(
     val vendors: OuiTable?,
     val receiverFixes: List<MonitorReceiverFix> = emptyList(),
     val accessPointSamples: List<MonitorGeoSample> = emptyList(),
+    val deviceSamples: List<MonitorGeoSample> = emptyList(),
 ) {
+    private val parsedSnapshots by lazy { snapshots.map { it.atMs to SniffedDevices.parse(it.tsv) } }
+    fun devicesAt(cutoffMs: Long): List<Pair<SniffedDevices.Device, SniffedDevices.Guess>> {
+        var inventory = emptyList<SniffedDevices.Device>()
+        parsedSnapshots.takeWhile { it.first <= cutoffMs }.forEach { inventory = MonitorInventory.merge(inventory, it.second) }
+        return inventory.map { d -> d to SniffedDevices.guess(d) { vendors?.vendorOf(it) } }
+    }
     val timeline: Pair<Long, Long> by lazy {
         val times = samples.map { it.atMs } + events.map { it.atMs } + snapshots.map { it.atMs } +
-            receiverFixes.map { it.atMs } + accessPointSamples.map { it.atMs }
+            receiverFixes.map { it.atMs } + deviceSamples.map { it.atMs }
         (times.minOrNull() ?: 0L) to (times.maxOrNull() ?: 0L)
     }
 
@@ -42,17 +49,15 @@ internal data class MonitorReplayMission(
     companion object {
         fun load(context: Context, log: File): MonitorReplayMission {
             val vendors = runCatching { context.assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
-            val snapshots = MonitorMission.readDeviceSnapshots(log)
-            val names = snapshots.asSequence().flatMap { SniffedDevices.parse(it.tsv).asSequence() }
+            val evidence = MonitorEvidence.read(log)
+            val names = evidence.inventoryAt().asSequence()
                 .associate { device ->
                     device.mac to MonitorMission.deviceName(device,
                         SniffedDevices.guess(device) { vendors?.vendorOf(it) })
-                } + MonitorMission.readLabels(log)
-            val receiverFixes = MonitorMission.readReceiverFixes(log)
-            return MonitorReplayMission(log, MonitorMission.readSamples(log), MonitorMission.targets(log),
-                names, MonitorMission.readReplayEvents(log), snapshots,
-                MonitorMission.readInitialFavorites(log), vendors, receiverFixes,
-                MonitorSampleReconciler.accessPoints(receiverFixes, snapshots))
+                } + evidence.labels
+            return MonitorReplayMission(log, evidence.samples, evidence.targets,
+                names, evidence.events, evidence.snapshots, evidence.initialFavorites, vendors, evidence.receiverFixes,
+                evidence.apSamples, evidence.radioSamples)
         }
     }
 }

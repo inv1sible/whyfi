@@ -52,6 +52,14 @@ class MonitorSampleReconcilerTest {
         assertEquals(6_000L, samples.single().fixAgeMs)
     }
 
+    @Test fun `all device correlation includes unassociated client with its own transmitter RSSI`() {
+        val client = tsv.replace("\t1\t3\t", "\t2\t3\t").replace(mac, "00:11:22:33:44:66")
+        val downlinkOnly = client.replace("00:11:22:33:44:66", "00:11:22:33:44:77").replace("195000", "0")
+        val samples = MonitorSampleReconciler.devices(listOf(delayedFix),
+            listOf(snapshot.copy(tsv = "$tsv\n$client\n$downlinkOnly")))
+        assertEquals(setOf(mac, "00:11:22:33:44:66"), samples.map { it.mac }.toSet())
+    }
+
     @Test fun `resumed mission uses its current favorites rather than old pins`() {
         val later = snapshot.copy(atMs = 1_010_000, clockMs = 210_000,
             tsv = tsv.replace("195000", "209000"))

@@ -8,19 +8,38 @@ internal object MonitorSampleReconciler {
     fun accessPoints(
         receiverFixes: List<MonitorReceiverFix>,
         snapshots: List<MonitorMission.DeviceSnapshot>,
-    ): List<MonitorGeoSample> {
+    ): List<MonitorGeoSample> = correlate(receiverFixes, snapshots, apOnly = true)
+
+    /** Clients must be transmitters with their own RSSI; an AP downlink cannot locate its recipient. */
+    fun devices(receiverFixes: List<MonitorReceiverFix>, snapshots: List<MonitorMission.DeviceSnapshot>): List<MonitorGeoSample> =
+        correlate(receiverFixes, snapshots, apOnly = false)
+
+    private fun correlate(receiverFixes: List<MonitorReceiverFix>, snapshots: List<MonitorMission.DeviceSnapshot>,
+                          apOnly: Boolean): List<MonitorGeoSample> {
         if (receiverFixes.isEmpty()) return emptyList()
+        val orderedFixes = receiverFixes.sortedBy { it.atMs }
+        fun fixesAt(atMs: Long): List<MonitorLocationCandidate> {
+            var low = 0
+            var high = orderedFixes.size
+            while (low < high) {
+                val mid = (low + high) / 2
+                if (orderedFixes[mid].atMs < atMs - MonitorLocationPolicy.MAX_FIX_AGE_MS) low = mid + 1 else high = mid
+            }
+            val candidates = mutableListOf<MonitorLocationCandidate>()
+            while (low < orderedFixes.size && orderedFixes[low].atMs <= atMs + MonitorLocationPolicy.MAX_FIX_AGE_MS)
+                candidates += orderedFixes[low++].candidate()
+            return candidates
+        }
         val seen = mutableMapOf<Pair<String, Long>, Long>()
         return snapshots.flatMap { snapshot ->
             SniffedDevices.parse(snapshot.tsv).mapNotNull { device ->
                 val bootMs = device.lastRssiBootMs ?: return@mapNotNull null
                 val atMs = snapshot.atMs - snapshot.clockMs + bootMs
-                if (!device.isAp || device.lastRssi == null || device.lastRssiChannel == null ||
+                if ((apOnly && !device.isAp) || device.lastRssi == null || device.lastRssiChannel == null ||
                     snapshot.clockMs <= 0 || bootMs > snapshot.clockMs + 2_000 ||
                     seen[device.mac to bootMs]?.let { abs(it - atMs) < 10_000 } == true) return@mapNotNull null
                 seen[device.mac to bootMs] = atMs
-                val candidates = receiverFixes.filter { abs(it.atMs - atMs) <= MonitorLocationPolicy.MAX_FIX_AGE_MS }
-                    .map { it.candidate() }
+                val candidates = fixesAt(atMs)
                 val selected = MonitorLocationPolicy.select(candidates, bootMs) ?: return@mapNotNull null
                 MonitorGeoSample(device.mac, atMs,
                     selected.fix.lat, selected.fix.lng, selected.fix.accuracyM,

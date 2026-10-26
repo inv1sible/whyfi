@@ -14,6 +14,7 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.UUID
 import org.json.JSONObject
+import com.google.gson.Gson
 
 /** Local mission evidence; capture passes append until the operator resets or branches. */
 object MonitorMission {
@@ -25,23 +26,43 @@ object MonitorMission {
         val log: File,
         val pcap: File?,
         val uploaded: Boolean,
+        val name: String = readName(directory),
+        val dateMs: Long = readDate(directory, log),
     ) {
         val complete get() = report.isFile && log.isFile
+        val captured get() = log.isFile && (File(directory, "capture-summary.json").isFile || report.isFile)
     }
+    data class CaptureSummary(val device: String = "", val frames: Long = 0, val eapol: Long = 0,
+                              val channels: Map<Int, Long> = emptyMap(), val pcapTruncated: Boolean = false,
+                              val status: String = "Saved")
     data class ReplayEvent(val atMs: Long, val event: String, val details: String)
     data class DeviceSnapshot(val atMs: Long, val clockMs: Long, val tsv: String)
+
+    private fun readName(directory: File): String = runCatching {
+        File(directory, "mission-name.txt").takeIf { it.isFile }?.readText()?.trim()?.take(80)
+    }.getOrNull()?.takeIf { it.isNotBlank() } ?: "Mission"
+
+    private fun readDate(directory: File, log: File): Long = runCatching {
+        File(directory, "mission-date.txt").readText().trim().toLong()
+    }.getOrNull() ?: log.lastModified().takeIf { it > 0 } ?: directory.lastModified()
+
+    fun rename(mission: Stored, name: String) {
+        val value = name.trim().replace('\n', ' ').replace('\r', ' ').take(80)
+        require(value.isNotBlank()) { "Enter a mission name" }
+        File(mission.directory, "mission-date.txt").takeUnless { it.isFile }?.writeText(mission.dateMs.toString())
+        File(mission.directory, "mission-name.txt").writeText(value)
+        append(Files(mission.directory, mission.pcap, mission.report, mission.log), "mission_named", value)
+    }
 
     fun displayTarget(mac: String, name: String?): String =
         "${name?.trim()?.take(24)?.takeIf { it.isNotBlank() } ?: "Device"} · ${mac.uppercase()}"
 
     fun deviceName(device: SniffedDevices.Device, guess: SniffedDevices.Guess): String =
-        device.ssid.takeIf { device.isAp && it.isNotBlank() }
-            ?: device.wpsName.takeIf { it.isNotBlank() }
-            ?: guess.vendor?.takeIf { it.isNotBlank() }
-            ?: guess.kind.label
+        SniffedDevices.displayName(device, guess)
 
-    fun list(context: Context): List<Stored> {
-        val root = File(context.getExternalFilesDir(null), "monitor-missions")
+    fun list(context: Context): List<Stored> = listIn(File(context.getExternalFilesDir(null), "monitor-missions"))
+
+    internal fun listIn(root: File): List<Stored> {
         return root.listFiles()?.filter { it.isDirectory && runCatching { UUID.fromString(it.name) }.isSuccess }
             ?.map { directory ->
                 val pcap = File(directory, "capture.pcap").takeIf { it.isFile }
@@ -72,6 +93,7 @@ object MonitorMission {
 
     fun create(context: Context, recordPcap: Boolean): Files {
         val directory = File(context.getExternalFilesDir(null), "monitor-missions/${UUID.randomUUID()}").apply { mkdirs() }
+        File(directory, "mission-date.txt").writeText(System.currentTimeMillis().toString())
         return Files(directory, if (recordPcap) File(directory, "capture.pcap") else null, File(directory, "report.pdf"), File(directory, "mission.jsonl"))
     }
 
@@ -100,6 +122,10 @@ object MonitorMission {
         try {
             val log = source.log.copyTo(File(directory, "mission.jsonl"))
             val pcap = source.pcap?.takeIf { it.isFile }?.copyTo(File(directory, "capture.pcap"))
+            File(directory, "mission-name.txt").writeText(source.name)
+            File(directory, "mission-date.txt").writeText(System.currentTimeMillis().toString())
+            File(source.directory, "capture-summary.json").takeIf { it.isFile }
+                ?.copyTo(File(directory, "capture-summary.json"))
             return Files(directory, pcap, File(directory, "report.pdf"), log)
         } catch (error: Exception) {
             directory.deleteRecursively()
@@ -120,8 +146,8 @@ object MonitorMission {
     /** Append-only so replay has the operator's actual sequence of actions. */
     fun append(files: Files, event: String, details: String = "") {
         synchronized(logLock) {
-            files.log.appendText(JSONObject().put("at_ms", System.currentTimeMillis()).put("event", event)
-                .put("details", details).toString() + "\n")
+            files.log.appendText(Gson().toJson(mapOf("at_ms" to System.currentTimeMillis(), "event" to event,
+                "details" to details)) + "\n")
         }
     }
 
@@ -230,13 +256,41 @@ object MonitorMission {
     /** Bounded preview; metadata snapshots can make a log too large for readLines(). */
     fun previewLog(log: File): String = log.useLines { lines ->
         val tail = ArrayDeque<String>()
+        var total = 0
+        var snapshots = 0
         lines.forEach { line ->
+            total++
             if (!line.contains("\"devices_snapshot\"")) {
-                if (tail.size == 8) tail.removeFirst()
+                if (tail.size == 40) tail.removeFirst()
                 tail.addLast(line.take(400))
-            }
+            } else snapshots++
         }
-        tail.joinToString("\n")
+        "Preview: last ${tail.size} events of $total log entries. $snapshots device snapshots omitted. " +
+            "Long lines are shortened. Export full log for all recorded data.\n\n" + tail.joinToString("\n")
+    }
+
+    /** Stop persists a small statistics record; report rendering happens only on explicit request. */
+    fun saveCaptureSummary(files: Files, state: MonitorUiState) {
+        val summary = CaptureSummary(state.device, state.frames, state.eapolKeyFrames, state.channelFrames,
+            state.pcapTruncated, state.status)
+        append(files, "capture_summary", Gson().toJson(summary))
+        val temporary = File(files.directory, "capture-summary.json.tmp")
+        temporary.writeText(Gson().toJson(summary))
+        check(temporary.renameTo(File(files.directory, "capture-summary.json"))) { "Could not save capture statistics" }
+    }
+
+    fun ensureReport(context: Context, mission: Stored): File {
+        val nameFile = File(mission.directory, "mission-name.txt")
+        if (mission.report.isFile && mission.report.lastModified() >= maxOf(mission.log.lastModified(), nameFile.lastModified()))
+            return mission.report
+        val summary = runCatching {
+            Gson().fromJson(File(mission.directory, "capture-summary.json").readText(), CaptureSummary::class.java)
+        }.getOrNull() ?: CaptureSummary()
+        val state = MonitorUiState(status = summary.status, device = summary.device, frames = summary.frames,
+            eapolKeyFrames = summary.eapol, channelFrames = summary.channels, pcapTruncated = summary.pcapTruncated)
+        writeReport(context, Files(mission.directory, mission.pcap, mission.report, mission.log), state,
+            MonitorEvidence.read(mission.log))
+        return mission.report
     }
 
     fun readLabels(log: File): Map<String, String> = log.useLines { lines ->
@@ -315,13 +369,13 @@ object MonitorMission {
         }.toSet()
     }
 
-    fun writeReport(context: Context, files: Files, state: MonitorUiState, favorites: Set<String>) {
-        val geoSamples = readSamples(files.log)
-        val apSamples = readAccessPointSamples(files.log)
-        val receiverFixes = readReceiverFixes(files.log)
+    private fun writeReport(context: Context, files: Files, state: MonitorUiState, evidence: MonitorEvidence) {
+        val geoSamples = evidence.samples
+        val deviceSamples = evidence.radioSamples
+        val receiverFixes = evidence.receiverFixes
         val samplesByMac = geoSamples.groupBy { it.mac }
-        val apSamplesByMac = apSamples.groupBy { it.mac }
-        val targetMacs = (favorites + samplesByMac.keys).sorted()
+        val deviceSamplesByMac = deviceSamples.groupBy { it.mac }
+        val targetMacs = evidence.targets.sorted()
         val estimates = targetMacs.associateWith { MonitorLocalization.estimate(samplesByMac[it].orEmpty()) }
         val pdf = PdfDocument()
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -380,24 +434,24 @@ object MonitorMission {
             page!!.canvas.drawRect(36f, y, 559f, y + 1f, paint)
             y += 18f
         }
-        val savedDevices = readDeviceSnapshots(files.log).asSequence()
-            .flatMap { SniffedDevices.parse(it.tsv).asSequence() }
-            .groupBy { it.mac }.values.map { sightings -> sightings.maxBy { it.lastMs } }
+        val savedDevices = evidence.inventoryAt()
         val allDevices = savedDevices.ifEmpty { state.devices.map { it.first } }
         val currentGuesses = state.devices.associate { it.first.mac to it.second }
+        val vendors = runCatching { context.assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
         val reportDevices = allDevices.map { device ->
-            device to (currentGuesses[device.mac] ?: SniffedDevices.guess(device) { null })
+            device to (currentGuesses[device.mac] ?: SniffedDevices.guess(device) { vendors?.vendorOf(it) })
         }
         val aps = allDevices.count { it.isAp }
         val clients = allDevices.count { it.isClient }
         val unassociated = allDevices.count { it.isClient && it.probeRequests > 0 && it.bssids.isEmpty() }
-        val earlierFrames = readReplayEvents(files.log).filter { it.event == "monitor_finished" }
+        val earlierFrames = evidence.events.filter { it.event == "monitor_finished" }
             .sumOf { it.details.substringAfter("frames=", "0").substringBefore(' ').toLongOrNull() ?: 0L }
         nextPage()
+        line(readName(files.directory), color = muted)
         line("Mission ID  ${files.directory.name}", color = muted)
-        line("Completed  ${DateFormat.getDateTimeInstance().format(Date())}", color = muted)
+        line("Report generated  ${DateFormat.getDateTimeInstance().format(Date())}", color = muted)
         section("Overview")
-        line("${earlierFrames + state.frames} frames across captures")
+        line("${earlierFrames.takeIf { it > 0 } ?: state.frames} frames across captures")
         line("$aps access points     $clients clients     $unassociated probing without observed association")
         line("EAPOL-Key frames in latest capture: ${state.eapolKeyFrames}")
         line("Key-frame count does not establish a complete WPA handshake or usable hash.", color = muted)
@@ -415,13 +469,14 @@ object MonitorMission {
             else line("$mac  %.6f, %.6f  uncertainty >=%.0f m%s".format(
                 estimate.lat, estimate.lng, estimate.uncertaintyM, if (estimate.provisional) " provisional" else ""))
         }
-        section("Access point observations (${apSamplesByMac.size})")
-        line("${apSamples.size} AP signal readings matched to Android receiver fixes, including non-favorites.", color = muted)
-        line("Coordinates below are receiver-derived hints; one sighting cannot locate an AP.", color = muted)
-        apSamplesByMac.entries.sortedByDescending { it.value.size }.forEach { (mac, samples) ->
+        section("Device observations (${deviceSamplesByMac.size})")
+        line("${deviceSamples.size} AP/client signal readings matched to Android receiver fixes, including non-favorites.", color = muted)
+        line("Coordinates below are receiver-derived hints; one sighting cannot locate a device.", color = muted)
+        line("Clients may move; their estimate describes the recorded observation area.", color = muted)
+        deviceSamplesByMac.entries.sortedByDescending { it.value.size }.forEach { (mac, samples) ->
             val estimate = MonitorLocalization.estimate(samples) ?: return@forEach
             val name = allDevices.firstOrNull { it.mac == mac }?.ssid
-                ?.takeIf { it.isNotBlank() }?.take(18) ?: "AP"
+                ?.takeIf { it.isNotBlank() }?.take(18) ?: "Device"
             line("$name $mac  ${samples.size} readings  %.5f, %.5f  >=%.0f m%s".format(
                 estimate.lat, estimate.lng, estimate.uncertaintyM,
                 if (estimate.provisional) " receiver hint" else " estimate"))

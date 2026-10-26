@@ -24,4 +24,11 @@ class MonitorNoiseFilterTest {
         assertNotNull(MonitorNoiseFilter.compile("x".repeat(121)).error)
         assertEquals(2, MonitorNoiseFilter.compile("unknown device\nexample.*").patterns.size)
     }
+
+    @Test fun randomizedMacLabelMatchesWhatCardsAndTablesShow() {
+        val row = device.copy(mac = "da:11:22:33:44:55") to SniffedDevices.Guess(SniffedDevices.Kind.PHONE_LAPTOP, null, emptyList())
+        assertEquals("randomized MAC", SniffedDevices.displayName(row.first, row.second))
+        assertTrue(MonitorNoiseFilter.matches(row, MonitorNoiseFilter.compile("randomized MAC").patterns))
+        assertFalse(MonitorNoiseFilter.matches(row, MonitorNoiseFilter.compile("unknown device").patterns))
+    }
 }

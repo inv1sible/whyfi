@@ -623,7 +623,9 @@ class ScanForegroundService : Service() {
             pcapPath = mission.pcap?.absolutePath.takeIf { recordPcap }, missionLogPath = mission.log.absolutePath)
         updateNotification("Monitoring WiFi on ${channels.size} channels…")
         serviceScope.launch {
-            val initialFixes = LocationSnapshot.lastKnownCandidates(applicationContext)
+            val initialFixes = LocationSnapshot.lastKnownCandidates(applicationContext).filter { fix ->
+                SystemClock.elapsedRealtime() - fix.elapsedRealtimeNanos / 1_000_000 <= MonitorLocationPolicy.MAX_FIX_AGE_MS
+            }
             val locations = AtomicReference(initialFixes.associateBy { it.provider ?: "unknown" })
             val locationHistory = AtomicReference(initialFixes)
             val onFix: (Location) -> Unit = { fix ->
@@ -642,8 +644,7 @@ class ScanForegroundService : Service() {
             var locationSubscription = LocationSnapshot.requestUpdates(applicationContext, includeFused = true, onLocation = onFix)
             val seenSampleTimes = mutableMapOf<String, Long>()
             val countedSampleTimes = mutableMapOf<String, Long>()
-            val savedFixTimes = initialFixes.associate { (it.provider ?: "unknown") to
-                it.elapsedRealtimeNanos / 1_000_000 }.toMutableMap()
+            val savedFixTimes = mutableMapOf<String, Long>()
             val awaitingFix = mutableMapOf<String, Long>()
             val knownLabels = mutableMapOf<String, String>()
             val snapshotMutex = Mutex()
@@ -796,7 +797,7 @@ class ScanForegroundService : Service() {
                         locationUpdatesRegistered = locationSubscription != null,
                         geoDiagnostics = geoDiagnostics,
                         geoStatus = when {
-                            favorites.isEmpty() -> "Star a device to collect location samples"
+                            favorites.isEmpty() -> "Radio snapshots and receiver fixes are saved for AP and client estimates"
                             currentFix == null -> "Waiting for a recent GPS/network/fused fix"
                             geoSampleCount >= 10_000 -> "Location sample cap reached"
                             else -> "${currentFix.fix.provider} location · ±${currentFix.effectiveAccuracyM.toInt()} m"
@@ -827,18 +828,18 @@ class ScanForegroundService : Service() {
                 locationSubscription?.close()
                 connection.close()
                 val finished = _monitorState.value.copy(running = false, status = if (result.isEmpty()) "Finished" else "Failed: $result")
-                _monitorState.value = finished.copy(running = true, status = "Saving report…")
-                val reportResult = withContext(Dispatchers.IO) {
+                _monitorState.value = finished.copy(running = true, status = "Saving capture…")
+                val saved = withContext(Dispatchers.IO) {
                     runCatching {
                         settingsRepository.monitorFavoriteMacs.sorted().forEach { MonitorMission.append(mission, "mission_target", it) }
                         sampledMacs.sorted().forEach { MonitorMission.append(mission, "mission_target", it) }
-                        MonitorMission.writeReport(applicationContext, mission, finished, MonitorMission.targets(mission.log))
+                        MonitorMission.append(mission, "monitor_finished", "status=${finished.status} frames=${finished.frames}")
+                        MonitorMission.saveCaptureSummary(mission, finished)
                     }
                 }
-                MonitorMission.append(mission, "monitor_finished", "status=${finished.status} frames=${finished.frames}")
                 _monitorState.value = finished.copy(
-                    reportPath = mission.report.takeIf { reportResult.isSuccess && it.isFile }?.absolutePath,
-                    status = if (reportResult.isFailure) "${finished.status}; PDF report failed" else finished.status,
+                    reportPath = null,
+                    status = if (saved.isFailure) "${finished.status}; capture statistics could not be saved" else finished.status,
                 )
                 monitorMission = null
                 stopIfNothingKeepsUsAlive()

@@ -322,7 +322,7 @@ private fun DeviceList(devices: List<Pair<SniffedDevices.Device, SniffedDevices.
             Column {
                 Text(
                     listOfNotNull(
-                        g.vendor ?: if (d.randomized) "private MAC" else "unknown vendor",
+                        g.vendor ?: if (d.randomized) "randomized MAC" else "unknown vendor",
                         d.ssid.takeIf { it.isNotEmpty() }?.let { "\"$it\"" },
                         d.bestRssi?.let { "$it dBm" },
                     ).joinToString(" · "),

@@ -3,8 +3,8 @@ package com.whyfi.app.usbmon
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,160 +34,181 @@ internal fun MissionView(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    var missions by remember { mutableStateOf(MonitorMission.list(context)) }
-    var uploading by remember { mutableStateOf<String?>(null) }
+    var missions by remember { mutableStateOf<List<MonitorMission.Stored>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var revision by remember { mutableIntStateOf(0) }
+    var busy by remember { mutableStateOf<String?>(null) }
     var messages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-    var openLog by remember { mutableStateOf<String?>(null) }
-    var logPreviews by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var pendingDelete by remember { mutableStateOf<MonitorMission.Stored?>(null) }
-    LaunchedEffect(latestReportPath) { missions = MonitorMission.list(context) }
+    var pendingRename by remember { mutableStateOf<MonitorMission.Stored?>(null) }
+    var editedName by remember { mutableStateOf("") }
+    LaunchedEffect(latestReportPath, activeLogPath, revision) {
+        missions = withContext(Dispatchers.IO) { MonitorMission.list(context) }
+        loading = false
+    }
 
-    Column(modifier.verticalScroll(rememberScrollState()).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Saved missions", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.weight(1f))
-            TextButton({ missions = MonitorMission.list(context) }) { Text("Refresh") }
+    LazyColumn(modifier.padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(vertical = 12.dp)) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Saved missions", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.weight(1f))
+                TextButton({ revision++ }) { Text("Refresh") }
+            }
+            if (loading) Text("Loading missions…")
+            else if (missions.isEmpty()) Text("No monitor missions saved yet.")
+            continueError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
-        Text("Continue mission copies its log and PCAP to a new mission ID, then opens Nearby. The next capture creates a new PDF. Start/Stop stays in that mission until Reset.",
-            style = MaterialTheme.typography.bodySmall)
-        continueError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        if (missions.isEmpty()) Text("No monitor missions saved yet.")
-        missions.forEach { mission ->
+        items(missions, key = { it.directory.name }) { mission ->
             val id = mission.directory.name
+            var showDevices by remember(id) { mutableStateOf(false) }
+            var devices by remember(id, mission.log.lastModified()) {
+                mutableStateOf<List<Pair<SniffedDevices.Device, SniffedDevices.Guess>>?>(null)
+            }
+            var deviceLimit by remember(id) { mutableIntStateOf(40) }
+            var showLog by remember(id) { mutableStateOf(false) }
+            var preview by remember(id, mission.log.lastModified()) { mutableStateOf<String?>(null) }
+            LaunchedEffect(showDevices, mission.log.lastModified()) {
+                if (showDevices && devices == null) devices = withContext(Dispatchers.IO) {
+                    val vendors = runCatching { context.assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
+                    MonitorEvidence.read(mission.log).inventoryAt().map { d ->
+                        d to SniffedDevices.guess(d) { vendors?.vendorOf(it) }
+                    }
+                }
+            }
+            LaunchedEffect(showLog, mission.log.lastModified()) {
+                if (showLog && preview == null) preview = withContext(Dispatchers.IO) {
+                    runCatching { MonitorMission.previewLog(mission.log) }.getOrElse { "Could not read mission log." }
+                }
+            }
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val date = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
-                        .format(Date(mission.log.lastModified().takeIf { it > 0 } ?: mission.directory.lastModified()))
-                    Text(date, style = MaterialTheme.typography.titleSmall)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(mission.name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                        TextButton({ pendingRename = mission; editedName = mission.name }) { Text("Edit") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        mission.pcap?.let { pcap ->
+                            TextButton({ messages = messages + (id to shareFile(context, pcap, "application/vnd.tcpdump.pcap")) }) {
+                                Text("Export PCAP")
+                            }
+                        }
+                        TextButton({ pendingDelete = mission }, enabled = busy == null && continuingMissionId == null &&
+                            mission.log.absolutePath != activeLogPath && id != settings.activeMonitorMissionId) {
+                            Text("Delete mission", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(mission.dateMs)),
+                        style = MaterialTheme.typography.bodySmall)
                     Text(id, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                    Text(if (id == settings.activeMonitorMissionId) "Open mission · Reset in Nearby to close and upload"
-                        else if (mission.complete) "Complete · stored locally" else "Recording or report incomplete",
+                    Text(if (id == settings.activeMonitorMissionId) "Open mission · Start/Stop continues until Reset"
+                        else if (mission.captured) "Capture saved locally" else "Saved evidence · no completed capture statistics",
                         style = MaterialTheme.typography.bodySmall)
                     Text("PDF: ${fileSize(mission.report)} · Log: ${fileSize(mission.log)} · PCAP: ${mission.pcap?.let(::fileSize) ?: "not recorded"}",
                         style = MaterialTheme.typography.bodySmall)
                     if (mission.uploaded) Text("Uploaded · local files retained", color = MaterialTheme.colorScheme.primary)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        if (mission.report.isFile) TextButton({
-                            messages = messages + (id to openReport(context, mission.report))
-                        }) { Text("Open PDF") }
-                        if (mission.log.isFile) TextButton({
-                            if (openLog == id) openLog = null else {
-                                openLog = id
-                                logPreviews = logPreviews + (id to "Loading log…")
-                                scope.launch {
-                                    val preview = withContext(Dispatchers.IO) {
-                                        runCatching { MonitorMission.previewLog(mission.log) }
-                                            .getOrElse { "Could not read mission log." }
-                                    }
-                                    logPreviews = logPreviews + (id to preview)
-                                }
-                            }
-                        }) { Text("View log") }
-                    }
-                    if (mission.log.isFile) TextButton({ onOpenLocation(mission.log.absolutePath, null) }) {
-                        Text("Replay on Location map")
-                    }
-                    if (mission.log.isFile) {
-                        Button({ onContinue(mission) }, enabled = activeLogPath == null &&
-                            continuingMissionId == null && uploading == null) {
-                            Text(if (continuingMissionId == id) "Continuing…" else "Continue mission")
-                        }
-                    }
-                    val targets = if (mission.log.isFile) remember(id, mission.log.lastModified()) {
-                        MonitorMission.targets(mission.log).sorted()
-                    } else emptyList()
-                    if (targets.isNotEmpty()) {
-                        Text("Position estimates", style = MaterialTheme.typography.labelLarge)
-                        val labels = remember(id, mission.log.lastModified()) { MonitorMission.readLabels(mission.log) }
-                        val sampleCounts = remember(id, mission.log.lastModified()) {
-                            MonitorMission.readSamples(mission.log).groupingBy { it.mac }.eachCount()
-                        }
-                        targets.forEach { mac ->
-                            TextButton({ onOpenLocation(mission.log.absolutePath, mac) },
-                                enabled = (sampleCounts[mac] ?: 0) > 0) {
-                                Text(MonitorMission.displayTarget(mac, labels[mac]) +
-                                    if ((sampleCounts[mac] ?: 0) > 0) "" else " · no location fix")
-                            }
-                        }
-                    }
-                    if (openLog == id && mission.log.isFile) {
-                        Text(logPreviews[id].orEmpty(),
-                            style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                    }
-                    if (mission.pcap != null) {
-                        TextButton({ messages = messages + (id to shareFile(context, mission.pcap, "application/vnd.tcpdump.pcap")) }) {
-                            Text("Export PCAP")
-                        }
-                    }
-                    if (mission.complete && id != settings.activeMonitorMissionId) {
-                        Button(onClick = {
-                            uploading = id
+                        TextButton({
+                            busy = id
                             scope.launch {
-                                val result = MonitorMissionUploader.upload(
-                                    mission, settings.backendUrl.orEmpty(), settings.sensorToken.orEmpty(),
-                                )
-                                messages = messages + (id to result)
-                                missions = MonitorMission.list(context)
-                                uploading = null
+                                val result = runCatching { withContext(Dispatchers.IO) { MonitorMission.ensureReport(context, mission) } }
+                                messages = messages + (id to result.fold({ openReport(context, it) },
+                                    { "PDF failed: ${it.message}" }))
+                                busy = null
+                                revision++
                             }
-                        }, enabled = uploading == null) {
-                            Text(if (uploading == id) "Uploading…" else if (mission.uploaded) "Upload again" else "Upload to backend")
+                        }, enabled = mission.log.isFile && activeLogPath == null && busy == null && continuingMissionId == null) {
+                            Text(if (busy == id) "Working…" else if (mission.report.isFile) "Open / refresh PDF" else "Create PDF")
+                        }
+                        TextButton({ showLog = !showLog }) { Text(if (showLog) "Hide log preview" else "Log preview") }
+                    }
+                    if (showLog) {
+                        Text(preview ?: "Loading preview…", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                        TextButton({ messages = messages + (id to shareFile(context, mission.log, "application/x-ndjson")) }) {
+                            Text("Export full log")
                         }
                     }
-                    TextButton({ pendingDelete = mission },
-                        enabled = uploading == null && mission.log.absolutePath != activeLogPath &&
-                            id != settings.activeMonitorMissionId) {
-                        Text("Delete local mission", color = MaterialTheme.colorScheme.error)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton({ onOpenLocation(mission.log.absolutePath, null) }) { Text("Replay") }
+                        TextButton({ showDevices = !showDevices }) { Text(if (showDevices) "Hide devices" else "Devices / location") }
+                    }
+                    if (mission.log.isFile) Button({ onContinue(mission) }, enabled = activeLogPath == null &&
+                        continuingMissionId == null && busy == null) {
+                        Text(if (continuingMissionId == id) "Continuing…" else "Continue mission")
+                    }
+                    if (showDevices) {
+                        if (devices == null) Text("Loading recorded devices…")
+                        else if (devices!!.isEmpty()) Text("This mission has no saved device snapshots.")
+                        devices.orEmpty().take(deviceLimit).forEach { (device, guess) ->
+                            TextButton({ onOpenLocation(mission.log.absolutePath, device.mac) }, modifier = Modifier.fillMaxWidth()) {
+                                Text(MonitorMission.displayTarget(device.mac, MonitorMission.deviceName(device, guess)))
+                            }
+                        }
+                        if (devices.orEmpty().size > deviceLimit) TextButton({ deviceLimit += 40 }) { Text("Show more devices") }
+                    }
+                    if (mission.captured && id != settings.activeMonitorMissionId) Button({
+                        busy = id
+                        scope.launch {
+                            messages = messages + (id to runCatching {
+                                withContext(Dispatchers.IO) { MonitorMission.ensureReport(context, mission) }
+                                MonitorMissionUploader.upload(mission, settings.backendUrl.orEmpty(), settings.sensorToken.orEmpty())
+                            }.getOrElse { "Upload preparation failed: ${it.message}" })
+                            busy = null
+                            revision++
+                        }
+                    }, enabled = busy == null && continuingMissionId == null) {
+                        Text(if (busy == id) "Preparing / uploading…" else if (mission.uploaded) "Upload again" else "Create PDF and upload")
                     }
                     messages[id]?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 }
             }
         }
     }
+    pendingRename?.let { mission ->
+        AlertDialog(onDismissRequest = { pendingRename = null }, title = { Text("Rename mission") },
+            text = { OutlinedTextField(editedName, { editedName = it.take(80) }, singleLine = true, label = { Text("Mission name") }) },
+            confirmButton = { TextButton({
+                scope.launch {
+                    runCatching { withContext(Dispatchers.IO) { MonitorMission.rename(mission, editedName) } }
+                        .onFailure { messages = messages + (mission.directory.name to "Rename failed: ${it.message}") }
+                    pendingRename = null
+                    revision++
+                }
+            }, enabled = editedName.isNotBlank()) { Text("Save") } },
+            dismissButton = { TextButton({ pendingRename = null }) { Text("Cancel") } })
+    }
     pendingDelete?.let { mission ->
-        AlertDialog(onDismissRequest = { pendingDelete = null },
-            title = { Text("Delete this mission?") },
-            text = { Text("PDF, log, PCAP and local upload marker will be removed from this phone. " +
-                if (mission.uploaded) "The uploaded copy on the backend remains." else "This cannot be undone.") },
+        AlertDialog(onDismissRequest = { pendingDelete = null }, title = { Text("Delete this mission?") },
+            text = { Text("Delete this local mission and its PDF, log and PCAP? Uploaded copies remain on the backend.") },
             confirmButton = { TextButton({
                 pendingDelete = null
                 scope.launch {
-                    val removed = withContext(Dispatchers.IO) {
-                        MonitorMission.delete(context, mission, activeLogPath)
-                    }
-                    if (removed) {
-                        onDeleted(mission.log.absolutePath)
-                        missions = MonitorMission.list(context)
-                    } else messages = messages + (mission.directory.name to "Could not delete this mission.")
+                    val removed = withContext(Dispatchers.IO) { MonitorMission.delete(context, mission, activeLogPath) }
+                    if (removed) { onDeleted(mission.log.absolutePath); revision++ }
+                    else messages = messages + (mission.directory.name to "Could not delete this mission.")
                 }
-            }) { Text("Delete") } },
-            dismissButton = { TextButton({ pendingDelete = null }) { Text("Cancel") } })
+            }) { Text("Delete") } }, dismissButton = { TextButton({ pendingDelete = null }) { Text("Cancel") } })
     }
 }
 
-private fun fileSize(file: File): String =
-    if (!file.isFile) "missing" else when {
-        file.length() < 1024 -> "${file.length()} B"
-        file.length() < 1024 * 1024 -> "%.1f KiB".format(file.length() / 1024.0)
-        else -> "%.1f MiB".format(file.length() / (1024.0 * 1024.0))
-    }
+private fun fileSize(file: File): String = when {
+    !file.isFile -> "not generated"
+    file.length() < 1024 -> "${file.length()} B"
+    file.length() < 1024 * 1024 -> "%.1f KiB".format(file.length() / 1024.0)
+    else -> "%.1f MiB".format(file.length() / (1024.0 * 1024.0))
+}
 
 private fun openReport(context: Context, file: File): String = try {
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.monitorfiles", file)
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/pdf")
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
-    ""
-} catch (e: Exception) {
-    "No PDF viewer available: ${e.message ?: e.javaClass.simpleName}"
-}
+    "PDF opened."
+} catch (e: Exception) { "Could not open PDF: ${e.message}" }
 
 private fun shareFile(context: Context, file: File, type: String): String = try {
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.monitorfiles", file)
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val intent = Intent(Intent.ACTION_SEND).setType(type).putExtra(Intent.EXTRA_STREAM, uri)
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    context.startActivity(Intent.createChooser(intent, "Export monitor capture").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-    ""
-} catch (e: Exception) {
-    "Could not export file: ${e.message ?: e.javaClass.simpleName}"
-}
+    context.startActivity(Intent.createChooser(intent, "Export mission evidence").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    "Export opened. Local file retained."
+} catch (e: Exception) { "Could not export: ${e.message}" }

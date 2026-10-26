@@ -1,6 +1,6 @@
 # Monitor mission operator workflow: review and implementation plan
 
-Status: decision draft, 2026-10-26. No feature choices below are approved yet. [Current mission behavior](monitor-mission-behavior.md) remains the implemented contract. This plan uses the existing Monitor tabs and bottom controls. Implementation starts after the operator decisions are recorded.
+Status: historical, rejected draft. Superseded by [the operator's concrete improvement list](monitor-improvements-20261026.md). The decisions below are not implementation instructions.
 
 ## Goal and terms
 

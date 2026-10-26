@@ -63,6 +63,24 @@ class SniffedDevicesTest {
         assertEquals(Kind.CAMERA, guess(line("bc:9a:8e:00:00:01", 2)).kind)
     }
 
+    @Test fun `reolink manufacturer is a camera without traffic or WPS`() {
+        val d = SniffedDevices.parse(line("00:11:22:00:00:01", 2)).single()
+        assertEquals(Kind.CAMERA, SniffedDevices.guess(d) { "Reolink Innovation Limited" }.kind)
+    }
+
+    @Test fun `camera model number is considered without classifying all TP-Link devices as cameras`() {
+        val d = SniffedDevices.parse(line("00:11:22:00:00:01", 2)).single()
+        assertEquals(Kind.CAMERA, SniffedDevices.guess(d.copy(wpsModelNumber = "Tapo C200")) { "TP-Link Corporation" }.kind)
+        assertEquals(Kind.CLIENT, SniffedDevices.guess(d) { "TP-Link Corporation" }.kind)
+    }
+
+    @Test fun `Tapo setup hotspot and Lenovo camera model have explicit camera evidence`() {
+        assertEquals(Kind.CAMERA, guess(line("40:a5:ef:00:00:11", 1, ssid = "Tapo_Cam_1234")).kind)
+        val camera = SniffedDevices.parse(line("40:a5:ef:00:00:12", 2)).single()
+        assertEquals(Kind.CAMERA, SniffedDevices.guess(camera.copy(wpsModelNumber = "SE-441P")) { "Lenovo" }.kind)
+        assertEquals(Kind.CLIENT, SniffedDevices.guess(camera) { "Lenovo" }.kind)
+    }
+
     @Test
     fun `IoT module vendor that uploads continuously is a camera`() {
         val g = guess(line("24:a1:60:00:00:02", 2, up = 900_000, down = 20_000))

@@ -50,7 +50,7 @@ fun MonitorScreen(service: ScanForegroundService?, settingsRepository: SettingsR
 }
 
 private enum class MonitorTab(val label: String) {
-    NEARBY("Nearby"), MAPPING("Location"), MISSIONS("Missions"), ACCESS_POINTS("APs"), UNASSOCIATED("Unassociated"),
+    MISSIONS("Missions"), NEARBY("Nearby"), MAPPING("Location"), ACCESS_POINTS("APs"), UNASSOCIATED("Unassociated"),
     IOT("IoT"), CAMERAS("Cameras"), PHONES_LAPTOPS("Phones / laptops"), CLIENTS("Other clients"),
 }
 
@@ -82,10 +82,12 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     var autoUpdate by rememberSaveable { mutableStateOf(true) }
     var sortName by rememberSaveable { mutableStateOf(NearbySort.RSSI.name) }
     val nearbySort = NearbySort.entries.firstOrNull { it.name == sortName } ?: NearbySort.RSSI
+    var matchesFirst by rememberSaveable { mutableStateOf(false) }
+    var recordedDevices by remember { mutableStateOf<List<SniffedDevices.Device>>(emptyList()) }
+    var restoredMissionId by remember { mutableStateOf<String?>(null) }
+    var vendorTable by remember { mutableStateOf<OuiTable?>(null) }
     var displayDevices by remember { mutableStateOf(state.devices) }
-    LaunchedEffect(state.devices, autoUpdate) {
-        if (autoUpdate) displayDevices = state.devices
-    }
+    var displayMatches by remember { mutableStateOf<Set<String>>(emptySet()) }
     var starting by remember { mutableStateOf(false) }
     var recordPcap by remember { mutableStateOf(settingsRepository.monitorRecordPcap) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -107,6 +109,43 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     var continuingMissionId by remember { mutableStateOf<String?>(null) }
     var continueError by remember { mutableStateOf<String?>(null) }
     var showAllAps by rememberSaveable { mutableStateOf(false) }
+    var missionCount by remember { mutableIntStateOf(0) }
+    val activeId = settingsRepository.activeMonitorMissionId
+    LaunchedEffect(Unit) {
+        vendorTable = withContext(Dispatchers.IO) {
+            runCatching { context.assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
+        }
+    }
+    LaunchedEffect(activeId) {
+        if (activeId != null && restoredMissionId == activeId) return@LaunchedEffect
+        recordedDevices = withContext(Dispatchers.IO) {
+            MonitorMission.resume(context, activeId, false)?.let { files ->
+                val evidence = MonitorEvidence.read(files.log)
+                val cutoff = if (state.devices.isNotEmpty())
+                    evidence.events.lastOrNull { it.event == "monitor_started" }?.atMs?.minus(1) ?: Long.MAX_VALUE
+                    else Long.MAX_VALUE
+                evidence.inventoryAt(cutoff)
+            }.orEmpty()
+        }
+        displayDevices = MonitorInventory.merge(recordedDevices, state.devices.map { it.first }).map { d ->
+            d to SniffedDevices.guess(d) { vendorTable?.vendorOf(it) }
+        }
+        displayMatches = MonitorInventory.matches(recordedDevices, state.devices.map { it.first })
+        restoredMissionId = activeId
+    }
+    LaunchedEffect(state.devices, autoUpdate, recordedDevices, vendorTable) {
+        if (autoUpdate) {
+            displayDevices = MonitorInventory.merge(recordedDevices, state.devices.map { it.first }).map { d ->
+                d to SniffedDevices.guess(d) { vendorTable?.vendorOf(it) }
+            }
+            displayMatches = MonitorInventory.matches(recordedDevices, state.devices.map { it.first })
+        }
+    }
+    LaunchedEffect(missionRevision, state.running, state.missionLogPath) {
+        missionCount = withContext(Dispatchers.IO) { MonitorMission.list(context).size }
+    }
+    val matchedMacs = displayMatches
+    val deviceStatus = recordedDevices.associate { it.mac to if (it.mac in matchedMacs) "Seen again" else "Recorded" }
     LaunchedEffect(selectedMissionLogPath) {
         replayMission = null
         replayFraction = 1f
@@ -137,11 +176,8 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
         snapshot.clockMs.takeIf { it > 0 }?.plus((replayCutoffMs - snapshot.atMs).coerceAtLeast(0))
     } ?: replayCutoffMs
     val replayDevices = remember(replaySnapshot?.atMs ?: replayCutoffMs, activeReplay) {
-        replaySnapshot?.let { snapshot ->
-            SniffedDevices.parse(snapshot.tsv).map { device ->
-                device to SniffedDevices.guess(device) { activeReplay.vendors?.vendorOf(it) }
-            }
-        } ?: activeReplay?.legacyDevicesAt(replayCutoffMs).orEmpty()
+        activeReplay?.takeIf { it.snapshots.isNotEmpty() }?.devicesAt(replayCutoffMs)
+            ?: activeReplay?.legacyDevicesAt(replayCutoffMs).orEmpty()
     }
     val replaying = selectedMissionLogPath != null
     val selected = MonitorTab.entries.firstOrNull { it.name == selectedName } ?: MonitorTab.NEARBY
@@ -195,10 +231,13 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             continueError = null
             scope.launch {
                 try {
-                    val (continued, selectedFavorites, selectedHidden) = withContext(Dispatchers.IO) {
+                    val (continued, evidence, inventory) = withContext(Dispatchers.IO) {
                         val copied = MonitorMission.continueAsNew(context, mission)
-                        Triple(copied, MonitorMission.currentFavorites(copied.log), MonitorMission.currentHiddenAps(copied.log))
+                        val loaded = MonitorEvidence.read(copied.log)
+                        Triple(copied, loaded, loaded.inventoryAt())
                     }
+                    val selectedFavorites = MonitorMission.favoritesAfter(evidence.initialFavorites, evidence.events, Long.MAX_VALUE)
+                    val selectedHidden = MonitorMission.hiddenApsAfter(evidence.events)
                     settingsRepository.activeMonitorMissionId = continued.directory.name
                     favorites = selectedFavorites
                     settingsRepository.monitorFavoriteMacs = selectedFavorites
@@ -206,7 +245,10 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                     settingsRepository.monitorHiddenApMacs = selectedHidden
                     showHiddenAps = false
                     service?.clearFinishedMonitor()
-                    displayDevices = emptyList()
+                    recordedDevices = inventory
+                    restoredMissionId = continued.directory.name
+                    displayDevices = recordedDevices.map { d -> d to SniffedDevices.guess(d) { vendorTable?.vendorOf(it) } }
+                    displayMatches = emptySet()
                     selectedMissionLogPath = null
                     selectedLocationMac = null
                     locationTargets = emptyList()
@@ -232,7 +274,8 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
         }
         starting = true
         error = null
-        displayDevices = emptyList()
+        recordedDevices = MonitorInventory.merge(recordedDevices, state.devices.map { it.first })
+        displayMatches = emptySet()
         scope.launch {
             try {
                 if (!usbManager.hasPermission(device) && !requestPermission(context, usbManager, device)) {
@@ -277,9 +320,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             tabs.forEach { tab ->
                 val count = when (tab) {
                     MonitorTab.NEARBY, MonitorTab.MAPPING -> 0
-                    MonitorTab.MISSIONS -> remember(missionRevision, state.reportPath, state.missionLogPath) {
-                        MonitorMission.list(context).size
-                    }
+                    MonitorTab.MISSIONS -> missionCount
                     else -> monitorRows(tab, categoryDevices).size
                 }
                 Tab(tab == selected, {
@@ -299,7 +340,10 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 }) { Text(if (autoUpdate) "Auto" else "Manual") }
                 if (!autoUpdate) {
                     IconButton({
-                        displayDevices = state.devices
+                        displayDevices = MonitorInventory.merge(recordedDevices, state.devices.map { it.first }).map { d ->
+                            d to SniffedDevices.guess(d) { vendorTable?.vendorOf(it) }
+                        }
+                        displayMatches = MonitorInventory.matches(recordedDevices, state.devices.map { it.first })
                         recordAction("display_refresh", "")
                     }, modifier = Modifier.size(40.dp).semantics {
                         contentDescription = "Refresh displayed devices${if (newDevices > 0) ", $newDevices new" else ""}"
@@ -330,14 +374,14 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (state.moveSuggested) Text("No new AP or distinct receiver position for 2 minutes. Try another spot.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                state.reportPath?.let { Text("Capture saved. Start continues this mission; Reset closes it for upload.",
-                    style = MaterialTheme.typography.bodySmall) }
+                if (!state.running && state.missionLogPath != null) Text("Capture saved. PDF on request in Missions. Start continues; Reset closes this mission.",
+                    style = MaterialTheme.typography.bodySmall)
                 if (state.pcapTruncated) Text("PCAP recording stopped at the 200 MB limit.", color = MaterialTheme.colorScheme.error)
                 NearbyView(nearbyDevices, favorites, toggleFavorite, hiddenAps, toggleHiddenAp, restoreHiddenKey,
                     showHiddenAps, hideNoise, noisePatterns, nearbySort,
                     showFavoriteCards, { showFavoriteCards = !showFavoriteCards },
                     showUnassociatedCards, { showUnassociatedCards = !showUnassociatedCards },
-                    showApCards, { showApCards = !showApCards })
+                    showApCards, { showApCards = !showApCards }, matchedMacs, matchesFirst, deviceStatus)
             }
         } else if (selected == MonitorTab.MISSIONS) {
             MissionView(context, settingsRepository, state.reportPath,
@@ -372,13 +416,15 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                     selectedLocationMac = mac
                     followMe = false
                 }, onFavoriteAp = toggleFavorite,
-                Modifier.weight(1f))
+                Modifier.weight(1f), onUserPan = { followMe = false })
         } else {
             if (replaying && activeReplay?.snapshots?.isEmpty() == true) Text(
                 "This older mission did not save device roles or category snapshots.",
                 modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
             MonitorTable(selected, categoryDevices, Modifier.weight(1f).padding(12.dp),
                 referenceMs = replayReferenceMs.takeIf { replaying },
+                matches = if (replaying) emptySet() else matchedMacs, matchesFirst = matchesFirst,
+                deviceStatus = if (replaying) emptyMap() else deviceStatus,
                 onOpenApLocation = { mac ->
                     selectedLocationMac = mac
                     followMe = false
@@ -437,7 +483,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             if (state.running) Button({ service?.stopMonitor() },
                                 enabled = state.status != "Starting…" && state.status != "Stopping…" &&
-                                    state.status != "Saving report…") { Text("Stop") }
+                                    state.status != "Saving capture…") { Text("Stop") }
                             else Button(startMonitor, enabled = !starting && continuingMissionId == null && selectedDevice != null) {
                                 Text(if (starting) "Starting…" else "Start")
                             }
@@ -469,7 +515,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             val selectedTarget = selectedLocationMac?.takeIf { mac -> locationTargets.any { it.mac == mac } }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterChip(showAllAps, { showAllAps = !showAllAps }, label = { Text("All AP estimates") })
+                FilterChip(showAllAps, { showAllAps = !showAllAps }, label = { Text("All device estimates") })
                 FilterChip(selectedTarget == null, { selectedLocationMac = null },
                     label = { Text("All (${locationTargets.size})") })
                 locationTargets.forEach { target ->
@@ -480,6 +526,8 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
         } else if (selected != MonitorTab.MISSIONS && selected != MonitorTab.MAPPING) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                FilterChip(matchesFirst, { matchesFirst = !matchesFirst; recordAction("matches_first", matchesFirst.toString()) },
+                    label = { Text("Matches first (${matchedMacs.size})") })
                 if (selected == MonitorTab.NEARBY) FilterChip(showHiddenAps,
                     { showHiddenAps = !showHiddenAps }, label = { Text("Hidden APs (${hiddenAps.size})") })
                 if (selected == MonitorTab.NEARBY) FilterChip(hideNoise, {
@@ -508,7 +556,9 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 hiddenAps = emptySet()
                 settingsRepository.monitorHiddenApMacs = emptySet()
                 showHiddenAps = false
+                recordedDevices = emptyList()
                 displayDevices = emptyList()
+                displayMatches = emptySet()
                 service?.clearFinishedMonitor()
                 missionRevision++
             }) { Text("Reset") } },
@@ -598,16 +648,20 @@ private fun MonitorTable(
     devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>>,
     modifier: Modifier,
     referenceMs: Long? = null,
+    matches: Set<String> = emptySet(),
+    matchesFirst: Boolean = false,
+    deviceStatus: Map<String, String> = emptyMap(),
     onOpenApLocation: (String) -> Unit = {},
 ) {
-    val rows = monitorRows(tab, devices)
-    val newest = referenceMs ?: rows.maxOfOrNull { it.first.lastMs } ?: 0
+    val rows = monitorRows(tab, devices).let { if (matchesFirst) it.sortedWith(MonitorInventory.matchOrder(matches)) else it }
+    val newest = referenceMs ?: rows.filter { deviceStatus[it.first.mac] != "Recorded" }.maxOfOrNull { it.first.lastMs } ?: 0
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (tab == MonitorTab.PHONES_LAPTOPS) {
             Text("Current frame metadata cannot reliably distinguish phones from laptops.", style = MaterialTheme.typography.bodySmall)
         }
         if (tab == MonitorTab.CAMERAS && rows.isEmpty()) {
-            Text("No camera identified yet. Check APs and other client tabs; identification needs recognizable names, manufacturer, or uplink traffic.",
+            Text("No camera evidence identified. ${devices.count { it.second.vendor != null }} devices have a known manufacturer; " +
+                "${devices.count { it.first.wpsPrimaryType.isNotBlank() }} advertise a WPS device type. Encrypted traffic may not reveal cameras.",
                 style = MaterialTheme.typography.bodySmall)
         }
         DataTable(
@@ -615,29 +669,31 @@ private fun MonitorTable(
                 TableColumn("Device", 150.dp),
                 TableColumn("MAC", 150.dp),
                 TableColumn("Manufacturer", 180.dp),
+                TableColumn("History", 100.dp),
                 TableColumn("RSSI", 70.dp),
                 TableColumn("Channel", 80.dp),
                 TableColumn("Security", 170.dp),
                 TableColumn("WPS", 180.dp),
                 TableColumn("Seen", 76.dp),
                 TableColumn("Activity", 190.dp),
+                TableColumn("Classification evidence", 240.dp),
             ),
             rows = rows.map { (device, guess) ->
                 DataTableRow(
                     key = device.mac,
-                    onClick = if (tab == MonitorTab.ACCESS_POINTS) { { onOpenApLocation(device.mac) } } else null,
+                    onClick = { onOpenApLocation(device.mac) },
                     cells = listOf(
-                        (device.ssid.takeIf { it.isNotEmpty() } ?: device.wpsName.takeIf { it.isNotEmpty() }
-                            ?: if (device.randomized) "private MAC" else "unknown") +
-                            if (tab == MonitorTab.ACCESS_POINTS) "  ↗ map" else "",
+                        SniffedDevices.displayName(device, guess) + "  ↗ map",
                         device.mac,
                         guess.vendor ?: "—",
+                        deviceStatus[device.mac] ?: if (referenceMs == null) "New" else "Replay",
                         device.bestRssi?.let { "$it dBm" } ?: "—",
                         device.channels.joinToString().ifBlank { "—" },
                         device.securityDetails.ifBlank { "—" },
                         device.wpsDetails.ifBlank { "—" },
-                        relativeSeen(newest - device.lastMs),
+                        if (deviceStatus[device.mac] == "Recorded") "Recorded" else relativeSeen((newest - device.lastMs).coerceAtLeast(0)),
                         SniffedDevices.activity(device).ifBlank { guess.kind.label },
+                        guess.reasons.joinToString("; ").ifBlank { "No identifying evidence" },
                     ),
                 )
             },
@@ -689,8 +745,11 @@ private fun NearbyView(
     toggleUnassociated: () -> Unit,
     showAps: Boolean,
     toggleAps: () -> Unit,
+    matches: Set<String>,
+    matchesFirst: Boolean,
+    deviceStatus: Map<String, String>,
 ) {
-    val order = nearbyOrder(sort)
+    val order = if (matchesFirst) MonitorInventory.matchOrder(matches) else nearbyOrder(sort)
     if (showHiddenAps) {
         val hiddenRows = devices.filter { MonitorApVisibility.isHidden(it.first, hiddenAps) }.sortedWith(order)
         val grouped = hiddenRows.groupBy { row ->
@@ -726,14 +785,15 @@ private fun NearbyView(
         if (showFavorites) pinned.forEach { row ->
             DeviceCard(row, newest, true, onFavorite,
                 if (row.first.isAp) byBssid[row.first.mac].orEmpty() else emptyList(), favorites, sort,
-                onHideAp = onHideAp)
+                onHideAp = onHideAp, deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst)
         }
         HorizontalDivider()
     }
     NearbySectionHeader("Unassociated", unassociated.size, showUnassociated, toggleUnassociated)
     if (showUnassociated) {
         if (unassociated.isEmpty()) Text("No probing stations without an observed AP association.")
-        unassociated.forEach { DeviceCard(it, newest, false, onFavorite, sort = sort, showActivity = true) }
+        unassociated.forEach { DeviceCard(it, newest, false, onFavorite, sort = sort, showActivity = true,
+            deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst) }
     }
     HorizontalDivider()
     NearbySectionHeader("Access points", aps.size, showAps, toggleAps)
@@ -741,7 +801,7 @@ private fun NearbyView(
         if (aps.isEmpty()) Text("No access points received yet.")
         aps.forEach { ap ->
             DeviceCard(ap, newest, false, onFavorite, byBssid[ap.first.mac].orEmpty(), favorites, sort,
-                onHideAp = onHideAp)
+                onHideAp = onHideAp, deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst)
         }
     }
 }
@@ -777,6 +837,9 @@ private fun DeviceCard(
     showActivity: Boolean = false,
     onHideAp: ((SniffedDevices.Device) -> Unit)? = null,
     hidden: Boolean = false,
+    deviceStatus: Map<String, String> = emptyMap(),
+    matches: Set<String> = emptySet(),
+    matchesFirst: Boolean = false,
 ) {
     var expanded by rememberSaveable(row.first.mac) { mutableStateOf(false) }
     val (device, guess) = row
@@ -786,11 +849,12 @@ private fun DeviceCard(
                 Text(kindIcon(guess.kind))
                 Spacer(Modifier.width(6.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(device.ssid.takeIf { it.isNotBlank() } ?: guess.vendor ?: "unknown device",
+                    Text(SniffedDevices.displayName(device, guess),
                         style = MaterialTheme.typography.titleSmall)
                     val channel = if (device.isAp) device.channels.joinToString("/")
                         else device.lastRssiChannel?.toString() ?: device.channels.joinToString("/")
-                    Text("${device.bestRssi?.let { "$it dBm" } ?: "RSSI ?"} · ch ${channel.ifBlank { "?" }} · ${relativeSeen(newest - device.lastMs)}",
+                    Text("${(device.lastRssi ?: device.bestRssi)?.let { "$it dBm" } ?: "RSSI ?"} · ch ${channel.ifBlank { "?" }} · " +
+                        (deviceStatus[device.mac] ?: relativeSeen((newest - device.lastMs).coerceAtLeast(0))),
                         style = MaterialTheme.typography.bodySmall)
                 }
                 if (device.isAp && onHideAp != null) IconButton({ onHideAp(device) },
@@ -822,6 +886,7 @@ private fun DeviceCard(
             if (expanded) {
                 Text("${device.mac} · ${guess.kind.label}", style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace)
+                Text(guess.reasons.joinToString("; ").ifBlank { "No identifying evidence" }, style = MaterialTheme.typography.bodySmall)
                 SniffedDevices.activity(device).takeIf { it.isNotBlank() }?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall)
                 }
@@ -834,9 +899,9 @@ private fun DeviceCard(
                 if (stations.isNotEmpty()) {
                     HorizontalDivider()
                     Text("Associated stations (${stations.size})", style = MaterialTheme.typography.labelLarge)
-                    stations.sortedWith(nearbyOrder(sort)).forEach {
+                    stations.sortedWith(if (matchesFirst) MonitorInventory.matchOrder(matches) else nearbyOrder(sort)).forEach {
                         DeviceCard(it, newest, it.first.mac in favorites, onFavorite, sort = sort,
-                            onHideAp = onHideAp)
+                            onHideAp = onHideAp, deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst)
                     }
                 }
             } else if (stations.isNotEmpty()) {

@@ -78,7 +78,7 @@ object UsbMonitorReport {
         append("Clients: ${clients.size} (searching: ${clients.count { it.first.probeRequests > 0 }}, ")
         append("connected: ${clients.count { it.first.bssids.isNotEmpty() }}, ")
         append("searching and not connected: ${clients.count { it.first.probeRequests > 0 && it.first.bssids.isEmpty() }}, ")
-        append("private MAC: ${clients.count { it.first.randomized }})\n")
+        append("randomized MAC: ${clients.count { it.first.randomized }})\n")
         append("Announce a WPS identity: ${devices.count { it.first.wps.isNotEmpty() }}; ")
         append("upload continuously: ${devices.count { it.second.reasons.any { r -> r.startsWith("uploads continuously") } }}\n")
         val vendors = clients.mapNotNull { it.second.vendor }.groupingBy { it }.eachCount()

@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -44,7 +45,9 @@ internal fun MonitorLocationMap(
     followReceiver: Boolean = false,
     receiverPath: List<MonitorReceiverFix> = emptyList(),
     onEstimateTap: (String) -> Unit = {},
+    onUserPan: () -> Unit = {},
 ) {
+    val panAction = rememberUpdatedState(onUserPan)
     Column(modifier.clipToBounds()) {
         key(mapKey) { AndroidView(modifier = Modifier.fillMaxWidth().weight(1f).clipToBounds(), factory = { context ->
             Configuration.getInstance().userAgentValue = context.packageName
@@ -53,6 +56,17 @@ internal fun MonitorLocationMap(
                 layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 setTileSource(TileSourceFactory.MAPNIK)
                 setMultiTouchControls(true)
+                var downX = 0f
+                var downY = 0f
+                setOnTouchListener { view, event ->
+                    view.parent?.requestDisallowInterceptTouchEvent(
+                        event.actionMasked != MotionEvent.ACTION_UP && event.actionMasked != MotionEvent.ACTION_CANCEL)
+                    if (event.actionMasked == MotionEvent.ACTION_DOWN) { downX = event.x; downY = event.y }
+                    if (event.actionMasked == MotionEvent.ACTION_MOVE &&
+                        kotlin.math.hypot(event.x - downX, event.y - downY) > 8f * resources.displayMetrics.density)
+                        panAction.value()
+                    false
+                }
                 controller.setCenter(GeoPoint(0.0, 0.0))
                 controller.setZoom(2.0)
                 tag = MapCenterState()
@@ -119,7 +133,7 @@ internal fun MonitorLocationMap(
                 selectedSamples.takeLast(800), labels, receiverPath.takeLast(800), onEstimateTap))
             map.invalidate()
         }) }
-        Text("© OpenStreetMap contributors · blue: phone · teal: estimate (tap AP to star) · green→red: sampled RSSI cones",
+        Text("© OpenStreetMap contributors · blue: phone · teal: estimate (tap to star) · clients may move · green→red: RSSI",
             style = MaterialTheme.typography.bodySmall)
     }
 }
@@ -237,6 +251,11 @@ internal fun MonitorMissionMap(
                 layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 setTileSource(TileSourceFactory.MAPNIK)
                 setMultiTouchControls(true)
+                setOnTouchListener { view, event ->
+                    view.parent?.requestDisallowInterceptTouchEvent(
+                        event.actionMasked != MotionEvent.ACTION_UP && event.actionMasked != MotionEvent.ACTION_CANCEL)
+                    false
+                }
                 controller.setCenter(GeoPoint(estimate.lat, estimate.lng))
                 val radius = max(estimate.uncertaintyM, estimate.receiverSpreadM)
                 controller.setZoom(when {

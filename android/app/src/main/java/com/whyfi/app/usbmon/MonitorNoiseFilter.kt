@@ -21,7 +21,7 @@ internal object MonitorNoiseFilter {
     fun matches(row: Pair<SniffedDevices.Device, SniffedDevices.Guess>, patterns: List<Regex>): Boolean {
         if (patterns.isEmpty()) return false
         val (device, guess) = row
-        val label = device.ssid.takeIf(String::isNotBlank) ?: guess.vendor ?: "unknown device"
+        val label = SniffedDevices.displayName(device, guess)
         val searchable = listOf(label, device.mac, device.ssid, guess.vendor.orEmpty(),
             device.wpsName, SniffedDevices.activity(device)).joinToString(" ")
         return patterns.any { it.containsMatchIn(searchable) }

@@ -46,7 +46,7 @@ object SniffedDevices {
         val isAp get() = roles and ROLE_AP != 0
         val isClient get() = roles and ROLE_CLIENT != 0
 
-        /** Locally administered bit: a randomized ("private") MAC. */
+        /** Locally administered bit: shown as randomized MAC, not proof of a rotating physical device. */
         val randomized get() = mac.substring(0, 2).toInt(16) and 0x02 != 0
         val wps get() = listOf(wpsManufacturer, wpsModel, wpsName).filter { it.isNotBlank() }.distinct().joinToString(" · ")
         val securityDetails get() = listOf(
@@ -90,6 +90,10 @@ object SniffedDevices {
 
     data class Guess(val kind: Kind, val vendor: String?, val reasons: List<String>)
 
+    fun displayName(device: Device, guess: Guess): String =
+        device.ssid.takeIf { it.isNotBlank() } ?: device.wpsName.takeIf { it.isNotBlank() }
+            ?: guess.vendor?.takeIf { it.isNotBlank() } ?: if (device.randomized) "randomized MAC" else "unknown device"
+
     /** Parses the native TSV export; malformed lines are skipped. */
     fun parse(tsv: String): List<Device> = tsv.lineSequence().mapNotNull { line ->
         val f = line.split('\t')
@@ -122,8 +126,8 @@ object SniffedDevices {
     }.toList()
 
     private val CAMERA_VENDORS = Regex(
-        "hikvision|dahua|reolink|wyze|\\bring (llc|access)|\\barlo technology|ezviz|uniview|amcrest|" +
-            "blink by amazon|lorex|axis communications|hanwha|vivotek|mobotix|swann|netatmo",
+        "hikvision|dahua|reolink|wyze|\\bring (llc|access)|\\barlo technolog(?:y|ies)|ezviz|uniview|amcrest|" +
+            "blink by amazon|lorex|axis communications|hanwha|vivotek|mobotix|swann|netatmo|foscam|vstarcam|xiongmai",
         RegexOption.IGNORE_CASE,
     )
     private val IOT_VENDORS = Regex(
@@ -138,7 +142,8 @@ object SniffedDevices {
         RegexOption.IGNORE_CASE,
     )
     private val CHIP_MAKERS = Regex("realtek|mediatek|hon hai|qualcomm|broadcom", RegexOption.IGNORE_CASE)
-    private val CAMERA_WORDS = Regex("\\bcam|ipc|nvr|doorbell|hik|ezviz|reolink|imou|dahua", RegexOption.IGNORE_CASE)
+    private val CAMERA_WORDS = Regex("\\bcam|ipc|nvr|doorbell|hik|ezviz|reolink|imou|dahua|foscam|vstarcam|" +
+        "\\btapo[ _-]*(?:cam(?:[ _-]|$)|c[0-9])|\\bse[ _-]?441p\\b", RegexOption.IGNORE_CASE)
     private val IOT_HOTSPOT = Regex(
         "^(esp[_-]|tuya|smartlife|smart life|shelly|sonoff|tasmota|hue|wled|ring setup|amazon-|wemo|ezviz_|hik-)",
         RegexOption.IGNORE_CASE,
@@ -156,8 +161,10 @@ object SniffedDevices {
             reasons += "WPS primary device type: camera"
             return Guess(Kind.CAMERA, vendor, reasons)
         }
-        val identity = "${d.wps} ${d.ssid}"
+        val identity = "${d.wps} ${d.wpsModelNumber} ${d.ssid}"
         val camera = (vendor != null && CAMERA_VENDORS.containsMatchIn(vendor)) || CAMERA_WORDS.containsMatchIn(identity)
+        if (vendor != null && CAMERA_VENDORS.containsMatchIn(vendor)) reasons += "camera manufacturer identity"
+        if (CAMERA_WORDS.containsMatchIn(identity)) reasons += "camera-specific advertised name/model"
         val streaming = d.bytesUp >= STREAM_UP_BYTES && d.bytesUp >= 4 * d.bytesDown
         if (streaming) reasons += "uploads continuously (${d.bytesUp / 1024} KB up / ${d.bytesDown / 1024} KB down)"
         val only24 = d.channels.isNotEmpty() && d.channels.all { it <= 14 }
@@ -179,7 +186,7 @@ object SniffedDevices {
         if (camera || (streaming && (iot || chip))) return Guess(Kind.CAMERA, vendor, reasons)
         if (iot) return Guess(Kind.IOT, vendor, reasons)
         if (d.randomized) {
-            reasons += "private (randomized) MAC — typical for phones and laptops"
+            reasons += "randomized MAC — often used by phones and laptops; locally administered addresses can also be fixed"
             return Guess(Kind.PHONE_LAPTOP, null, reasons)
         }
         if (vendor != null && PHONE_LAPTOP_VENDORS.containsMatchIn(vendor)) return Guess(Kind.PHONE_LAPTOP, vendor, reasons)
