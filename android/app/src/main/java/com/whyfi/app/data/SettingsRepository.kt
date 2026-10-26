@@ -121,6 +121,10 @@ class SettingsRepository(context: Context) {
         get() = prefs.getStringSet(KEY_MONITOR_FAVORITES, emptySet()).orEmpty().toSet()
         set(value) = prefs.edit { putStringSet(KEY_MONITOR_FAVORITES, value) }
 
+    var activeMonitorMissionId: String?
+        get() = prefs.getString("active_monitor_mission_id", null)
+        set(value) = prefs.edit { putString("active_monitor_mission_id", value) }
+
     /** How much storage the offline outbox may use before the oldest queued
      * scans are dropped. Only bites while uploads are failing — a reachable
      * backend drains the queue continuously, so steady-state usage is ~0. */

@@ -71,13 +71,37 @@ void closePcap() {
 bool openPcap(const std::string &path) {
     if (path.empty()) return true;
     std::lock_guard<std::mutex> lock(g_pcap_mu);
-    g_pcap = std::fopen(path.c_str(), "wb");
+    FILE *existing = std::fopen(path.c_str(), "rb");
+    const bool append = existing != nullptr;
+    long long previous_bytes = 0;
+    if (existing) {
+        unsigned char header[24] = {};
+        bool valid = std::fread(header, 1, sizeof header, existing) == sizeof header &&
+            header[0] == 0xd4 && header[1] == 0xc3 && header[2] == 0xb2 && header[3] == 0xa1 &&
+            header[20] == 105 && header[21] == 0 && header[22] == 0 && header[23] == 0;
+        if (std::fseek(existing, 0, SEEK_END) == 0) previous_bytes = std::ftell(existing);
+        std::fclose(existing);
+        if (!valid || previous_bytes < 24) return false;
+        if (previous_bytes >= MAX_PCAP_BYTES) {
+            g_pcap_bytes = previous_bytes;
+            g_stats[PCAP_BYTES] = g_pcap_bytes;
+            g_stats[PCAP_TRUNCATED] = 1;
+            return true;
+        }
+    }
+    g_pcap = std::fopen(path.c_str(), append ? "ab" : "wb");
     if (!g_pcap) return false;
+    if (append) {
+        g_pcap_bytes = previous_bytes;
+        g_stats[PCAP_BYTES] = g_pcap_bytes;
+        return true;
+    }
     // Classic little-endian PCAP, DLT_IEEE802_11. The adapter supplies a full
     // 802.11 frame including FCS; no radiotap metadata is invented here.
     put32(g_pcap, 0xa1b2c3d4); uint16_t v = 2; std::fwrite(&v, 2, 1, g_pcap); v = 4; std::fwrite(&v, 2, 1, g_pcap);
     put32(g_pcap, 0); put32(g_pcap, 0); put32(g_pcap, 65535); put32(g_pcap, 105);
     g_pcap_bytes = 24;
+    g_stats[PCAP_BYTES] = g_pcap_bytes;
     return true;
 }
 

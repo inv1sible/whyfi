@@ -75,6 +75,16 @@ object MonitorMission {
         return Files(directory, if (recordPcap) File(directory, "capture.pcap") else null, File(directory, "report.pdf"), File(directory, "mission.jsonl"))
     }
 
+    /** Resume only the app's own UUID mission directory; never overwrite a completed upload. */
+    fun resume(context: Context, id: String?, recordPcap: Boolean): Files? {
+        val uuid = runCatching { UUID.fromString(id) }.getOrNull() ?: return null
+        val directory = File(context.getExternalFilesDir(null), "monitor-missions/$uuid")
+        if (!directory.isDirectory || !File(directory, "mission.jsonl").isFile ||
+            File(directory, ".uploaded").exists()) return null
+        val pcap = File(directory, "capture.pcap").takeIf { recordPcap || it.isFile }
+        return Files(directory, pcap, File(directory, "report.pdf"), File(directory, "mission.jsonl"))
+    }
+
     /** Append-only so replay has the operator's actual sequence of actions. */
     fun append(files: Files, event: String, details: String = "") {
         synchronized(logLock) {
@@ -150,6 +160,26 @@ object MonitorMission {
         initial.filter(String::isNotBlank).toSet()
     }
 
+    /** Restore the operator's most recent pin selection when reopening a local mission. */
+    fun currentFavorites(log: File): Set<String> =
+        favoritesAfter(readInitialFavorites(log), readReplayEvents(log), Long.MAX_VALUE)
+
+    internal fun favoritesAfter(initial: Set<String>, events: List<ReplayEvent>, cutoffMs: Long): Set<String> {
+        val selected = initial.toMutableSet()
+        events.filter { it.atMs <= cutoffMs }.forEach { event ->
+            when (event.event) {
+                "mission_resumed" -> selected.clear()
+                "mission_resumed_target" -> selected += event.details
+                "favorite" -> {
+                    val mac = event.details.substringBeforeLast(':')
+                    if (event.details.endsWith(":true")) selected += mac
+                    else if (event.details.endsWith(":false")) selected -= mac
+                }
+            }
+        }
+        return selected.filter(String::isNotBlank).toSet()
+    }
+
     /** Bounded preview; metadata snapshots can make a log too large for readLines(). */
     fun previewLog(log: File): String = log.useLines { lines ->
         val tail = ArrayDeque<String>()
@@ -197,7 +227,7 @@ object MonitorMission {
                     row.getString("provider"), row.getDouble("lat"), row.getDouble("lng"),
                     row.getDouble("accuracy_m"), row.optDouble("speed_mps", 15.0))
             }.getOrNull()
-        }.sortedBy { it.bootMs }.toList()
+        }.sortedBy { it.atMs }.toList()
     }
 
     fun readSamples(log: File): List<MonitorGeoSample> {
@@ -228,7 +258,7 @@ object MonitorMission {
             runCatching {
                 val row = JSONObject(line)
                 when (row.optString("event")) {
-                    "mission_target" -> row.optString("details")
+                    "mission_target", "mission_resumed_target" -> row.optString("details")
                     "geo_sample" -> row.optString("mac")
                     "favorite" -> row.optString("details").takeIf { it.endsWith(":true") }
                         ?.substringBeforeLast(':')
@@ -303,15 +333,26 @@ object MonitorMission {
             page!!.canvas.drawRect(36f, y, 559f, y + 1f, paint)
             y += 18f
         }
-        val aps = state.devices.count { it.first.isAp }
-        val clients = state.devices.count { it.first.isClient }
-        val unassociated = state.devices.count { it.first.isClient && it.first.probeRequests > 0 && it.first.bssids.isEmpty() }
+        val savedDevices = readDeviceSnapshots(files.log).asSequence()
+            .flatMap { SniffedDevices.parse(it.tsv).asSequence() }
+            .groupBy { it.mac }.values.map { sightings -> sightings.maxBy { it.lastMs } }
+        val allDevices = savedDevices.ifEmpty { state.devices.map { it.first } }
+        val currentGuesses = state.devices.associate { it.first.mac to it.second }
+        val reportDevices = allDevices.map { device ->
+            device to (currentGuesses[device.mac] ?: SniffedDevices.guess(device) { null })
+        }
+        val aps = allDevices.count { it.isAp }
+        val clients = allDevices.count { it.isClient }
+        val unassociated = allDevices.count { it.isClient && it.probeRequests > 0 && it.bssids.isEmpty() }
+        val earlierFrames = readReplayEvents(files.log).filter { it.event == "monitor_finished" }
+            .sumOf { it.details.substringAfter("frames=", "0").substringBefore(' ').toLongOrNull() ?: 0L }
         nextPage()
         line("Mission ID  ${files.directory.name}", color = muted)
         line("Completed  ${DateFormat.getDateTimeInstance().format(Date())}", color = muted)
         section("Overview")
-        line("${state.frames} frames     $aps access points     $clients clients     $unassociated probing without observed association")
-        line("EAPOL-Key frames observed: ${state.eapolKeyFrames}")
+        line("${earlierFrames + state.frames} frames across captures")
+        line("$aps access points     $clients clients     $unassociated probing without observed association")
+        line("EAPOL-Key frames in latest capture: ${state.eapolKeyFrames}")
         line("Key-frame count does not establish a complete WPA handshake or usable hash.", color = muted)
         line("Status: ${state.status}")
         line("Adapter: ${state.device.ifBlank { "unknown" }}")
@@ -332,22 +373,22 @@ object MonitorMission {
         line("Coordinates below are receiver-derived hints; one sighting cannot locate an AP.", color = muted)
         apSamplesByMac.entries.sortedByDescending { it.value.size }.forEach { (mac, samples) ->
             val estimate = MonitorLocalization.estimate(samples) ?: return@forEach
-            val name = state.devices.firstOrNull { it.first.mac == mac }?.first?.ssid
+            val name = allDevices.firstOrNull { it.mac == mac }?.ssid
                 ?.takeIf { it.isNotBlank() }?.take(18) ?: "AP"
             line("$name $mac  ${samples.size} readings  %.5f, %.5f  >=%.0f m%s".format(
                 estimate.lat, estimate.lng, estimate.uncertaintyM,
                 if (estimate.provisional) " receiver hint" else " estimate"))
         }
         section("Evidence files")
-        line("PCAP: ${files.pcap?.name ?: "not recorded"}  (${state.pcapBytes} bytes)" +
+        line("PCAP: ${files.pcap?.name ?: "not recorded"}  (${files.pcap?.length() ?: 0} bytes)" +
             if (state.pcapTruncated) " - 200 MB cap reached" else "")
         line("Mission log: ${files.log.name}")
-        section("Channels / received frames")
+        section("Channels / received frames in latest capture")
         state.channelFrames.entries.sortedBy { it.key }.chunked(5).forEach { group ->
             line(group.joinToString("   ") { "ch ${it.key}: ${it.value}" })
         }
-        section("Observed devices (${state.devices.size})")
-        state.devices.sortedByDescending { it.first.lastMs }.forEach { (device, guess) ->
+        section("Observed devices (${reportDevices.size})")
+        reportDevices.sortedByDescending { it.first.lastMs }.forEach { (device, guess) ->
             line("${device.mac}  ${device.ssid.ifBlank { guess.vendor ?: guess.kind.label }}  ${device.bestRssi ?: "?"} dBm  ch ${device.channels.joinToString()}")
             line("${guess.kind.label}; frames ${device.frames}; probes ${device.probeRequests}; APs ${device.bssids.joinToString().ifBlank { "none observed" }}", 12f, muted)
             if (device.probed.isNotEmpty()) line("Probed: ${device.probed.joinToString().take(90)}", 12f, muted)
@@ -357,7 +398,7 @@ object MonitorMission {
         section("Position maps (${targetMacs.size})")
         targetMacs.forEach { mac ->
             if (y > 355f) nextPage()
-            val device = state.devices.firstOrNull { it.first.mac == mac }?.first
+            val device = allDevices.firstOrNull { it.mac == mac }
             section("${device?.ssid?.takeIf { it.isNotBlank() } ?: "Device"}  $mac")
             val samples = samplesByMac[mac].orEmpty()
             val estimate = estimates[mac]

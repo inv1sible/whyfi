@@ -99,6 +99,8 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     var showLocationDetails by remember { mutableStateOf(false) }
     var locationSummary by remember { mutableStateOf("") }
     var missionRevision by remember { mutableIntStateOf(0) }
+    var pendingReset by remember { mutableStateOf(false) }
+    var showAllAps by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(selectedMissionLogPath) {
         replayMission = null
         replayFraction = 1f
@@ -142,15 +144,22 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     val categoryDevices = (if (replaying) replayDevices else displayDevices).filter { it.second.kind in visibleKinds }
     val newDevices = state.devices.count { incoming -> displayDevices.none { it.first.mac == incoming.first.mac } }
 
+    val recordAction: (String, String) -> Unit = { event, details ->
+        if (state.running) service?.logMonitorEvent(event, details)
+        else MonitorMission.resume(context, settingsRepository.activeMonitorMissionId, false)?.let {
+            MonitorMission.append(it, event, details)
+        }
+    }
+
     val setChannels: (Set<Int>) -> Unit = {
         channels = it
         settingsRepository.monitorChannels = it
-        if (state.running) service?.logMonitorEvent("channels_selected", it.sorted().joinToString())
+        recordAction("channels_selected", it.sorted().joinToString())
     }
     val toggleFavorite: (String) -> Unit = { mac ->
         favorites = if (mac in favorites) favorites - mac else favorites + mac
         settingsRepository.monitorFavoriteMacs = favorites
-        if (state.running) service?.logMonitorEvent("favorite", "$mac:${mac in favorites}")
+        recordAction("favorite", "$mac:${mac in favorites}")
     }
     val beginMonitor: () -> Unit = start@{
         val device = selectedDevice ?: run { showUsb = true; return@start }
@@ -226,12 +235,12 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 Text("Updates", style = MaterialTheme.typography.bodySmall)
                 TextButton({
                     autoUpdate = !autoUpdate
-                    if (state.running) service?.logMonitorEvent("update_mode", if (autoUpdate) "auto" else "manual")
+                    recordAction("update_mode", if (autoUpdate) "auto" else "manual")
                 }) { Text(if (autoUpdate) "Auto" else "Manual") }
                 if (!autoUpdate) {
                     IconButton({
                         displayDevices = state.devices
-                        if (state.running) service?.logMonitorEvent("display_refresh")
+                        recordAction("display_refresh", "")
                     }, modifier = Modifier.size(40.dp).semantics {
                         contentDescription = "Refresh displayed devices${if (newDevices > 0) ", $newDevices new" else ""}"
                     }) { Text("⟳", style = MaterialTheme.typography.headlineSmall) }
@@ -240,8 +249,11 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 Text("Sort", style = MaterialTheme.typography.bodySmall)
                 TextButton({
                     sortName = if (nearbySort == NearbySort.RSSI) NearbySort.LAST_SEEN.name else NearbySort.RSSI.name
-                    if (state.running) service?.logMonitorEvent("nearby_sort", sortName)
+                    recordAction("nearby_sort", sortName)
                 }) { Text(if (nearbySort == NearbySort.RSSI) "RSSI ↓" else "Latest ↓") }
+                TextButton({ pendingReset = true }, enabled = !state.running && !starting && !pendingStart) {
+                    Text("Reset")
+                }
             }
         }
         if (selected == MonitorTab.NEARBY) {
@@ -256,9 +268,11 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                         { selectedDevice = it; showUsb = false })
                 }
                 if (showChannels) ChannelPanel(state, allChannels, channels, allMode,
-                    { allMode = it; if (state.running) service?.logMonitorEvent("channel_mode", if (it) "all" else "selected") },
+                    { allMode = it; recordAction("channel_mode", if (it) "all" else "selected") },
                     setChannels)
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                if (state.moveSuggested) Text("No new AP or distinct receiver position for 2 minutes. Try another spot.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 state.reportPath?.let { Text("Capture saved. Open Missions to inspect or upload it.",
                     style = MaterialTheme.typography.bodySmall) }
                 if (state.pcapTruncated) Text("PCAP recording stopped at the 200 MB limit.", color = MaterialTheme.colorScheme.error)
@@ -278,6 +292,16 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                     locationTargets = emptyList()
                     selectedName = MonitorTab.MAPPING.name
                     locationRecenter++
+                }, onContinue = { mission ->
+                    settingsRepository.activeMonitorMissionId = mission.directory.name
+                    favorites = MonitorMission.currentFavorites(mission.log)
+                    settingsRepository.monitorFavoriteMacs = favorites
+                    service?.clearFinishedMonitor()
+                    displayDevices = emptyList()
+                    selectedMissionLogPath = null
+                    selectedLocationMac = null
+                    locationTargets = emptyList()
+                    selectedName = MonitorTab.NEARBY.name
                 }, onDeleted = { path ->
                     missionRevision++
                     if (selectedMissionLogPath == path) {
@@ -288,10 +312,14 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 }, activeLogPath = state.missionLogPath.takeIf { state.running },
                 modifier = Modifier.weight(1f))
         } else if (selected == MonitorTab.MAPPING) {
-            MonitorMappingView(context, state, favorites, selectedMissionLogPath, activeReplay,
+            MonitorMappingView(context, state, favorites, settingsRepository.activeMonitorMissionId,
+                selectedMissionLogPath, activeReplay, showAllAps,
                 replayCutoffMs, followMe, selectedLocationMac,
                 { locationTargets = it }, { locationSummary = it }, locationRefresh, locationRecenter,
-                showLocationDetails,
+                showLocationDetails, onSelectAp = { mac ->
+                    selectedLocationMac = mac
+                    followMe = false
+                }, onFavoriteAp = toggleFavorite,
                 Modifier.weight(1f))
         } else {
             if (replaying && activeReplay?.snapshots?.isEmpty() == true) Text(
@@ -376,10 +404,11 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 }
             }
         }
-        if (selected == MonitorTab.MAPPING && locationTargets.isNotEmpty()) {
+        if (selected == MonitorTab.MAPPING) {
             val selectedTarget = selectedLocationMac?.takeIf { mac -> locationTargets.any { it.mac == mac } }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(showAllAps, { showAllAps = !showAllAps }, label = { Text("All AP estimates") })
                 FilterChip(selectedTarget == null, { selectedLocationMac = null },
                     label = { Text("All (${locationTargets.size})") })
                 locationTargets.forEach { target ->
@@ -393,11 +422,26 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 SniffedDevices.Kind.entries.forEach { kind ->
                     FilterChip(kind in visibleKinds, {
                         visibleKinds = if (kind in visibleKinds) visibleKinds - kind else visibleKinds + kind
-                        if (state.running && !replaying) service?.logMonitorEvent("filter", "${kind.name}:${kind in visibleKinds}")
+                        if (!replaying) recordAction("filter", "${kind.name}:${kind in visibleKinds}")
                     }, label = { Text("${kindIcon(kind)} ${kind.label}") })
                 }
             }
         }
+
+        if (pendingReset) AlertDialog(onDismissRequest = { pendingReset = false },
+            title = { Text("Start a fresh mission?") },
+            text = { Text("This closes the current mission and clears favorites. Its PDF, log and PCAP remain saved in Missions.") },
+            confirmButton = { TextButton({
+                pendingReset = false
+                recordAction("mission_closed", "")
+                settingsRepository.activeMonitorMissionId = null
+                favorites = emptySet()
+                settingsRepository.monitorFavoriteMacs = emptySet()
+                displayDevices = emptyList()
+                service?.clearFinishedMonitor()
+                missionRevision++
+            }) { Text("Reset") } },
+            dismissButton = { TextButton({ pendingReset = false }) { Text("Cancel") } })
 
     }
 }
@@ -590,7 +634,7 @@ private fun NearbyView(
     NearbySectionHeader("Unassociated", unassociated.size, showUnassociated, toggleUnassociated)
     if (showUnassociated) {
         if (unassociated.isEmpty()) Text("No probing stations without an observed AP association.")
-        unassociated.forEach { DeviceCard(it, newest, false, onFavorite, sort = sort) }
+        unassociated.forEach { DeviceCard(it, newest, false, onFavorite, sort = sort, showActivity = true) }
     }
     HorizontalDivider()
     NearbySectionHeader("Access points", aps.size, showAps, toggleAps)
@@ -630,6 +674,7 @@ private fun DeviceCard(
     stations: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>> = emptyList(),
     favorites: Set<String> = emptySet(),
     sort: NearbySort = NearbySort.RSSI,
+    showActivity: Boolean = false,
 ) {
     var expanded by rememberSaveable(row.first.mac) { mutableStateOf(false) }
     val (device, guess) = row
@@ -661,6 +706,10 @@ private fun DeviceCard(
                 Text("⚠ ${device.securityAlerts.joinToString(" · ")}",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            if (showActivity && !expanded) SniffedDevices.activity(device).takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (expanded) {
                 Text("${device.mac} · ${guess.kind.label}", style = MaterialTheme.typography.bodySmall,

@@ -34,6 +34,7 @@ import com.whyfi.app.usbmon.MonitorGeoSample
 import com.whyfi.app.usbmon.MonitorReceiverFix
 import com.whyfi.app.usbmon.MonitorLocationCandidate
 import com.whyfi.app.usbmon.MonitorLocationPolicy
+import com.whyfi.app.usbmon.MonitorMovePrompt
 import com.whyfi.app.usbmon.SniffedDevices
 import com.whyfi.app.usbmon.UsbMonitorNative
 import kotlinx.coroutines.CoroutineScope
@@ -68,6 +69,7 @@ data class MonitorUiState(
     val geoSamples: Int = 0,
     val snapshotRevisionMs: Long = 0,
     val geoStatus: String = "",
+    val moveSuggested: Boolean = false,
     val locationFixes: List<MonitorLocationCandidate> = emptyList(),
     val locationUpdatesRegistered: Boolean = false,
     val geoDiagnostics: MonitorGeoDiagnostics = MonitorGeoDiagnostics(),
@@ -605,12 +607,17 @@ class ScanForegroundService : Service() {
             _monitorState.value = MonitorUiState(status = "Native library unavailable: ${UsbMonitorNative.loadError}")
             return
         }
-        val mission = MonitorMission.create(applicationContext, recordPcap)
+        val resumedMission = MonitorMission.resume(applicationContext, settingsRepository.activeMonitorMissionId, recordPcap)
+        val mission = resumedMission ?: MonitorMission.create(applicationContext, recordPcap)
+        settingsRepository.activeMonitorMissionId = mission.directory.name
         monitorMission = mission
         MonitorMission.append(mission, "monitor_started", "adapter=${device} channels=${channels.joinToString()} pcap=${recordPcap}")
-        settingsRepository.monitorFavoriteMacs.sorted().forEach { MonitorMission.append(mission, "mission_target", it) }
+        if (resumedMission != null) MonitorMission.append(mission, "mission_resumed")
+        settingsRepository.monitorFavoriteMacs.sorted().forEach {
+            MonitorMission.append(mission, if (resumedMission == null) "mission_target" else "mission_resumed_target", it)
+        }
         _monitorState.value = MonitorUiState(running = true, status = "Starting…", device = device,
-            pcapPath = mission.pcap?.absolutePath, missionLogPath = mission.log.absolutePath)
+            pcapPath = mission.pcap?.absolutePath.takeIf { recordPcap }, missionLogPath = mission.log.absolutePath)
         updateNotification("Monitoring WiFi on ${channels.size} channels…")
         serviceScope.launch {
             val initialFixes = LocationSnapshot.lastKnownCandidates(applicationContext)
@@ -641,6 +648,10 @@ class ScanForegroundService : Service() {
             var geoSampleCount = 0
             var geoDiagnostics = MonitorGeoDiagnostics()
             val sampledMacs = mutableSetOf<String>()
+            val knownApMacs = mutableSetOf<String>()
+            var lastInsightBootMs = SystemClock.elapsedRealtime()
+            var insightAnchor: MonitorLocationCandidate? = null
+            var movePrompted = false
             val vendorTable = withContext(Dispatchers.IO) {
                 runCatching { assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
             }
@@ -746,6 +757,25 @@ class ScanForegroundService : Service() {
                 }
                 geoDiagnostics = geoDiagnostics.copy(noMatchingFix = awaitingFix.size)
                 val currentFix = MonitorLocationPolicy.select(latestFixes, SystemClock.elapsedRealtime())
+                val newAp = raw.count { it.first.isAp && knownApMacs.add(it.first.mac) } > 0
+                val currentLocation = currentFix?.fix
+                val moved = MonitorMovePrompt.moved(insightAnchor, currentLocation)
+                if (newAp || moved) {
+                    lastInsightBootMs = SystemClock.elapsedRealtime()
+                    insightAnchor = currentLocation ?: insightAnchor
+                    if (movePrompted) getSystemService(NotificationManager::class.java)
+                        ?.cancel(MONITOR_MOVE_NOTIFICATION_ID)
+                    movePrompted = false
+                } else if (insightAnchor == null && currentLocation != null) {
+                    insightAnchor = currentLocation
+                }
+                val suggestMove = !movePrompted && MonitorMovePrompt.shouldPrompt(
+                    SystemClock.elapsedRealtime(), lastInsightBootMs, insightAnchor, currentLocation)
+                if (suggestMove) {
+                    movePrompted = true
+                    showMonitorMoveSuggestion()
+                    MonitorMission.append(mission, "move_suggested", "No new AP or distinct receiver position for 2 minutes")
+                }
                 val frames = UsbMonitorNative.stats().getOrElse(UsbMonitorNative.Stat.TOTAL.ordinal) { 0 }
                 val nativeStats = UsbMonitorNative.stats()
                 val channelFrames = UsbMonitorNative.perChannel().asList().chunked(2)
@@ -757,6 +787,7 @@ class ScanForegroundService : Service() {
                         pcapTruncated = nativeStats.getOrElse(UsbMonitorNative.Stat.PCAP_TRUNCATED.ordinal) { 0 } != 0L,
                         eapolKeyFrames = nativeStats.getOrElse(UsbMonitorNative.Stat.EAPOL_KEY_FRAMES.ordinal) { 0 },
                         geoSamples = geoSampleCount,
+                        moveSuggested = movePrompted,
                         snapshotRevisionMs = lastSavedSnapshotAt,
                         locationFixes = latestFixes,
                         locationUpdatesRegistered = locationSubscription != null,
@@ -780,7 +811,8 @@ class ScanForegroundService : Service() {
             try {
                 result = withContext(Dispatchers.IO) {
                     UsbMonitorNative.run(
-                        connection.fileDescriptor, cacheDir.absolutePath, "", mission.pcap?.absolutePath.orEmpty(), channels, 400, durationMs,
+                        connection.fileDescriptor, cacheDir.absolutePath, "",
+                        mission.pcap?.absolutePath.takeIf { recordPcap }.orEmpty(), channels, 400, durationMs,
                     )
                 }
                 snapshot(forceSave = true)
@@ -788,6 +820,7 @@ class ScanForegroundService : Service() {
                 result = e.message ?: e.javaClass.simpleName
             } finally {
                 poller.cancelAndJoin()
+                (getSystemService(NotificationManager::class.java))?.cancel(MONITOR_MOVE_NOTIFICATION_ID)
                 locationSubscription?.close()
                 connection.close()
                 val finished = _monitorState.value.copy(running = false, status = if (result.isEmpty()) "Finished" else "Failed: $result")
@@ -815,6 +848,10 @@ class ScanForegroundService : Service() {
             _monitorState.update { it.copy(status = "Stopping…") }
             UsbMonitorNative.stop()
         }
+    }
+
+    fun clearFinishedMonitor() {
+        if (!_monitorState.value.running) _monitorState.value = MonitorUiState()
     }
 
     /** Records an operator decision for later mission replay; never uploads it here. */
@@ -950,6 +987,21 @@ class ScanForegroundService : Service() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(CHANNEL_ID, "Scanning", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+        getSystemService(NotificationManager::class.java)?.createNotificationChannel(
+            NotificationChannel(MONITOR_MOVE_CHANNEL_ID, "Monitor field prompts", NotificationManager.IMPORTANCE_DEFAULT))
+    }
+
+    private fun showMonitorMoveSuggestion() {
+        val openApp = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val notification = NotificationCompat.Builder(this, MONITOR_MOVE_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("Move for new WiFi observations")
+            .setContentText("No new AP or distinct receiver position for 2 minutes. Try another spot.")
+            .setContentIntent(openApp)
+            .setAutoCancel(true)
+            .build()
+        getSystemService(NotificationManager::class.java)?.notify(MONITOR_MOVE_NOTIFICATION_ID, notification)
     }
 
     override fun onDestroy() {
@@ -961,6 +1013,8 @@ class ScanForegroundService : Service() {
     companion object {
         private const val CHANNEL_ID = "whyfi_scanning"
         private const val NOTIFICATION_ID = 1001
+        private const val MONITOR_MOVE_CHANNEL_ID = "whyfi_monitor_move"
+        private const val MONITOR_MOVE_NOTIFICATION_ID = 1002
 
         /** Slice length for [interruptibleDelay] — the worst-case latency
          * between a remote stop arriving and the loop noticing. */

@@ -100,11 +100,17 @@ object MonitorLocationPolicy {
 
     /** Raw providers stay in the log; the visible route uses only the best fix at each update. */
     fun bestRoute(raw: List<MonitorReceiverFix>): List<MonitorReceiverFix> {
-        val ordered = raw.sortedBy { it.bootMs }
+        val ordered = raw.sortedBy { it.atMs }
         val latestByProvider = mutableMapOf<String, MonitorReceiverFix>()
         val route = mutableListOf<MonitorReceiverFix>()
         var anchor: MonitorLocationCandidate? = null
+        var previousBootMs = 0L
         ordered.forEach { fix ->
+            if (previousBootMs > 0 && fix.bootMs + 60_000 < previousBootMs) {
+                latestByProvider.clear()
+                anchor = null
+            }
+            previousBootMs = fix.bootMs
             latestByProvider[fix.provider] = fix
             val selected = select(latestByProvider.values.map { it.candidate() }, fix.bootMs)?.fix ?: return@forEach
             val best = latestByProvider[selected.provider] ?: return@forEach

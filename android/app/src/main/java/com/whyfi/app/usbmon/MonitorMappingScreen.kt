@@ -64,8 +64,10 @@ internal fun MonitorMappingView(
     context: Context,
     state: MonitorUiState,
     favorites: Set<String>,
+    activeMissionId: String?,
     selectedMissionLogPath: String?,
     replayMission: MonitorReplayMission?,
+    showAllAps: Boolean,
     replayCutoffMs: Long,
     followReceiver: Boolean,
     selectedMac: String?,
@@ -74,6 +76,8 @@ internal fun MonitorMappingView(
     refreshToken: Int,
     recenterToken: Int,
     showGeoDetails: Boolean,
+    onSelectAp: (String) -> Unit,
+    onFavoriteAp: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var permissionRevision by remember { mutableIntStateOf(0) }
@@ -125,7 +129,8 @@ internal fun MonitorMappingView(
         "$provider ${if (enabled) "on" else "off"}"
     }
     val replay = selectedMissionLogPath != null
-    val currentLog = state.missionLogPath?.let(::File)?.takeIf { it.isFile }
+    val currentLog = (state.missionLogPath?.let(::File)?.takeIf { it.isFile }
+        ?: MonitorMission.list(context).firstOrNull { it.directory.name == activeMissionId }?.log)
     val log = if (replay) selectedMissionLogPath?.let(::File)?.takeIf { it.isFile } else currentLog
     val logPath = log?.absolutePath
     var data by remember { mutableStateOf<MapMissionData?>(null) }
@@ -136,9 +141,15 @@ internal fun MonitorMappingView(
             data = null
         } else {
             val loaded = withContext(Dispatchers.IO) {
-                MapMissionData(log.absolutePath, MonitorMission.readSamples(log), MonitorMission.targets(log),
-                    MonitorMission.readLabels(log), MonitorMission.readReplayEvents(log),
-                    MonitorMission.readReceiverFixes(log), MonitorMission.readAccessPointSamples(log))
+                val snapshots = MonitorMission.readDeviceSnapshots(log)
+                val names = snapshots.asSequence().flatMap { SniffedDevices.parse(it.tsv).asSequence() }
+                    .map { device -> device.mac to (device.ssid.takeIf { it.isNotBlank() }
+                        ?: device.wpsName.takeIf { it.isNotBlank() } ?: "Access point") }
+                    .toMap() + MonitorMission.readLabels(log)
+                val savedFixes = MonitorMission.readReceiverFixes(log)
+                MapMissionData(log.absolutePath, MonitorMission.readSamples(log),
+                    MonitorMission.targets(log), names, MonitorMission.readReplayEvents(log),
+                    savedFixes, MonitorSampleReconciler.accessPoints(savedFixes, snapshots))
             }
             data = loaded
         }
@@ -147,17 +158,20 @@ internal fun MonitorMappingView(
         MapMissionData(it.log.absolutePath, it.samples, it.targets, it.labels, it.events,
             it.receiverFixes, it.accessPointSamples)
     } else data?.takeIf { it.path == logPath }
-    val favoriteTargets = shown?.targets.orEmpty() +
-        if (!replay && logPath == currentLog?.absolutePath) favorites else emptySet()
-    val targets = (favoriteTargets + listOfNotNull(selectedMac)).sorted()
-    val mac = selectedMac?.takeIf { it in targets }
+    val favoriteTargets = if (replay) shown?.targets.orEmpty() else favorites
     val cutoffMs = replayCutoffMs
-    val readings = remember(shown, replay, cutoffMs, selectedMac, favoriteTargets) {
+    val targets = (favoriteTargets + listOfNotNull(selectedMac)).sorted()
+    val allApTargets = if (showAllAps) shown?.accessPointSamples.orEmpty().asSequence()
+        .filter { !replay || it.atMs <= cutoffMs }.map { it.mac }.toSet() else emptySet()
+    val apTargetMacs = shown?.accessPointSamples.orEmpty().mapTo(mutableSetOf()) { it.mac }
+    val estimateTargets = (targets + allApTargets).distinct()
+    val mac = selectedMac?.takeIf { it in targets }
+    val readings = remember(shown, replay, cutoffMs, selectedMac, favoriteTargets, showAllAps) {
         val savedReadings = shown?.samples?.let { all ->
             if (replay) all.filter { it.atMs <= cutoffMs } else all
         }.orEmpty()
         val apReadings = shown?.accessPointSamples.orEmpty().filter { sample ->
-            (sample.mac in favoriteTargets || sample.mac == selectedMac) &&
+            (showAllAps || sample.mac in favoriteTargets || sample.mac == selectedMac) &&
                 (!replay || sample.atMs <= cutoffMs)
         }
         val apMacs = apReadings.mapTo(mutableSetOf()) { it.mac }
@@ -184,7 +198,7 @@ internal fun MonitorMappingView(
     val mapReceiver = if (replay) replayReceiver else MonitorLocationPolicy.displayAt(rawReceiver,
         liveAnchor ?: receiverPath.lastOrNull()?.candidate())
     val liveLabels = state.devices.associate { (device, guess) -> device.mac to MonitorMission.deviceName(device, guess) }
-    val displayLabels = targets.associateWith { target ->
+    val displayLabels = estimateTargets.associateWith { target ->
         MonitorMission.displayTarget(target,
             if (replay) shown?.labels?.get(target) else liveLabels[target] ?: shown?.labels?.get(target))
     }
@@ -193,11 +207,11 @@ internal fun MonitorMappingView(
         MonitorLocationTarget(target, displayLabels[target].orEmpty(), readingCounts[target] ?: 0)
     }
     LaunchedEffect(targetOptions) { onTargetsChanged(targetOptions) }
-    val estimateKey = "$logPath:$sampleRevision:$cutoffMs:${targets.joinToString()}"
+    val estimateKey = "$logPath:$sampleRevision:$cutoffMs:${estimateTargets.joinToString()}"
     var estimated by remember { mutableStateOf<Pair<String, Map<String, MonitorEstimate>>?>(null) }
     LaunchedEffect(estimateKey) {
         val calculated = withContext(Dispatchers.Default) {
-            targets.mapNotNull { target ->
+            estimateTargets.mapNotNull { target ->
                 MonitorLocalization.estimate(readings.filter { it.mac == target })
                     ?.let { target to it }
             }.toMap()
@@ -222,7 +236,12 @@ internal fun MonitorMappingView(
                     mapKey = logPath.orEmpty(), recenterToken = recenterToken.toString(),
                     focusToken = if (replay && followReceiver) replayCutoffMs.toString() else "",
                     followReceiver = followReceiver && mac == null,
-                    receiverPath = receiverPath)
+                    receiverPath = receiverPath, onEstimateTap = { tappedMac ->
+                        if (tappedMac in apTargetMacs) {
+                            onSelectAp(tappedMac)
+                            if (tappedMac !in favorites) onFavoriteAp(tappedMac)
+                        }
+                    })
                 if (mac != null && estimates[mac] == null && route.isEmpty()) {
                     Surface(Modifier.align(Alignment.TopCenter), tonalElevation = 4.dp) {
                         Text("No location readings for ${displayLabels[mac]} at this point.",

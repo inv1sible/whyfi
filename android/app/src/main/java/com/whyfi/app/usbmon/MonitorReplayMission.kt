@@ -36,28 +36,18 @@ internal data class MonitorReplayMission(
                     listOf("Legacy mission: role and association were not recorded"))
         }
 
-    fun favoritesAt(cutoffMs: Long): Set<String> {
-        val result = initialFavorites.toMutableSet()
-        events.filter { it.atMs <= cutoffMs && it.event == "favorite" }.forEach { event ->
-            val mac = event.details.substringBeforeLast(':')
-            if (mac.isNotBlank()) {
-                if (event.details.endsWith(":true")) result += mac
-                else if (event.details.endsWith(":false")) result -= mac
-            }
-        }
-        return result
-    }
+    fun favoritesAt(cutoffMs: Long): Set<String> =
+        MonitorMission.favoritesAfter(initialFavorites, events, cutoffMs)
 
     companion object {
         fun load(context: Context, log: File): MonitorReplayMission {
             val vendors = runCatching { context.assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
             val snapshots = MonitorMission.readDeviceSnapshots(log)
-            val names = snapshots.lastOrNull()?.let { latest ->
-                SniffedDevices.parse(latest.tsv).associate { device ->
+            val names = snapshots.asSequence().flatMap { SniffedDevices.parse(it.tsv).asSequence() }
+                .associate { device ->
                     device.mac to MonitorMission.deviceName(device,
                         SniffedDevices.guess(device) { vendors?.vendorOf(it) })
-                }
-            }.orEmpty() + MonitorMission.readLabels(log)
+                } + MonitorMission.readLabels(log)
             val receiverFixes = MonitorMission.readReceiverFixes(log)
             return MonitorReplayMission(log, MonitorMission.readSamples(log), MonitorMission.targets(log),
                 names, MonitorMission.readReplayEvents(log), snapshots,

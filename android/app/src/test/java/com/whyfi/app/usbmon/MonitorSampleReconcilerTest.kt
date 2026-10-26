@@ -52,6 +52,18 @@ class MonitorSampleReconcilerTest {
         assertEquals(6_000L, samples.single().fixAgeMs)
     }
 
+    @Test fun `resumed mission uses its current favorites rather than old pins`() {
+        val later = snapshot.copy(atMs = 1_010_000, clockMs = 210_000,
+            tsv = tsv.replace("195000", "209000"))
+        val resumed = listOf(MonitorMission.ReplayEvent(1_005_000, "mission_resumed", ""))
+        val samples = MonitorSampleReconciler.reconcile(emptyList(), listOf(delayedFix),
+            listOf(snapshot, later), setOf(mac), resumed)
+        assertEquals(listOf(995_000L), samples.map { it.atMs })
+        val pinnedAgain = resumed + MonitorMission.ReplayEvent(1_006_000, "mission_resumed_target", mac)
+        assertEquals(2, MonitorSampleReconciler.reconcile(emptyList(), listOf(delayedFix),
+            listOf(snapshot, later), setOf(mac), pinnedAgain).size)
+    }
+
     @Test fun `old uptime snapshots cannot create false AP locations`() {
         assertTrue(MonitorSampleReconciler.accessPoints(listOf(delayedFix),
             listOf(snapshot.copy(clockMs = 10_000))).isEmpty())

@@ -77,12 +77,12 @@ WiFi scan-throttle path):
     controls remain visible while Nearby cards scroll. Location and Missions
     sit next to Nearby. Tap the Favorites, Unassociated, or Access points
     heading to hide/show its cards. Favorite an AP or station, expand an AP
-    to inspect associated stations, and toggle type filters. Auto applies current observations to the RSSI/Latest sort;
+    to inspect associated stations, and toggle type filters. Unassociated cards show their observed probe activity even while collapsed. Auto applies current observations to the RSSI/Latest sort;
     Manual freezes the display until the reload icon beside Manual is tapped.
     Check category tables and counts after switching. Their Manufacturer column
     comes from the bundled OUI table; a blank match is shown as —, and camera
     labels are tentative because many cameras use generic Wi-Fi chip addresses.
-    When PCAP is enabled, Nearby's bottom statistics show its current file size.
+    When PCAP is enabled, Nearby's bottom statistics show its current file size. Stop and Start continue the same local mission, including its log, PDF and PCAP. The PDF is refreshed after each stop; earlier PCAP packets remain in the same file up to the 200 MB cap. Tap Reset in Nearby while stopped to close that mission and clear favorites before starting another; saved mission files stay in Missions. In Missions, **Continue mission** reopens a completed local mission that has not yet been uploaded and restores its last saved favorites. The backend currently treats repeat uploads of the same mission ID as unchanged, so uploaded missions remain replayable but cannot be reopened for recording. Only closed missions can be uploaded or deleted.
     Star a device while
     monitoring and allow the location prompt; approximate location is usable
     but produces a wider uncertainty region. Walk through several separated
@@ -95,10 +95,11 @@ WiFi scan-throttle path):
     accuracy, fix age, and why pinned radio readings were not geotagged.
     Pinned AP/station estimates and uncertainty circles appear on the same
     map; the favorite chips below the command bar filter All or one selected
-    device and its sampled-RSSI cones. Their labels use the known SSID/device
+    device and its sampled-RSSI cones. Location reloads saved readings and labels from the open mission even when a device is no longer being heard. The All AP estimates chip adds every AP with location-paired radio readings; tap an AP estimate marker to focus and star it. Dense maps show compact estimate markers until one is selected. Their labels use the known SSID/device
     name or vendor plus the complete MAC address. Every AP with an RSSI timestamp is also paired with the recorded phone fixes even if it was never starred. Search the AP table and tap a row to open its location readings and provisional estimate on the map. A single sighting only marks the receiver area, not the AP's proven position. The map opens around the most
     recent measurement points so a long mission does not force a distant view;
     older points remain available by panning or zooming out. Android receiver fixes are saved independently of favorites, so a mission can show the phone's route even without a device estimate. The ⌖ button follows the phone or replay position while active and keeps the chosen zoom; tap it again to stop following. Refresh is also in the bottom command bar. Channels remains available from Nearby.
+    During monitoring, a field prompt appears after two minutes without a newly observed AP or a receiver position beyond the reported location uncertainty. It asks the operator to move; poor or missing location data does not count as proven movement.
     Select a saved mission or one of its position targets in **Missions** to jump
     to Location. The target opens centered on its estimate when geotagged
     readings exist; otherwise the map says that no location was recorded.

@@ -6,6 +6,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PointF
 import android.view.ViewGroup
+import android.view.MotionEvent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -42,6 +43,7 @@ internal fun MonitorLocationMap(
     focusToken: String = "",
     followReceiver: Boolean = false,
     receiverPath: List<MonitorReceiverFix> = emptyList(),
+    onEstimateTap: (String) -> Unit = {},
 ) {
     Column(modifier.clipToBounds()) {
         key(mapKey) { AndroidView(modifier = Modifier.fillMaxWidth().weight(1f).clipToBounds(), factory = { context ->
@@ -78,7 +80,12 @@ internal fun MonitorLocationMap(
             val shouldFit = !followReceiver && (!centerState.initialized || centerState.selectedMac != selectedMac ||
                 (!centerState.fittedMeasurements && selectedSamples.isNotEmpty())
             )
-            if (followReceiver && !centerState.initialized && receiver != null) {
+            if (targetFocus != null && (!centerState.initialized || centerState.selectedMac != selectedMac)) {
+                map.controller.setCenter(targetFocus)
+                if (!centerState.initialized) map.controller.setZoom(fit?.zoom ?: 17.0)
+                map.tag = centerState.copy(initialized = true, selectedMac = selectedMac,
+                    focusedTarget = selectedMac, recenterToken = recenterToken)
+            } else if (followReceiver && !centerState.initialized && receiver != null) {
                 map.controller.setCenter(GeoPoint(receiver.fix.lat, receiver.fix.lng))
                 map.controller.setZoom(17.0)
                 map.tag = centerState.copy(initialized = true, centeredOnReceiver = true,
@@ -109,10 +116,10 @@ internal fun MonitorLocationMap(
             }
             map.overlays.clear()
             map.overlays.add(MonitorLocationOverlay(receiver, estimates, selectedMac,
-                selectedSamples.takeLast(800), labels, receiverPath.takeLast(800)))
+                selectedSamples.takeLast(800), labels, receiverPath.takeLast(800), onEstimateTap))
             map.invalidate()
         }) }
-        Text("© OpenStreetMap contributors · blue: phone · teal: estimate/uncertainty · green→orange/red: sampled RSSI cones",
+        Text("© OpenStreetMap contributors · blue: phone · teal: estimate (tap AP to star) · green→red: sampled RSSI cones",
             style = MaterialTheme.typography.bodySmall)
     }
 }
@@ -129,7 +136,21 @@ private class MonitorLocationOverlay(
     private val samples: List<MonitorGeoSample>,
     private val labels: Map<String, String>,
     private val receiverPath: List<MonitorReceiverFix>,
+    private val onEstimateTap: (String) -> Unit,
 ) : Overlay() {
+    override fun onSingleTapConfirmed(e: MotionEvent, mapView: MapView): Boolean {
+        val projection = mapView.projection
+        val nearest = estimates.minByOrNull { (_, estimate) ->
+            val point = projection.toPixels(GeoPoint(estimate.lat, estimate.lng), null)
+            kotlin.math.hypot((point.x - e.x).toDouble(), (point.y - e.y).toDouble())
+        } ?: return false
+        val point = projection.toPixels(GeoPoint(nearest.value.lat, nearest.value.lng), null)
+        val distance = kotlin.math.hypot((point.x - e.x).toDouble(), (point.y - e.y).toDouble())
+        if (distance > 36 * mapView.resources.displayMetrics.density) return false
+        onEstimateTap(nearest.key)
+        return true
+    }
+
     override fun draw(canvas: Canvas, mapView: MapView, shadow: Boolean) {
         if (shadow) return
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -178,12 +199,14 @@ private class MonitorLocationOverlay(
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 9f, paint)
         }
         estimates.forEach { (mac, estimate) ->
-            circle(estimate.lat, estimate.lng, estimate.uncertaintyM, Color.rgb(0, 125, 113))
+            if (estimates.size <= 30 || mac == selectedMac)
+                circle(estimate.lat, estimate.lng, estimate.uncertaintyM, Color.rgb(0, 125, 113))
             val p = point(estimate.lat, estimate.lng)
             paint.color = Color.WHITE
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 11f, paint)
             paint.color = Color.rgb(0, 110, 97)
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 8f, paint)
+            if (estimates.size > 30 && mac != selectedMac) return@forEach
             val fullMac = mac.uppercase()
             val name = labels[mac]?.removeSuffix(" · $fullMac")?.take(20) ?: "Device"
             paint.textSize = 27f

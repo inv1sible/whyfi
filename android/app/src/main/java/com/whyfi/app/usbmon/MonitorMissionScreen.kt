@@ -26,6 +26,7 @@ internal fun MissionView(
     settings: SettingsRepository,
     latestReportPath: String?,
     onOpenLocation: (String, String?) -> Unit,
+    onContinue: (MonitorMission.Stored) -> Unit,
     onDeleted: (String) -> Unit,
     activeLogPath: String?,
     modifier: Modifier = Modifier,
@@ -57,7 +58,8 @@ internal fun MissionView(
                         .format(Date(mission.log.lastModified().takeIf { it > 0 } ?: mission.directory.lastModified()))
                     Text(date, style = MaterialTheme.typography.titleSmall)
                     Text(id, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                    Text(if (mission.complete) "Complete · stored locally" else "Recording or report incomplete",
+                    Text(if (id == settings.activeMonitorMissionId) "Open mission · Reset in Nearby to close and upload"
+                        else if (mission.complete) "Complete · stored locally" else "Recording or report incomplete",
                         style = MaterialTheme.typography.bodySmall)
                     Text("PDF: ${fileSize(mission.report)} · Log: ${fileSize(mission.log)} · PCAP: ${mission.pcap?.let(::fileSize) ?: "not recorded"}",
                         style = MaterialTheme.typography.bodySmall)
@@ -82,6 +84,11 @@ internal fun MissionView(
                     }
                     if (mission.log.isFile) TextButton({ onOpenLocation(mission.log.absolutePath, null) }) {
                         Text("Replay on Location map")
+                    }
+                    if (mission.complete && !mission.uploaded && id != settings.activeMonitorMissionId) {
+                        TextButton({ onContinue(mission) }, enabled = activeLogPath == null) {
+                            Text("Continue mission")
+                        }
                     }
                     val targets = if (mission.log.isFile) remember(id, mission.log.lastModified()) {
                         MonitorMission.targets(mission.log).sorted()
@@ -109,7 +116,7 @@ internal fun MissionView(
                             Text("Export PCAP")
                         }
                     }
-                    if (mission.complete) {
+                    if (mission.complete && id != settings.activeMonitorMissionId) {
                         Button(onClick = {
                             uploading = id
                             scope.launch {
@@ -125,7 +132,8 @@ internal fun MissionView(
                         }
                     }
                     TextButton({ pendingDelete = mission },
-                        enabled = uploading == null && mission.log.absolutePath != activeLogPath) {
+                        enabled = uploading == null && mission.log.absolutePath != activeLogPath &&
+                            id != settings.activeMonitorMissionId) {
                         Text("Delete local mission", color = MaterialTheme.colorScheme.error)
                     }
                     messages[id]?.let { Text(it, style = MaterialTheme.typography.bodySmall) }

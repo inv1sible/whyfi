@@ -40,6 +40,18 @@ class MonitorReplayMissionTest {
         } finally { root.deleteRecursively() }
     }
 
+    @Test fun continuedMissionRestoresOnlyItsCurrentFavorites() {
+        val original = "00:11:22:33:44:55"
+        val replacement = "00:11:22:33:44:66"
+        val events = listOf(
+            MonitorMission.ReplayEvent(1000, "favorite", "$original:false"),
+            MonitorMission.ReplayEvent(2000, "mission_resumed", ""),
+            MonitorMission.ReplayEvent(2001, "mission_resumed_target", replacement),
+        )
+        assertEquals(setOf(replacement), MonitorMission.favoritesAfter(setOf(original), events, Long.MAX_VALUE))
+        assertEquals(emptySet<String>(), MonitorMission.favoritesAfter(setOf(original), events, 2000))
+    }
+
     @Test fun log_preview_skips_large_device_snapshots() {
         val log = Files.createTempFile("whyfi-mission", ".jsonl").toFile()
         try {
