@@ -164,6 +164,21 @@ object MonitorMission {
     fun currentFavorites(log: File): Set<String> =
         favoritesAfter(readInitialFavorites(log), readReplayEvents(log), Long.MAX_VALUE)
 
+    /** AP visibility is an operator choice; evidence and recorded snapshots stay unchanged. */
+    fun currentHiddenAps(log: File): Set<String> =
+        hiddenApsAfter(readReplayEvents(log))
+
+    internal fun hiddenApsAfter(events: List<ReplayEvent>): Set<String> {
+        val hidden = mutableSetOf<String>()
+        events.forEach { event ->
+            if (event.event != "ap_hidden") return@forEach
+            val mac = event.details.substringBeforeLast(':')
+            if (event.details.endsWith(":true")) hidden += mac
+            else if (event.details.endsWith(":false")) hidden -= mac
+        }
+        return hidden.filter(String::isNotBlank).toSet()
+    }
+
     internal fun favoritesAfter(initial: Set<String>, events: List<ReplayEvent>, cutoffMs: Long): Set<String> {
         val selected = initial.toMutableSet()
         events.filter { it.atMs <= cutoffMs }.forEach { event ->

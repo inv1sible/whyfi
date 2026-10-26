@@ -85,7 +85,7 @@ internal fun MissionView(
                     if (mission.log.isFile) TextButton({ onOpenLocation(mission.log.absolutePath, null) }) {
                         Text("Replay on Location map")
                     }
-                    if (mission.complete && !mission.uploaded && id != settings.activeMonitorMissionId) {
+                    if (mission.log.isFile && !mission.uploaded && id != settings.activeMonitorMissionId) {
                         TextButton({ onContinue(mission) }, enabled = activeLogPath == null) {
                             Text("Continue mission")
                         }

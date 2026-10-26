@@ -64,6 +64,7 @@ internal fun MonitorMappingView(
     context: Context,
     state: MonitorUiState,
     favorites: Set<String>,
+    hiddenAps: Set<String>,
     activeMissionId: String?,
     selectedMissionLogPath: String?,
     replayMission: MonitorReplayMission?,
@@ -158,20 +159,22 @@ internal fun MonitorMappingView(
         MapMissionData(it.log.absolutePath, it.samples, it.targets, it.labels, it.events,
             it.receiverFixes, it.accessPointSamples)
     } else data?.takeIf { it.path == logPath }
-    val favoriteTargets = if (replay) shown?.targets.orEmpty() else favorites
+    val favoriteTargets = (if (replay) shown?.targets.orEmpty() else favorites) - hiddenAps
     val cutoffMs = replayCutoffMs
     val targets = (favoriteTargets + listOfNotNull(selectedMac)).sorted()
     val allApTargets = if (showAllAps) shown?.accessPointSamples.orEmpty().asSequence()
-        .filter { !replay || it.atMs <= cutoffMs }.map { it.mac }.toSet() else emptySet()
+        .filter { (!replay || it.atMs <= cutoffMs) && it.mac !in hiddenAps }
+        .map { it.mac }.toSet() else emptySet()
     val apTargetMacs = shown?.accessPointSamples.orEmpty().mapTo(mutableSetOf()) { it.mac }
     val estimateTargets = (targets + allApTargets).distinct()
     val mac = selectedMac?.takeIf { it in targets }
-    val readings = remember(shown, replay, cutoffMs, selectedMac, favoriteTargets, showAllAps) {
+    val readings = remember(shown, replay, cutoffMs, selectedMac, favoriteTargets, showAllAps, hiddenAps) {
         val savedReadings = shown?.samples?.let { all ->
-            if (replay) all.filter { it.atMs <= cutoffMs } else all
+            all.filter { (!replay || it.atMs <= cutoffMs) && (it.mac !in hiddenAps || it.mac == selectedMac) }
         }.orEmpty()
         val apReadings = shown?.accessPointSamples.orEmpty().filter { sample ->
             (showAllAps || sample.mac in favoriteTargets || sample.mac == selectedMac) &&
+                (sample.mac !in hiddenAps || sample.mac == selectedMac) &&
                 (!replay || sample.atMs <= cutoffMs)
         }
         val apMacs = apReadings.mapTo(mutableSetOf()) { it.mac }

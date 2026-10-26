@@ -52,6 +52,18 @@ class MonitorReplayMissionTest {
         assertEquals(emptySet<String>(), MonitorMission.favoritesAfter(setOf(original), events, 2000))
     }
 
+    @Test fun hiddenApsRemainMissionScopedAndCanBeRestored() {
+        val first = "00:11:22:33:44:55"
+        val second = "00:11:22:33:44:66"
+        val events = listOf(
+            MonitorMission.ReplayEvent(1000, "ap_hidden", "$first:true"),
+            MonitorMission.ReplayEvent(2000, "ap_hidden", "$second:true"),
+            MonitorMission.ReplayEvent(3000, "ap_hidden", "$first:false"),
+        )
+        assertEquals(setOf(second), MonitorMission.hiddenApsAfter(events))
+        assertEquals(emptySet<String>(), MonitorMission.hiddenApsAfter(emptyList()))
+    }
+
     @Test fun log_preview_skips_large_device_snapshots() {
         val log = Files.createTempFile("whyfi-mission", ".jsonl").toFile()
         try {

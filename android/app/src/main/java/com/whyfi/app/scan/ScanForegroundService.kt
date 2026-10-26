@@ -616,6 +616,9 @@ class ScanForegroundService : Service() {
         settingsRepository.monitorFavoriteMacs.sorted().forEach {
             MonitorMission.append(mission, if (resumedMission == null) "mission_target" else "mission_resumed_target", it)
         }
+        settingsRepository.monitorHiddenApMacs.sorted().forEach {
+            MonitorMission.append(mission, "ap_hidden", "$it:true")
+        }
         _monitorState.value = MonitorUiState(running = true, status = "Starting…", device = device,
             pcapPath = mission.pcap?.absolutePath.takeIf { recordPcap }, missionLogPath = mission.log.absolutePath)
         updateNotification("Monitoring WiFi on ${channels.size} channels…")

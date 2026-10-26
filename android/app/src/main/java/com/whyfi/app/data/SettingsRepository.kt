@@ -121,6 +121,14 @@ class SettingsRepository(context: Context) {
         get() = prefs.getStringSet(KEY_MONITOR_FAVORITES, emptySet()).orEmpty().toSet()
         set(value) = prefs.edit { putStringSet(KEY_MONITOR_FAVORITES, value) }
 
+    var monitorHiddenApMacs: Set<String>
+        get() = prefs.getStringSet("monitor_hidden_ap_macs", emptySet()).orEmpty().toSet()
+        set(value) = prefs.edit { putStringSet("monitor_hidden_ap_macs", value) }
+
+    var monitorRecordPcap: Boolean
+        get() = prefs.getBoolean("monitor_record_pcap", true)
+        set(value) = prefs.edit { putBoolean("monitor_record_pcap", value) }
+
     var activeMonitorMissionId: String?
         get() = prefs.getString("active_monitor_mission_id", null)
         set(value) = prefs.edit { putString("active_monitor_mission_id", value) }
