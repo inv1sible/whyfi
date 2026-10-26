@@ -38,6 +38,7 @@ import com.whyfi.app.data.ThemePreference
 import com.whyfi.app.diagnostics.CrashLogReader
 import com.whyfi.app.diagnostics.CrashReportSender
 import com.whyfi.app.usbmon.UsbMonitorTestDialog
+import com.whyfi.app.usbmon.MonitorNoiseFilter
 import com.whyfi.app.permissions.PermissionHelper
 import com.whyfi.app.scan.ScanForegroundService
 import com.journeyapps.barcodescanner.ScanContract
@@ -71,6 +72,8 @@ fun SettingsScreen(
     var stationaryInterval by remember { mutableStateOf(settingsRepository.stationaryIntervalSeconds.toString()) }
     var walkingInterval by remember { mutableStateOf(settingsRepository.walkingIntervalSeconds.toString()) }
     var drivingInterval by remember { mutableStateOf(settingsRepository.drivingIntervalSeconds.toString()) }
+    var noisePatterns by remember { mutableStateOf(settingsRepository.monitorNoisePatterns) }
+    var noiseMessage by remember { mutableStateOf<String?>(null) }
     val outboxUsage = rememberOutboxUsage(quotaMb.toIntOrNull() ?: settingsRepository.outboxQuotaMb)
 
     val context = LocalContext.current
@@ -86,6 +89,10 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Settings", style = MaterialTheme.typography.headlineSmall)
+        SelectionContainer {
+            Text("Installed app: ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
+                style = MaterialTheme.typography.bodyMedium)
+        }
 
         // -- Appearance --
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -96,6 +103,28 @@ fun SettingsScreen(
                     ThemeOption("Light", ThemePreference.LIGHT, themePreference, onThemePreferenceChange)
                     ThemeOption("Dark", ThemePreference.DARK, themePreference, onThemePreferenceChange)
                 }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Monitor noise filter", style = MaterialTheme.typography.titleLarge)
+                Text("Nearby's Hide noise button matches these case-insensitive patterns against device names, SSIDs, vendors, MACs and activity. One pattern per line. Favorites always remain visible. Raw captures and reports are unchanged.",
+                    style = MaterialTheme.typography.bodySmall)
+                val validation = MonitorNoiseFilter.compile(noisePatterns)
+                OutlinedTextField(value = noisePatterns, onValueChange = {
+                    noisePatterns = it
+                    noiseMessage = null
+                }, label = { Text("Noise patterns (e.g. unknown device)") },
+                    minLines = 2, maxLines = 6, isError = validation.error != null,
+                    modifier = Modifier.fillMaxWidth())
+                validation.error?.let { Text(it, color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall) }
+                Button(onClick = {
+                    settingsRepository.monitorNoisePatterns = noisePatterns
+                    noiseMessage = "Noise patterns saved."
+                }, enabled = validation.error == null) { Text("Save noise patterns") }
+                noiseMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
         }
 

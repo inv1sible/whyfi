@@ -43,8 +43,13 @@ export function DownloadPage() {
   useEffect(() => {
     loadLatestRelease();
     pollBuildStatus();
+    const refreshOnVisible = () => {
+      if (document.visibilityState === "visible") loadLatestRelease();
+    };
+    document.addEventListener("visibilitychange", refreshOnVisible);
     return () => {
       if (pollTimeoutRef.current) window.clearTimeout(pollTimeoutRef.current);
+      document.removeEventListener("visibilitychange", refreshOnVisible);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -69,13 +74,15 @@ export function DownloadPage() {
   }
 
   async function handleDownloadClick() {
-    if (!release?.download_url) return;
     setDownloadError(null);
     setDownloadReady(false);
     setDownloadProgress(null);
     setIsDownloading(true);
     try {
-      const blob = await downloadWithProgress(release.download_url, (received, total) => {
+      const latest = await api.latestRelease();
+      setRelease(latest);
+      if (!latest.download_url) throw new Error("The latest APK is not available yet.");
+      const blob = await downloadWithProgress(latest.download_url, (received, total) => {
         setDownloadProgress(total > 0 ? received / total : null);
       });
 
@@ -83,16 +90,16 @@ export function DownloadPage() {
       // network, a reverse proxy mishandling a large binary response) —
       // without this check Android's installer just fails with an
       // unhelpful "app not installed" and no indication why. See MEMORY.md.
-      if (release.apk_size != null && blob.size !== release.apk_size) {
+      if (latest.apk_size != null && blob.size !== latest.apk_size) {
         throw new Error(
-          `Downloaded ${blob.size} bytes but expected ${release.apk_size} — the transfer was likely corrupted. Try again.`,
+          `Downloaded ${blob.size} bytes but expected ${latest.apk_size} — the transfer was likely corrupted. Try again.`,
         );
       }
 
       const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = objectUrl;
-      link.download = `whyfi-${release.version_name}.apk`;
+      link.download = `whyfi-${latest.version_name}.apk`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);

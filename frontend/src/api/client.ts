@@ -114,8 +114,8 @@ function getCsrfToken(): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-async function get<T>(path: string): Promise<T> {
-  const response = await fetch(`${baseUrl()}${path}`, { credentials: "same-origin" });
+async function get<T>(path: string, cache: RequestCache = "default"): Promise<T> {
+  const response = await fetch(`${baseUrl()}${path}`, { credentials: "same-origin", cache });
   if (response.status === 401) throw new UnauthorizedError(`Not logged in for ${path}`);
   if (!response.ok) throw new ApiError(response.status, await parseErrorBody(response), path);
   notifyLastUpdated();
@@ -507,7 +507,7 @@ export const api = {
         `${opts.sessionLimit ? `&session_limit=${opts.sessionLimit}` : opts.since ? `&since=${opts.since}` : ""}`,
     ),
 
-  latestRelease: () => get<AppRelease>("/app/latest/"),
+  latestRelease: () => get<AppRelease>("/app/latest/", "no-store"),
 
   triggerAndroidBuild: (versionName?: string) =>
     post<AppRelease>("/android-build/trigger/", versionName ? { version_name: versionName } : {}),

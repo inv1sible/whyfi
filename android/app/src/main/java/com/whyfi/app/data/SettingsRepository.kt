@@ -129,6 +129,14 @@ class SettingsRepository(context: Context) {
         get() = prefs.getBoolean("monitor_record_pcap", true)
         set(value) = prefs.edit { putBoolean("monitor_record_pcap", value) }
 
+    var monitorNoisePatterns: String
+        get() = prefs.getString("monitor_noise_patterns", "unknown device") ?: "unknown device"
+        set(value) = prefs.edit { putString("monitor_noise_patterns", value) }
+
+    var monitorHideNoise: Boolean
+        get() = prefs.getBoolean("monitor_hide_noise", false)
+        set(value) = prefs.edit { putBoolean("monitor_hide_noise", value) }
+
     var activeMonitorMissionId: String?
         get() = prefs.getString("active_monitor_mission_id", null)
         set(value) = prefs.edit { putString("active_monitor_mission_id", value) }

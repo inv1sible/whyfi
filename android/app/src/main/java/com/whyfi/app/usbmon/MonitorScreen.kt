@@ -77,6 +77,8 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     var favorites by remember { mutableStateOf(settingsRepository.monitorFavoriteMacs) }
     var hiddenAps by remember { mutableStateOf(settingsRepository.monitorHiddenApMacs) }
     var showHiddenAps by rememberSaveable { mutableStateOf(false) }
+    var hideNoise by remember { mutableStateOf(settingsRepository.monitorHideNoise) }
+    val noisePatterns = remember { MonitorNoiseFilter.compile(settingsRepository.monitorNoisePatterns).patterns }
     var visibleKinds by remember { mutableStateOf(SniffedDevices.Kind.entries.toSet()) }
     var autoUpdate by rememberSaveable { mutableStateOf(true) }
     var sortName by rememberSaveable { mutableStateOf(NearbySort.RSSI.name) }
@@ -146,6 +148,10 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     val tabs = MonitorTab.entries.toList()
     val nearbyDevices = displayDevices.filter {
         it.second.kind in visibleKinds || (showHiddenAps && it.first.isAp && it.first.mac in hiddenAps)
+    }
+    val noiseCount = nearbyDevices.count { row ->
+        row.first.mac !in favorites && row.first.mac !in hiddenAps &&
+            MonitorNoiseFilter.matches(row, noisePatterns)
     }
     val categoryDevices = (if (replaying) replayDevices else displayDevices)
         .filter { it.second.kind in visibleKinds && (replaying || !it.first.isAp || it.first.mac !in hiddenAps) }
@@ -317,7 +323,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                     style = MaterialTheme.typography.bodySmall) }
                 if (state.pcapTruncated) Text("PCAP recording stopped at the 200 MB limit.", color = MaterialTheme.colorScheme.error)
                 NearbyView(nearbyDevices, favorites, toggleFavorite, hiddenAps, toggleHiddenAp,
-                    showHiddenAps, nearbySort,
+                    showHiddenAps, hideNoise, noisePatterns, nearbySort,
                     showFavoriteCards, { showFavoriteCards = !showFavoriteCards },
                     showUnassociatedCards, { showUnassociatedCards = !showUnassociatedCards },
                     showApCards, { showApCards = !showApCards })
@@ -460,6 +466,11 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (selected == MonitorTab.NEARBY) FilterChip(showHiddenAps,
                     { showHiddenAps = !showHiddenAps }, label = { Text("Hidden APs (${hiddenAps.size})") })
+                if (selected == MonitorTab.NEARBY) FilterChip(hideNoise, {
+                    hideNoise = !hideNoise
+                    settingsRepository.monitorHideNoise = hideNoise
+                    recordAction("noise_filter", if (hideNoise) "on" else "off")
+                }, label = { Text("Hide noise ($noiseCount)") })
                 SniffedDevices.Kind.entries.forEach { kind ->
                     FilterChip(kind in visibleKinds, {
                         visibleKinds = if (kind in visibleKinds) visibleKinds - kind else visibleKinds + kind
@@ -674,6 +685,8 @@ private fun NearbyView(
     hiddenAps: Set<String>,
     onHideAp: (String) -> Unit,
     showHiddenAps: Boolean,
+    hideNoise: Boolean,
+    noisePatterns: List<Regex>,
     sort: NearbySort,
     showFavorites: Boolean,
     toggleFavorites: () -> Unit,
@@ -682,9 +695,9 @@ private fun NearbyView(
     showAps: Boolean,
     toggleAps: () -> Unit,
 ) {
-    val newest = devices.maxOfOrNull { it.first.lastMs } ?: 0
     val order = nearbyOrder(sort)
     if (showHiddenAps) {
+        val newest = devices.maxOfOrNull { it.first.lastMs } ?: 0
         val hiddenRows = devices.filter { it.first.isAp && it.first.mac in hiddenAps }.sortedWith(order)
         Text("Hidden APs (${hiddenAps.size})", style = MaterialTheme.typography.titleMedium)
         if (hiddenAps.isEmpty()) Text("No APs hidden in this mission.")
@@ -700,13 +713,17 @@ private fun NearbyView(
         }
         return
     }
-    val pinned = devices.filter { it.first.mac in favorites && it.first.mac !in hiddenAps }.sortedWith(order)
-    val unassociated = devices.filter {
+    val visibleDevices = if (hideNoise) devices.filterNot { row ->
+        row.first.mac !in favorites && MonitorNoiseFilter.matches(row, noisePatterns)
+    } else devices
+    val newest = visibleDevices.maxOfOrNull { it.first.lastMs } ?: 0
+    val pinned = visibleDevices.filter { it.first.mac in favorites && it.first.mac !in hiddenAps }.sortedWith(order)
+    val unassociated = visibleDevices.filter {
         it.first.mac !in favorites && it.first.mac !in hiddenAps && it.first.isClient &&
             it.first.probeRequests > 0 && it.first.bssids.isEmpty()
     }.sortedWith(order)
-    val aps = devices.filter { it.first.mac !in favorites && it.first.isAp && it.first.mac !in hiddenAps }.sortedWith(order)
-    val byBssid = devices.filter { it.first.isClient }.flatMap { row -> row.first.bssids.map { it to row } }.groupBy(
+    val aps = visibleDevices.filter { it.first.mac !in favorites && it.first.isAp && it.first.mac !in hiddenAps }.sortedWith(order)
+    val byBssid = visibleDevices.filter { it.first.isClient }.flatMap { row -> row.first.bssids.map { it to row } }.groupBy(
         { it.first }, { it.second },
     )
     if (pinned.isNotEmpty()) {
