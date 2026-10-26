@@ -40,6 +40,28 @@ class MonitorReplayMissionTest {
         } finally { root.deleteRecursively() }
     }
 
+    @Test fun continuingCreatesNewUploadIdentityAndPreservesSourceEvidence() {
+        val root = Files.createTempDirectory("whyfi-missions").toFile()
+        try {
+            val directory = File(root, UUID.randomUUID().toString()).apply { mkdirs() }
+            val log = File(directory, "mission.jsonl").apply { writeText("{\"event\":\"monitor_started\"}\n") }
+            val pcap = File(directory, "capture.pcap").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+            val report = File(directory, "report.pdf").apply { writeText("old report") }
+            File(directory, ".uploaded").writeText("uploaded")
+            val source = MonitorMission.Stored(directory, report, log, pcap, true)
+
+            val continued = MonitorMission.copyAsNewIn(root, source)
+
+            assertFalse(continued.directory == directory)
+            assertEquals(pcap.readBytes().toList(), continued.pcap?.readBytes()?.toList())
+            assertEquals(log.readText(), continued.log.readText())
+            assertFalse(continued.report.exists())
+            assertFalse(File(continued.directory, ".uploaded").exists())
+            assertEquals("old report", report.readText())
+            assertEquals("{\"event\":\"monitor_started\"}\n", log.readText())
+        } finally { root.deleteRecursively() }
+    }
+
     @Test fun continuedMissionRestoresOnlyItsCurrentFavorites() {
         val original = "00:11:22:33:44:55"
         val replacement = "00:11:22:33:44:66"

@@ -22,7 +22,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.whyfi.app.data.SettingsRepository
-import com.whyfi.app.BuildConfig
 import com.whyfi.app.scan.MonitorUiState
 import com.whyfi.app.scan.LocationSnapshot
 import com.whyfi.app.scan.ScanForegroundService
@@ -105,7 +104,8 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     var locationSummary by remember { mutableStateOf("") }
     var missionRevision by remember { mutableIntStateOf(0) }
     var pendingReset by remember { mutableStateOf(false) }
-    var showMissionPicker by remember { mutableStateOf(false) }
+    var continuingMissionId by remember { mutableStateOf<String?>(null) }
+    var continueError by remember { mutableStateOf<String?>(null) }
     var showAllAps by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(selectedMissionLogPath) {
         replayMission = null
@@ -190,21 +190,38 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
         recordAction("ap_hidden", "$key:false")
     }
     val continueMission: (MonitorMission.Stored) -> Unit = { mission ->
-        settingsRepository.activeMonitorMissionId = mission.directory.name
-        favorites = MonitorMission.currentFavorites(mission.log)
-        settingsRepository.monitorFavoriteMacs = favorites
-        hiddenAps = MonitorMission.currentHiddenAps(mission.log)
-        settingsRepository.monitorHiddenApMacs = hiddenAps
-        showHiddenAps = false
-        service?.clearFinishedMonitor()
-        displayDevices = emptyList()
-        selectedMissionLogPath = null
-        selectedLocationMac = null
-        locationTargets = emptyList()
-        selectedName = MonitorTab.NEARBY.name
-        showMissionPicker = false
+        if (!state.running && !starting && continuingMissionId == null) {
+            continuingMissionId = mission.directory.name
+            continueError = null
+            scope.launch {
+                try {
+                    val (continued, selectedFavorites, selectedHidden) = withContext(Dispatchers.IO) {
+                        val copied = MonitorMission.continueAsNew(context, mission)
+                        Triple(copied, MonitorMission.currentFavorites(copied.log), MonitorMission.currentHiddenAps(copied.log))
+                    }
+                    settingsRepository.activeMonitorMissionId = continued.directory.name
+                    favorites = selectedFavorites
+                    settingsRepository.monitorFavoriteMacs = selectedFavorites
+                    hiddenAps = selectedHidden
+                    settingsRepository.monitorHiddenApMacs = selectedHidden
+                    showHiddenAps = false
+                    service?.clearFinishedMonitor()
+                    displayDevices = emptyList()
+                    selectedMissionLogPath = null
+                    selectedLocationMac = null
+                    locationTargets = emptyList()
+                    missionRevision++
+                    selectedName = MonitorTab.NEARBY.name
+                } catch (e: Exception) {
+                    continueError = "Could not continue mission: ${e.message ?: e.javaClass.simpleName}"
+                } finally {
+                    continuingMissionId = null
+                }
+            }
+        }
     }
     val beginMonitor: () -> Unit = start@{
+        if (continuingMissionId != null) return@start
         val device = selectedDevice ?: run { showUsb = true; return@start }
         val currentService = service ?: return@start
         val selectedChannels = if (allMode) allChannels else channels
@@ -274,18 +291,6 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             }
         }
         if (selected == MonitorTab.NEARBY) {
-            Surface(Modifier.fillMaxWidth(), tonalElevation = 2.dp) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    val activeId = settingsRepository.activeMonitorMissionId
-                    Text("${if (activeId == null) "New mission" else "Mission ${activeId.take(8)}"} · v${BuildConfig.VERSION_CODE}",
-                        modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    TextButton({ showMissionPicker = true }, enabled = !state.running && !starting && !pendingStart) {
-                        Text("Open mission")
-                    }
-                }
-            }
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Updates", style = MaterialTheme.typography.bodySmall)
                 TextButton({
@@ -345,7 +350,8 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                     locationTargets = emptyList()
                     selectedName = MonitorTab.MAPPING.name
                     locationRecenter++
-                }, onContinue = continueMission, onDeleted = { path ->
+                }, onContinue = continueMission, continuingMissionId = continuingMissionId,
+                continueError = continueError, onDeleted = { path ->
                     missionRevision++
                     if (selectedMissionLogPath == path) {
                         selectedMissionLogPath = null
@@ -432,11 +438,11 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                             if (state.running) Button({ service?.stopMonitor() },
                                 enabled = state.status != "Starting…" && state.status != "Stopping…" &&
                                     state.status != "Saving report…") { Text("Stop") }
-                            else Button(startMonitor, enabled = !starting && selectedDevice != null) {
+                            else Button(startMonitor, enabled = !starting && continuingMissionId == null && selectedDevice != null) {
                                 Text(if (starting) "Starting…" else "Start")
                             }
                             if (selected == MonitorTab.NEARBY) TextButton({ pendingReset = true },
-                                enabled = !state.running && !starting && !pendingStart) { Text("Reset") }
+                                enabled = !state.running && !starting && !pendingStart && continuingMissionId == null) { Text("Reset") }
                             Checkbox(recordPcap, {
                                 recordPcap = it
                                 settingsRepository.monitorRecordPcap = it
@@ -507,28 +513,6 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 missionRevision++
             }) { Text("Reset") } },
             dismissButton = { TextButton({ pendingReset = false }) { Text("Cancel") } })
-
-        if (showMissionPicker) {
-            val candidates = MonitorMission.list(context).filter {
-                it.log.isFile && !it.uploaded && it.directory.name != settingsRepository.activeMonitorMissionId
-            }
-            AlertDialog(onDismissRequest = { showMissionPicker = false },
-                title = { Text("Continue a saved mission") },
-                text = {
-                    Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
-                        if (candidates.isEmpty()) Text("No other local, unuploaded mission is available. Start continues the current mission.")
-                        candidates.forEach { mission ->
-                            val date = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
-                                .format(Date(mission.log.lastModified()))
-                            TextButton({ continueMission(mission) }, modifier = Modifier.fillMaxWidth()) {
-                                Text("$date · ${mission.directory.name.take(8)}" +
-                                    if (mission.pcap != null) " · PCAP" else " · no PCAP")
-                            }
-                        }
-                    }
-                },
-                confirmButton = { TextButton({ showMissionPicker = false }) { Text("Close") } })
-        }
 
     }
 }

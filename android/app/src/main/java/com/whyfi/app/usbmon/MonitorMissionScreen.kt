@@ -27,6 +27,8 @@ internal fun MissionView(
     latestReportPath: String?,
     onOpenLocation: (String, String?) -> Unit,
     onContinue: (MonitorMission.Stored) -> Unit,
+    continuingMissionId: String?,
+    continueError: String?,
     onDeleted: (String) -> Unit,
     activeLogPath: String?,
     modifier: Modifier = Modifier,
@@ -47,8 +49,9 @@ internal fun MissionView(
             Spacer(Modifier.weight(1f))
             TextButton({ missions = MonitorMission.list(context) }) { Text("Refresh") }
         }
-        Text("Open a local mission to continue capturing in Nearby. Start/Stop keeps its log and PCAP; Reset starts a new mission. Replay opens the saved timeline.",
+        Text("Continue mission copies its log and PCAP to a new mission ID, then opens Nearby. The next capture creates a new PDF. Start/Stop stays in that mission until Reset.",
             style = MaterialTheme.typography.bodySmall)
+        continueError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (missions.isEmpty()) Text("No monitor missions saved yet.")
         missions.forEach { mission ->
             val id = mission.directory.name
@@ -85,9 +88,10 @@ internal fun MissionView(
                     if (mission.log.isFile) TextButton({ onOpenLocation(mission.log.absolutePath, null) }) {
                         Text("Replay on Location map")
                     }
-                    if (mission.log.isFile && !mission.uploaded) {
-                        Button({ onContinue(mission) }, enabled = activeLogPath == null) {
-                            Text(if (id == settings.activeMonitorMissionId) "Open in Nearby" else "Open for capture")
+                    if (mission.log.isFile) {
+                        Button({ onContinue(mission) }, enabled = activeLogPath == null &&
+                            continuingMissionId == null && uploading == null) {
+                            Text(if (continuingMissionId == id) "Continuing…" else "Continue mission")
                         }
                     }
                     val targets = if (mission.log.isFile) remember(id, mission.log.lastModified()) {

@@ -15,7 +15,7 @@ import java.util.Date
 import java.util.UUID
 import org.json.JSONObject
 
-/** One immutable local mission directory; a later capture always gets another. */
+/** Local mission evidence; capture passes append until the operator resets or branches. */
 object MonitorMission {
     private val logLock = Any()
     data class Files(val directory: File, val pcap: File?, val report: File, val log: File)
@@ -73,6 +73,38 @@ object MonitorMission {
     fun create(context: Context, recordPcap: Boolean): Files {
         val directory = File(context.getExternalFilesDir(null), "monitor-missions/${UUID.randomUUID()}").apply { mkdirs() }
         return Files(directory, if (recordPcap) File(directory, "capture.pcap") else null, File(directory, "report.pdf"), File(directory, "mission.jsonl"))
+    }
+
+    /** Copy recorded evidence into a new upload identity; the source remains untouched. */
+    fun continueAsNew(context: Context, source: Stored): Files {
+        val files = copyAsNewIn(File(context.getExternalFilesDir(null), "monitor-missions"), source)
+        try {
+            append(files, "mission_continued_from", source.directory.name)
+            return files
+        } catch (error: Exception) {
+            files.directory.deleteRecursively()
+            throw error
+        }
+    }
+
+    internal fun copyAsNewIn(root: File, source: Stored): Files {
+        val sourceDirectory = source.directory.canonicalFile
+        require(sourceDirectory.parentFile == root.canonicalFile &&
+            runCatching { UUID.fromString(sourceDirectory.name) }.isSuccess &&
+            source.log.canonicalFile == File(sourceDirectory, "mission.jsonl") && source.log.isFile &&
+            (source.pcap == null || source.pcap.canonicalFile == File(sourceDirectory, "capture.pcap"))) {
+            "Invalid source mission"
+        }
+        val directory = File(root, UUID.randomUUID().toString())
+        check(directory.mkdir()) { "Could not create continued mission" }
+        try {
+            val log = source.log.copyTo(File(directory, "mission.jsonl"))
+            val pcap = source.pcap?.takeIf { it.isFile }?.copyTo(File(directory, "capture.pcap"))
+            return Files(directory, pcap, File(directory, "report.pdf"), log)
+        } catch (error: Exception) {
+            directory.deleteRecursively()
+            throw error
+        }
     }
 
     /** Resume only the app's own UUID mission directory; never overwrite a completed upload. */
