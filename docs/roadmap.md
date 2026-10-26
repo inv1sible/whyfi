@@ -77,6 +77,14 @@ increments should be independently verifiable:
    The exact tests and supported adapters are still to be selected; the
    current Monitor implementation does not transmit frames.
 
+   Later WPS assessment: first decode advertised WPS methods and captured
+   EAP-WSC exchanges from mission evidence, and report what was actually
+   observed. WPS advertisement or an unlocked flag alone is not proof of a
+   vulnerable PIN method. Active PIN validation or other WPS attacks require
+   a separately scoped test and verified USB transmit/receive behavior; the
+   current Android monitor path is receive-only. See
+   [monitor operations plan](monitor-operations-plan.md).
+
 ## AP localization track (see `ap-localization-design.md`)
 
 Locating physical access points from measurements taken at known positions,
