@@ -47,7 +47,7 @@ internal fun MissionView(
             Spacer(Modifier.weight(1f))
             TextButton({ missions = MonitorMission.list(context) }) { Text("Refresh") }
         }
-        Text("Each session remains in this app's monitor-missions folder after a new capture or upload. PDF and log are always saved; PCAP is saved when recording was enabled.",
+        Text("Open a local mission to continue capturing in Nearby. Start/Stop keeps its log and PCAP; Reset starts a new mission. Replay opens the saved timeline.",
             style = MaterialTheme.typography.bodySmall)
         if (missions.isEmpty()) Text("No monitor missions saved yet.")
         missions.forEach { mission ->
@@ -85,9 +85,9 @@ internal fun MissionView(
                     if (mission.log.isFile) TextButton({ onOpenLocation(mission.log.absolutePath, null) }) {
                         Text("Replay on Location map")
                     }
-                    if (mission.log.isFile && !mission.uploaded && id != settings.activeMonitorMissionId) {
-                        TextButton({ onContinue(mission) }, enabled = activeLogPath == null) {
-                            Text("Continue mission")
+                    if (mission.log.isFile && !mission.uploaded) {
+                        Button({ onContinue(mission) }, enabled = activeLogPath == null) {
+                            Text(if (id == settings.activeMonitorMissionId) "Open in Nearby" else "Open for capture")
                         }
                     }
                     val targets = if (mission.log.isFile) remember(id, mission.log.lastModified()) {

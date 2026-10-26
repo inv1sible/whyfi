@@ -147,14 +147,14 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     val selected = MonitorTab.entries.firstOrNull { it.name == selectedName } ?: MonitorTab.NEARBY
     val tabs = MonitorTab.entries.toList()
     val nearbyDevices = displayDevices.filter {
-        it.second.kind in visibleKinds || (showHiddenAps && it.first.isAp && it.first.mac in hiddenAps)
+        it.second.kind in visibleKinds || (showHiddenAps && MonitorApVisibility.isHidden(it.first, hiddenAps))
     }
     val noiseCount = nearbyDevices.count { row ->
-        row.first.mac !in favorites && row.first.mac !in hiddenAps &&
+        row.first.mac !in favorites && !MonitorApVisibility.isHidden(row.first, hiddenAps) &&
             MonitorNoiseFilter.matches(row, noisePatterns)
     }
     val categoryDevices = (if (replaying) replayDevices else displayDevices)
-        .filter { it.second.kind in visibleKinds && (replaying || !it.first.isAp || it.first.mac !in hiddenAps) }
+        .filter { it.second.kind in visibleKinds && (replaying || !MonitorApVisibility.isHidden(it.first, hiddenAps)) }
     val newDevices = state.devices.count { incoming -> displayDevices.none { it.first.mac == incoming.first.mac } }
 
     val recordAction: (String, String) -> Unit = { event, details ->
@@ -174,11 +174,20 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
         settingsRepository.monitorFavoriteMacs = favorites
         recordAction("favorite", "$mac:${mac in favorites}")
     }
-    val toggleHiddenAp: (String) -> Unit = { mac ->
-        hiddenAps = if (mac in hiddenAps) hiddenAps - mac else hiddenAps + mac
+    val toggleHiddenAp: (SniffedDevices.Device) -> Unit = { device ->
+        val key = MonitorApVisibility.key(device)
+        val legacyHidden = device.mac in hiddenAps && key != device.mac
+        hiddenAps = if (MonitorApVisibility.isHidden(device, hiddenAps)) hiddenAps - key - device.mac
+            else hiddenAps + key
         settingsRepository.monitorHiddenApMacs = hiddenAps
-        if (mac in hiddenAps && selectedLocationMac == mac) selectedLocationMac = null
-        recordAction("ap_hidden", "$mac:${mac in hiddenAps}")
+        if (MonitorApVisibility.isHidden(device, hiddenAps) && selectedLocationMac == device.mac) selectedLocationMac = null
+        if (legacyHidden) recordAction("ap_hidden", "${device.mac}:false")
+        recordAction("ap_hidden", "$key:${MonitorApVisibility.isHidden(device, hiddenAps)}")
+    }
+    val restoreHiddenKey: (String) -> Unit = { key ->
+        hiddenAps = hiddenAps - key
+        settingsRepository.monitorHiddenApMacs = hiddenAps
+        recordAction("ap_hidden", "$key:false")
     }
     val continueMission: (MonitorMission.Stored) -> Unit = { mission ->
         settingsRepository.activeMonitorMissionId = mission.directory.name
@@ -273,10 +282,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                         modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     TextButton({ showMissionPicker = true }, enabled = !state.running && !starting && !pendingStart) {
-                        Text("Continue")
-                    }
-                    TextButton({ pendingReset = true }, enabled = !state.running && !starting && !pendingStart) {
-                        Text("Reset")
+                        Text("Open mission")
                     }
                 }
             }
@@ -319,10 +325,10 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (state.moveSuggested) Text("No new AP or distinct receiver position for 2 minutes. Try another spot.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                state.reportPath?.let { Text("Capture saved in this mission. Reset to close it for upload.",
+                state.reportPath?.let { Text("Capture saved. Start continues this mission; Reset closes it for upload.",
                     style = MaterialTheme.typography.bodySmall) }
                 if (state.pcapTruncated) Text("PCAP recording stopped at the 200 MB limit.", color = MaterialTheme.colorScheme.error)
-                NearbyView(nearbyDevices, favorites, toggleFavorite, hiddenAps, toggleHiddenAp,
+                NearbyView(nearbyDevices, favorites, toggleFavorite, hiddenAps, toggleHiddenAp, restoreHiddenKey,
                     showHiddenAps, hideNoise, noisePatterns, nearbySort,
                     showFavoriteCards, { showFavoriteCards = !showFavoriteCards },
                     showUnassociatedCards, { showUnassociatedCards = !showUnassociatedCards },
@@ -349,7 +355,9 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 }, activeLogPath = state.missionLogPath.takeIf { state.running },
                 modifier = Modifier.weight(1f))
         } else if (selected == MonitorTab.MAPPING) {
-            MonitorMappingView(context, state, favorites, if (replaying) emptySet() else hiddenAps,
+            MonitorMappingView(context, state, favorites, if (replaying) emptySet() else
+                hiddenAps.filterNot { it.startsWith("ssid:") }.toSet() +
+                    displayDevices.filter { MonitorApVisibility.isHidden(it.first, hiddenAps) }.map { it.first.mac },
                 settingsRepository.activeMonitorMissionId,
                 selectedMissionLogPath, activeReplay, showAllAps,
                 replayCutoffMs, followMe, selectedLocationMac,
@@ -427,6 +435,8 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                             else Button(startMonitor, enabled = !starting && selectedDevice != null) {
                                 Text(if (starting) "Starting…" else "Start")
                             }
+                            if (selected == MonitorTab.NEARBY) TextButton({ pendingReset = true },
+                                enabled = !state.running && !starting && !pendingStart) { Text("Reset") }
                             Checkbox(recordPcap, {
                                 recordPcap = it
                                 settingsRepository.monitorRecordPcap = it
@@ -506,7 +516,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 title = { Text("Continue a saved mission") },
                 text = {
                     Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
-                        if (candidates.isEmpty()) Text("No other local, unuploaded mission is available.")
+                        if (candidates.isEmpty()) Text("No other local, unuploaded mission is available. Start continues the current mission.")
                         candidates.forEach { mission ->
                             val date = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
                                 .format(Date(mission.log.lastModified()))
@@ -683,7 +693,8 @@ private fun NearbyView(
     favorites: Set<String>,
     onFavorite: (String) -> Unit,
     hiddenAps: Set<String>,
-    onHideAp: (String) -> Unit,
+    onHideAp: (SniffedDevices.Device) -> Unit,
+    onRestoreHiddenKey: (String) -> Unit,
     showHiddenAps: Boolean,
     hideNoise: Boolean,
     noisePatterns: List<Regex>,
@@ -697,18 +708,18 @@ private fun NearbyView(
 ) {
     val order = nearbyOrder(sort)
     if (showHiddenAps) {
-        val newest = devices.maxOfOrNull { it.first.lastMs } ?: 0
-        val hiddenRows = devices.filter { it.first.isAp && it.first.mac in hiddenAps }.sortedWith(order)
-        Text("Hidden APs (${hiddenAps.size})", style = MaterialTheme.typography.titleMedium)
-        if (hiddenAps.isEmpty()) Text("No APs hidden in this mission.")
-        hiddenRows.forEach { row ->
-            DeviceCard(row, newest, row.first.mac in favorites, onFavorite,
-                onHideAp = onHideAp, hidden = true)
+        val hiddenRows = devices.filter { MonitorApVisibility.isHidden(it.first, hiddenAps) }.sortedWith(order)
+        val grouped = hiddenRows.groupBy { row ->
+            if (row.first.mac in hiddenAps) row.first.mac else MonitorApVisibility.key(row.first)
         }
-        (hiddenAps - hiddenRows.map { it.first.mac }.toSet()).sorted().forEach { mac ->
+        Text("Hidden AP groups (${hiddenAps.size})", style = MaterialTheme.typography.titleMedium)
+        if (hiddenAps.isEmpty()) Text("No APs hidden in this mission.")
+        (hiddenAps + grouped.keys).sorted().distinct().forEach { key ->
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(mac, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                TextButton({ onHideAp(mac) }) { Text("Show") }
+                val count = grouped[key]?.size ?: 0
+                Text(MonitorApVisibility.label(key) + if (count > 0) " · $count APs" else "",
+                    modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                TextButton({ onRestoreHiddenKey(key) }) { Text("Show") }
             }
         }
         return
@@ -717,12 +728,12 @@ private fun NearbyView(
         row.first.mac !in favorites && MonitorNoiseFilter.matches(row, noisePatterns)
     } else devices
     val newest = visibleDevices.maxOfOrNull { it.first.lastMs } ?: 0
-    val pinned = visibleDevices.filter { it.first.mac in favorites && it.first.mac !in hiddenAps }.sortedWith(order)
+    val pinned = visibleDevices.filter { it.first.mac in favorites && !MonitorApVisibility.isHidden(it.first, hiddenAps) }.sortedWith(order)
     val unassociated = visibleDevices.filter {
-        it.first.mac !in favorites && it.first.mac !in hiddenAps && it.first.isClient &&
+        it.first.mac !in favorites && !MonitorApVisibility.isHidden(it.first, hiddenAps) && it.first.isClient &&
             it.first.probeRequests > 0 && it.first.bssids.isEmpty()
     }.sortedWith(order)
-    val aps = visibleDevices.filter { it.first.mac !in favorites && it.first.isAp && it.first.mac !in hiddenAps }.sortedWith(order)
+    val aps = visibleDevices.filter { it.first.mac !in favorites && it.first.isAp && !MonitorApVisibility.isHidden(it.first, hiddenAps) }.sortedWith(order)
     val byBssid = visibleDevices.filter { it.first.isClient }.flatMap { row -> row.first.bssids.map { it to row } }.groupBy(
         { it.first }, { it.second },
     )
@@ -780,7 +791,7 @@ private fun DeviceCard(
     favorites: Set<String> = emptySet(),
     sort: NearbySort = NearbySort.RSSI,
     showActivity: Boolean = false,
-    onHideAp: ((String) -> Unit)? = null,
+    onHideAp: ((SniffedDevices.Device) -> Unit)? = null,
     hidden: Boolean = false,
 ) {
     var expanded by rememberSaveable(row.first.mac) { mutableStateOf(false) }
@@ -798,7 +809,7 @@ private fun DeviceCard(
                     Text("${device.bestRssi?.let { "$it dBm" } ?: "RSSI ?"} · ch ${channel.ifBlank { "?" }} · ${relativeSeen(newest - device.lastMs)}",
                         style = MaterialTheme.typography.bodySmall)
                 }
-                if (device.isAp && onHideAp != null) IconButton({ onHideAp(device.mac) },
+                if (device.isAp && onHideAp != null) IconButton({ onHideAp(device) },
                     modifier = Modifier.size(40.dp).semantics {
                         contentDescription = if (hidden) "Show AP in mission" else "Hide AP for mission"
                     }) { Text(if (hidden) "↩" else "⊘", style = MaterialTheme.typography.titleMedium) }
