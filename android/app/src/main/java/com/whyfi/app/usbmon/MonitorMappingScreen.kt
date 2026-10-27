@@ -27,11 +27,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -39,7 +37,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.whyfi.app.BuildConfig
-import com.whyfi.app.scan.LocationSnapshot
 import com.whyfi.app.scan.MonitorUiState
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -68,7 +65,6 @@ internal fun MonitorMappingView(
     activeMissionId: String?,
     selectedMissionLogPath: String?,
     replayMission: MonitorReplayMission?,
-    showAllAps: Boolean,
     replayCutoffMs: Long,
     followReceiver: Boolean,
     selectedMac: String?,
@@ -81,32 +77,23 @@ internal fun MonitorMappingView(
     onFavoriteAp: (String) -> Unit,
     modifier: Modifier = Modifier,
     onUserPan: () -> Unit = {},
+    liveLocations: List<Location> = emptyList(),
+    onLocationPermissionChanged: () -> Unit = {},
 ) {
-    var permissionRevision by remember { mutableIntStateOf(0) }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        permissionRevision++
+        onLocationPermissionChanged()
     }
     val fine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
     val coarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
     val permitted = fine || coarse
-    var liveFixes by remember { mutableStateOf<Map<String, Location>>(emptyMap()) }
     var clockMs by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
-    DisposableEffect(context, permissionRevision, permitted, refreshToken) {
-        liveFixes = LocationSnapshot.lastKnownCandidates(context).associateBy { it.provider ?: "unknown" }
-        val subscription = LocationSnapshot.requestUpdates(context, includeFused = true) { fix ->
-            val provider = fix.provider ?: "unknown"
-            if ((liveFixes[provider]?.elapsedRealtimeNanos ?: 0L) < fix.elapsedRealtimeNanos)
-                liveFixes = liveFixes + (provider to Location(fix))
-        }
-        onDispose { subscription?.close() }
-    }
     LaunchedEffect(Unit) {
         while (true) { delay(2_000); clockMs = SystemClock.elapsedRealtime() }
     }
     val receiverFixes = (if (state.running) state.locationFixes else emptyList()) +
-        liveFixes.values.map { fix ->
+        liveLocations.map { fix ->
             MonitorLocationCandidate(fix.provider ?: "unknown", fix.elapsedRealtimeNanos / 1_000_000,
                 fix.latitude, fix.longitude,
                 if (fix.hasAccuracy() && fix.accuracy.isFinite() && fix.accuracy >= 0f)
@@ -131,27 +118,32 @@ internal fun MonitorMappingView(
         "$provider ${if (enabled) "on" else "off"}"
     }
     val replay = selectedMissionLogPath != null
-    val currentLog = (state.missionLogPath?.let(::File)?.takeIf { it.isFile }
-        ?: MonitorMission.list(context).firstOrNull { it.directory.name == activeMissionId }?.log)
-    val log = if (replay) selectedMissionLogPath?.let(::File)?.takeIf { it.isFile } else currentLog
+    val currentLog = remember(state.missionLogPath, activeMissionId) {
+        state.missionLogPath?.let(::File) ?: activeMissionId?.let {
+            File(context.getExternalFilesDir(null), "monitor-missions/$it/mission.jsonl")
+        }
+    }
+    val log = if (replay) selectedMissionLogPath?.let(::File) else currentLog
     val logPath = log?.absolutePath
     var data by remember { mutableStateOf<MapMissionData?>(null) }
-    val sampleRevision = if (logPath == currentLog?.absolutePath)
-        Triple(state.geoSamples, state.locationFixes.maxOfOrNull { it.bootMs }, state.snapshotRevisionMs) else null
-    LaunchedEffect(logPath, sampleRevision, refreshToken) {
+    LaunchedEffect(logPath, replay, state.running, refreshToken) {
         if (log == null || replay) {
             data = null
         } else {
-            val loaded = withContext(Dispatchers.IO) {
-                val evidence = MonitorEvidence.read(log)
-                val names = evidence.inventoryAt().asSequence()
-                    .map { device -> device.mac to (device.ssid.takeIf { it.isNotBlank() }
-                        ?: device.wpsName.takeIf { it.isNotBlank() } ?: if (device.randomized) "randomized MAC" else "Device") }
-                    .toMap() + evidence.labels
-                MapMissionData(log.absolutePath, evidence.samples, evidence.targets, names, evidence.events,
-                    evidence.receiverFixes, evidence.radioSamples)
-            }
-            data = loaded
+            do {
+                val loaded = withContext(Dispatchers.IO) {
+                    if (!log.isFile) return@withContext null
+                    val evidence = MonitorEvidence.read(log)
+                    val names = evidence.inventoryAt().asSequence()
+                        .map { device -> device.mac to (device.ssid.takeIf { it.isNotBlank() }
+                            ?: device.wpsName.takeIf { it.isNotBlank() } ?: if (device.randomized) "randomized MAC" else "Device") }
+                        .toMap() + evidence.labels
+                    MapMissionData(log.absolutePath, evidence.samples, evidence.targets, names, evidence.events,
+                        evidence.receiverFixes, evidence.radioSamples)
+                }
+                data = loaded
+                if (state.running) delay(10_000)
+            } while (state.running)
         }
     }
     val shown = if (replay) replayMission?.takeIf { it.log.absolutePath == logPath }?.let {
@@ -161,19 +153,18 @@ internal fun MonitorMappingView(
     val favoriteTargets = (if (replay) shown?.targets.orEmpty() else favorites) - hiddenAps
     val cutoffMs = replayCutoffMs
     val targets = (favoriteTargets + listOfNotNull(selectedMac)).sorted()
-    val allApTargets = if (showAllAps) shown?.deviceSamples.orEmpty().asSequence()
+    val allApTargets = shown?.deviceSamples.orEmpty().asSequence()
         .filter { (!replay || it.atMs <= cutoffMs) && it.mac !in hiddenAps }
-        .map { it.mac }.toSet() else emptySet()
+        .map { it.mac }.toSet()
     val apTargetMacs = shown?.deviceSamples.orEmpty().mapTo(mutableSetOf()) { it.mac }
     val estimateTargets = (targets + allApTargets).distinct()
     val mac = selectedMac?.takeIf { it in targets }
-    val readings = remember(shown, replay, cutoffMs, selectedMac, favoriteTargets, showAllAps, hiddenAps) {
+    val readings = remember(shown, replay, cutoffMs, selectedMac, hiddenAps) {
         val savedReadings = shown?.samples?.let { all ->
             all.filter { (!replay || it.atMs <= cutoffMs) && (it.mac !in hiddenAps || it.mac == selectedMac) }
         }.orEmpty()
         val apReadings = shown?.deviceSamples.orEmpty().filter { sample ->
-            (showAllAps || sample.mac in favoriteTargets || sample.mac == selectedMac) &&
-                (sample.mac !in hiddenAps || sample.mac == selectedMac) &&
+            (sample.mac !in hiddenAps || sample.mac == selectedMac) &&
                 (!replay || sample.atMs <= cutoffMs)
         }
         val apMacs = apReadings.mapTo(mutableSetOf()) { it.mac }
@@ -197,8 +188,9 @@ internal fun MonitorMappingView(
             MonitorLocationPolicy.effectiveAccuracy(sample.gpsAccuracyM, sample.fixAgeMs, sample.speedMps),
         )
     }
-    val mapReceiver = if (replay) replayReceiver else MonitorLocationPolicy.displayAt(rawReceiver,
-        liveAnchor ?: receiverPath.lastOrNull()?.candidate())
+    val hasMission = replay || activeMissionId != null || state.missionLogPath != null
+    val mapReceiver = if (!hasMission) null else if (replay) replayReceiver else
+        MonitorLocationPolicy.displayAt(rawReceiver, liveAnchor ?: receiverPath.lastOrNull()?.candidate())
     val liveLabels = state.devices.associate { (device, guess) -> device.mac to MonitorMission.deviceName(device, guess) }
     val displayLabels = estimateTargets.associateWith { target ->
         MonitorMission.displayTarget(target,
@@ -209,12 +201,13 @@ internal fun MonitorMappingView(
         MonitorLocationTarget(target, displayLabels[target].orEmpty(), readingCounts[target] ?: 0)
     }
     LaunchedEffect(targetOptions) { onTargetsChanged(targetOptions) }
-    val estimateKey = "$logPath:$sampleRevision:$cutoffMs:${estimateTargets.joinToString()}"
-    var estimated by remember { mutableStateOf<Pair<String, Map<String, MonitorEstimate>>?>(null) }
+    val estimateKey = remember(shown, cutoffMs, estimateTargets) { Any() }
+    var estimated by remember { mutableStateOf<Pair<Any, Map<String, MonitorEstimate>>?>(null) }
     LaunchedEffect(estimateKey) {
         val calculated = withContext(Dispatchers.Default) {
+            val byMac = readings.groupBy { it.mac }
             estimateTargets.mapNotNull { target ->
-                MonitorLocalization.estimate(readings.filter { it.mac == target })
+                MonitorLocalization.estimate(byMac[target].orEmpty())
                     ?.let { target to it }
             }.toMap()
         }
@@ -252,6 +245,7 @@ internal fun MonitorMappingView(
                 }
             } else {
                 Text(when {
+                    !hasMission -> "Location warms up in the background. Start, continue or replay a mission to populate the map."
                     replay && shown == null -> "Loading mission map…"
                     mac != null -> "No location readings for ${displayLabels[mac]} at this point."
                     else -> "No receiver location or device estimate available yet."

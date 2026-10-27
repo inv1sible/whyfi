@@ -24,6 +24,7 @@ import kotlin.math.abs
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.roundToInt
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
@@ -130,10 +131,10 @@ internal fun MonitorLocationMap(
             }
             map.overlays.clear()
             map.overlays.add(MonitorLocationOverlay(receiver, estimates, selectedMac,
-                selectedSamples.takeLast(800), labels, receiverPath.takeLast(800), onEstimateTap))
+                selectedSamples, labels, receiverPath.takeLast(800), onEstimateTap))
             map.invalidate()
         }) }
-        Text("© OpenStreetMap contributors · blue: phone · teal: estimate (tap to star) · clients may move · green→red: RSSI",
+        Text("© OpenStreetMap contributors · blue: phone/measurements with accuracy · teal: estimate ±uncertainty · cones: illustrative RSSI, not bearing · clients may move",
             style = MaterialTheme.typography.bodySmall)
     }
 }
@@ -152,6 +153,10 @@ private class MonitorLocationOverlay(
     private val receiverPath: List<MonitorReceiverFix>,
     private val onEstimateTap: (String) -> Unit,
 ) : Overlay() {
+    private val measurements = samples.groupBy { it.mac }.filterKeys { it in estimates }.mapValues { (_, readings) ->
+        readings.groupBy { (it.lat / 0.00005).roundToInt() to (it.lng / 0.00005).roundToInt() }
+            .values.map { it.last() }.takeLast(80)
+    }
     override fun onSingleTapConfirmed(e: MotionEvent, mapView: MapView): Boolean {
         val projection = mapView.projection
         val nearest = estimates.minByOrNull { (_, estimate) ->
@@ -192,16 +197,20 @@ private class MonitorLocationOverlay(
             canvas.drawPath(path, paint)
             paint.style = Paint.Style.FILL
         }
-        estimates[selectedMac]?.let { estimate ->
-            MonitorSignalCones.draw(canvas, estimate, samples) { lat, lng ->
+        estimates.forEach { (mac, estimate) ->
+            val deviceSamples = measurements[mac].orEmpty().takeLast(80)
+            MonitorSignalCones.draw(canvas, estimate, deviceSamples) { lat, lng ->
                 val p = point(lat, lng)
                 PointF(p.x.toFloat(), p.y.toFloat())
             }
-        }
-        samples.forEach { sample ->
-            val p = point(sample.lat, sample.lng)
-            paint.color = Color.argb(150, 0, 94, 158)
-            canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 5f, paint)
+            deviceSamples.forEach { sample ->
+                circle(sample.lat, sample.lng,
+                    MonitorLocationPolicy.effectiveAccuracy(sample.gpsAccuracyM, sample.fixAgeMs, sample.speedMps),
+                    Color.argb(65, 0, 94, 158))
+                val p = point(sample.lat, sample.lng)
+                paint.color = Color.argb(150, 0, 94, 158)
+                canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 5f, paint)
+            }
         }
         receiver?.let { selected ->
             val fix = selected.fix
@@ -213,16 +222,15 @@ private class MonitorLocationOverlay(
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 9f, paint)
         }
         estimates.forEach { (mac, estimate) ->
-            if (estimates.size <= 30 || mac == selectedMac)
-                circle(estimate.lat, estimate.lng, estimate.uncertaintyM, Color.rgb(0, 125, 113))
+            circle(estimate.lat, estimate.lng, estimate.uncertaintyM, Color.rgb(0, 125, 113))
             val p = point(estimate.lat, estimate.lng)
             paint.color = Color.WHITE
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 11f, paint)
             paint.color = Color.rgb(0, 110, 97)
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 8f, paint)
-            if (estimates.size > 30 && mac != selectedMac) return@forEach
             val fullMac = mac.uppercase()
-            val name = labels[mac]?.removeSuffix(" · $fullMac")?.take(20) ?: "Device"
+            val name = (labels[mac]?.removeSuffix(" · $fullMac")?.take(20) ?: "Device") +
+                " ±${estimate.uncertaintyM.toInt()}m"
             paint.textSize = 27f
             paint.setShadowLayer(3f, 1f, 1f, Color.WHITE)
             val labelWidth = max(paint.measureText(name), paint.measureText(fullMac))

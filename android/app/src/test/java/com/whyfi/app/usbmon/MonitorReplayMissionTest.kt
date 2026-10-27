@@ -9,6 +9,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MonitorReplayMissionTest {
+    @Test fun replayInventoryAdvancesAndRewindsWithoutLeakingFutureDevices() {
+        fun tsv(mac: String) = listOf(mac, 1, 3, 1, 0, 0, -60, 6, "", "", 0,
+            "", "", "", "", 100, 200, -62, 195000, 6).joinToString("\t")
+        val first = "00:11:22:33:44:55"
+        val second = "00:11:22:33:44:66"
+        val mission = MonitorReplayMission(File("mission.jsonl"), emptyList(), emptySet(), emptyMap(),
+            emptyList(), listOf(MonitorMission.DeviceSnapshot(1000, 100, tsv(first)),
+                MonitorMission.DeviceSnapshot(2000, 200, tsv(second))), emptySet(), null)
+        assertEquals(listOf(first), mission.devicesAt(1000).map { it.first.mac })
+        assertEquals(setOf(first, second), mission.devicesAt(2000).map { it.first.mac }.toSet())
+        assertEquals(setOf(first, second), mission.devicesAt(3000).map { it.first.mac }.toSet())
+        assertEquals(listOf(first), mission.devicesAt(1500).map { it.first.mac })
+        assertTrue(mission.devicesAt(999).isEmpty())
+    }
+
     @Test fun slider_uses_only_snapshots_and_favorites_seen_by_selected_time() {
         val mac = "00:11:22:33:44:55"
         val mission = MonitorReplayMission(File("mission.jsonl"), emptyList(), setOf(mac), emptyMap(),

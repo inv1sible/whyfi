@@ -14,13 +14,13 @@ internal data class MonitorEvidence(
     val initialFavorites: Set<String>,
     val targets: Set<String>,
 ) {
-    private val parsedSnapshots by lazy { snapshots.map { it.atMs to SniffedDevices.parse(it.tsv) } }
+    internal val parsedSnapshots by lazy { snapshots.map { it to SniffedDevices.parse(it.tsv) } }
     fun inventoryAt(cutoff: Long = Long.MAX_VALUE): List<SniffedDevices.Device> {
         var devices = emptyList<SniffedDevices.Device>()
-        parsedSnapshots.takeWhile { it.first <= cutoff }.forEach { devices = MonitorInventory.merge(devices, it.second) }
+        parsedSnapshots.takeWhile { it.first.atMs <= cutoff }.forEach { devices = MonitorInventory.merge(devices, it.second) }
         return devices
     }
-    val radioSamples by lazy { MonitorSampleReconciler.devices(receiverFixes, snapshots) }
+    val radioSamples by lazy { MonitorSampleReconciler.devicesParsed(receiverFixes, parsedSnapshots) }
     val samples by lazy {
         val radioByMac = radioSamples.groupBy { it.mac }
         (radioSamples + savedSamples.filter { sample ->

@@ -28,9 +28,15 @@ object MonitorMission {
         val uploaded: Boolean,
         val name: String = readName(directory),
         val dateMs: Long = readDate(directory, log),
+        // Header I/O happens once on the loader dispatcher, never during card composition.
+        val modifiedMs: Long = log.lastModified(),
+        val logBytes: Long = log.length(),
+        val reportBytes: Long? = report.takeIf { it.isFile }?.length(),
+        val pcapBytes: Long? = pcap?.length(),
+        val captured: Boolean = log.isFile && (File(directory, "capture-summary.json").isFile || reportBytes != null),
     ) {
         val complete get() = report.isFile && log.isFile
-        val captured get() = log.isFile && (File(directory, "capture-summary.json").isFile || report.isFile)
+        val title get() = "$name · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.ROOT).format(Date(dateMs))}"
     }
     data class CaptureSummary(val device: String = "", val frames: Long = 0, val eapol: Long = 0,
                               val channels: Map<Int, Long> = emptyMap(), val pcapTruncated: Boolean = false,
@@ -60,16 +66,26 @@ object MonitorMission {
     fun deviceName(device: SniffedDevices.Device, guess: SniffedDevices.Guess): String =
         SniffedDevices.displayName(device, guess)
 
-    fun list(context: Context): List<Stored> = listIn(File(context.getExternalFilesDir(null), "monitor-missions"))
+    fun list(context: Context, onBatch: ((List<Stored>) -> Unit)? = null): List<Stored> =
+        listIn(File(context.getExternalFilesDir(null), "monitor-missions"), onBatch).also {
+            MonitorMissionHeaders.write(File(context.cacheDir, "monitor-mission-headers.json"), it)
+        }
 
-    internal fun listIn(root: File): List<Stored> {
+    internal fun cachedList(context: Context): List<Stored> = MonitorMissionHeaders.read(
+        File(context.cacheDir, "monitor-mission-headers.json"), File(context.getExternalFilesDir(null), "monitor-missions"))
+
+    internal fun listIn(root: File, onBatch: ((List<Stored>) -> Unit)? = null): List<Stored> {
+        val loaded = mutableListOf<Stored>()
         return root.listFiles()?.filter { it.isDirectory && runCatching { UUID.fromString(it.name) }.isSuccess }
             ?.map { directory ->
                 val pcap = File(directory, "capture.pcap").takeIf { it.isFile }
                 Stored(directory, File(directory, "report.pdf"), File(directory, "mission.jsonl"),
-                    pcap, File(directory, ".uploaded").isFile)
+                    pcap, File(directory, ".uploaded").isFile).also {
+                    loaded += it
+                    if (loaded.size == 1 || loaded.size % 4 == 0) onBatch?.invoke(loaded.sortedByDescending { row -> row.modifiedMs })
+                }
             }
-            ?.sortedByDescending { it.log.lastModified() }
+            ?.sortedByDescending { it.modifiedMs }
             .orEmpty()
     }
 
@@ -279,9 +295,9 @@ object MonitorMission {
         check(temporary.renameTo(File(files.directory, "capture-summary.json"))) { "Could not save capture statistics" }
     }
 
-    fun ensureReport(context: Context, mission: Stored): File {
+    fun ensureReport(context: Context, mission: Stored, force: Boolean = false): File {
         val nameFile = File(mission.directory, "mission-name.txt")
-        if (mission.report.isFile && mission.report.lastModified() >= maxOf(mission.log.lastModified(), nameFile.lastModified()))
+        if (!force && mission.report.isFile && mission.report.lastModified() >= maxOf(mission.log.lastModified(), nameFile.lastModified()))
             return mission.report
         val summary = runCatching {
             Gson().fromJson(File(mission.directory, "capture-summary.json").readText(), CaptureSummary::class.java)
@@ -447,7 +463,7 @@ object MonitorMission {
         val earlierFrames = evidence.events.filter { it.event == "monitor_finished" }
             .sumOf { it.details.substringAfter("frames=", "0").substringBefore(' ').toLongOrNull() ?: 0L }
         nextPage()
-        line(readName(files.directory), color = muted)
+        line("${readName(files.directory)} · ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(readDate(files.directory, files.log)))}", color = muted)
         line("Mission ID  ${files.directory.name}", color = muted)
         line("Report generated  ${DateFormat.getDateTimeInstance().format(Date())}", color = muted)
         section("Overview")

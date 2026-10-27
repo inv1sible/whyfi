@@ -16,11 +16,19 @@ internal data class MonitorReplayMission(
     val receiverFixes: List<MonitorReceiverFix> = emptyList(),
     val accessPointSamples: List<MonitorGeoSample> = emptyList(),
     val deviceSamples: List<MonitorGeoSample> = emptyList(),
+    private val evidence: MonitorEvidence? = null,
 ) {
-    private val parsedSnapshots by lazy { snapshots.map { it.atMs to SniffedDevices.parse(it.tsv) } }
+    private val parsedSnapshots by lazy { evidence?.parsedSnapshots ?: snapshots.map { it to SniffedDevices.parse(it.tsv) } }
+    private var inventory = emptyList<SniffedDevices.Device>()
+    private var nextSnapshot = 0
+    private var previousCutoff = Long.MIN_VALUE
+    @Synchronized
     fun devicesAt(cutoffMs: Long): List<Pair<SniffedDevices.Device, SniffedDevices.Guess>> {
-        var inventory = emptyList<SniffedDevices.Device>()
-        parsedSnapshots.takeWhile { it.first <= cutoffMs }.forEach { inventory = MonitorInventory.merge(inventory, it.second) }
+        if (cutoffMs < previousCutoff) { inventory = emptyList(); nextSnapshot = 0 }
+        while (nextSnapshot < parsedSnapshots.size && parsedSnapshots[nextSnapshot].first.atMs <= cutoffMs) {
+            inventory = MonitorInventory.merge(inventory, parsedSnapshots[nextSnapshot++].second)
+        }
+        previousCutoff = cutoffMs
         return inventory.map { d -> d to SniffedDevices.guess(d) { vendors?.vendorOf(it) } }
     }
     val timeline: Pair<Long, Long> by lazy {
@@ -47,17 +55,17 @@ internal data class MonitorReplayMission(
         MonitorMission.favoritesAfter(initialFavorites, events, cutoffMs)
 
     companion object {
-        fun load(context: Context, log: File): MonitorReplayMission {
-            val vendors = runCatching { context.assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
+        fun load(context: Context, log: File, vendors: OuiTable? = null): MonitorReplayMission {
+            val table = vendors ?: runCatching { context.assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
             val evidence = MonitorEvidence.read(log)
             val names = evidence.inventoryAt().asSequence()
                 .associate { device ->
                     device.mac to MonitorMission.deviceName(device,
-                        SniffedDevices.guess(device) { vendors?.vendorOf(it) })
+                        SniffedDevices.guess(device) { table?.vendorOf(it) })
                 } + evidence.labels
             return MonitorReplayMission(log, evidence.samples, evidence.targets,
-                names, evidence.events, evidence.snapshots, evidence.initialFavorites, vendors, evidence.receiverFixes,
-                evidence.apSamples, evidence.radioSamples)
+                names, evidence.events, evidence.snapshots, evidence.initialFavorites, table, evidence.receiverFixes,
+                evidence.apSamples, evidence.radioSamples, evidence).also { it.timeline }
         }
     }
 }

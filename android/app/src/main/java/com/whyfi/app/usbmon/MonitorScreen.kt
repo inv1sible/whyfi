@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.location.Location
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -16,6 +17,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -60,6 +64,29 @@ private enum class NearbySort { RSSI, LAST_SEEN }
 private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository: SettingsRepository) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // Warm up location independently of capture and of which Monitor tab is visible.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var locationPermissionRevision by remember { mutableIntStateOf(0) }
+    var foreground by remember { mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) }
+    var liveLocations by remember { mutableStateOf<Map<String, Location>>(emptyMap()) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) locationPermissionRevision++
+            if (event == Lifecycle.Event.ON_START) foreground = true
+            if (event == Lifecycle.Event.ON_STOP) foreground = false
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    DisposableEffect(context, locationPermissionRevision, foreground) {
+        liveLocations = LocationSnapshot.lastKnownCandidates(context).associateBy { it.provider ?: "unknown" }
+        val subscription = if (!foreground) null else LocationSnapshot.requestUpdates(context, includeFused = true) { fix ->
+            val provider = fix.provider ?: "unknown"
+            if ((liveLocations[provider]?.elapsedRealtimeNanos ?: 0L) < fix.elapsedRealtimeNanos)
+                liveLocations = liveLocations + (provider to Location(fix))
+        }
+        onDispose { subscription?.close() }
+    }
     val usbManager = remember { context.getSystemService(Context.USB_SERVICE) as UsbManager }
     val emptyState = remember { kotlinx.coroutines.flow.MutableStateFlow(MonitorUiState()) }
     val state by (service?.monitorState ?: emptyState).collectAsState()
@@ -78,7 +105,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     var showHiddenAps by rememberSaveable { mutableStateOf(false) }
     var hideNoise by remember { mutableStateOf(settingsRepository.monitorHideNoise) }
     val noisePatterns = remember { MonitorNoiseFilter.compile(settingsRepository.monitorNoisePatterns).patterns }
-    var visibleKinds by remember { mutableStateOf(SniffedDevices.Kind.entries.toSet()) }
+    var focusedKind by remember { mutableStateOf<SniffedDevices.Kind?>(null) }
     var autoUpdate by rememberSaveable { mutableStateOf(true) }
     var sortName by rememberSaveable { mutableStateOf(NearbySort.RSSI.name) }
     val nearbySort = NearbySort.entries.firstOrNull { it.name == sortName } ?: NearbySort.RSSI
@@ -108,8 +135,8 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     var pendingReset by remember { mutableStateOf(false) }
     var continuingMissionId by remember { mutableStateOf<String?>(null) }
     var continueError by remember { mutableStateOf<String?>(null) }
-    var showAllAps by rememberSaveable { mutableStateOf(false) }
-    var missionCount by remember { mutableIntStateOf(0) }
+    var missions by remember { mutableStateOf<List<MonitorMission.Stored>>(emptyList()) }
+    var missionsLoading by remember { mutableStateOf(true) }
     val activeId = settingsRepository.activeMonitorMissionId
     LaunchedEffect(Unit) {
         vendorTable = withContext(Dispatchers.IO) {
@@ -141,8 +168,16 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             displayMatches = MonitorInventory.matches(recordedDevices, state.devices.map { it.first })
         }
     }
-    LaunchedEffect(missionRevision, state.running, state.missionLogPath) {
-        missionCount = withContext(Dispatchers.IO) { MonitorMission.list(context).size }
+    LaunchedEffect(missionRevision, state.running, state.missionLogPath, state.status == "Saving capture…") {
+        if (missions.isEmpty()) missions = withContext(Dispatchers.IO) { MonitorMission.cachedList(context) }
+        if (missions.isNotEmpty()) missionsLoading = false
+        val showBatches = missions.isEmpty()
+        missions = withContext(Dispatchers.IO) {
+            MonitorMission.list(context) { batch ->
+                if (showBatches) { missions = batch; missionsLoading = false }
+            }
+        }
+        missionsLoading = false
     }
     val matchedMacs = displayMatches
     val deviceStatus = recordedDevices.associate { it.mac to if (it.mac in matchedMacs) "Seen again" else "Recorded" }
@@ -153,7 +188,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
         replayPlaying = false
         selectedMissionLogPath?.let { path ->
             replayMission = withContext(Dispatchers.IO) {
-                File(path).takeIf { it.isFile }?.let { MonitorReplayMission.load(context, it) }
+                File(path).takeIf { it.isFile }?.let { MonitorReplayMission.load(context, it, vendorTable) }
             }
         }
     }
@@ -175,22 +210,25 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     val replayReferenceMs = replaySnapshot?.let { snapshot ->
         snapshot.clockMs.takeIf { it > 0 }?.plus((replayCutoffMs - snapshot.atMs).coerceAtLeast(0))
     } ?: replayCutoffMs
-    val replayDevices = remember(replaySnapshot?.atMs ?: replayCutoffMs, activeReplay) {
-        activeReplay?.takeIf { it.snapshots.isNotEmpty() }?.devicesAt(replayCutoffMs)
-            ?: activeReplay?.legacyDevicesAt(replayCutoffMs).orEmpty()
+    var replayDevices by remember { mutableStateOf<List<Pair<SniffedDevices.Device, SniffedDevices.Guess>>>(emptyList()) }
+    LaunchedEffect(activeReplay, replayCutoffMs) {
+        replayDevices = withContext(Dispatchers.Default) {
+            activeReplay?.takeIf { it.snapshots.isNotEmpty() }?.devicesAt(replayCutoffMs)
+                ?: activeReplay?.legacyDevicesAt(replayCutoffMs).orEmpty()
+        }
     }
     val replaying = selectedMissionLogPath != null
     val selected = MonitorTab.entries.firstOrNull { it.name == selectedName } ?: MonitorTab.NEARBY
     val tabs = MonitorTab.entries.toList()
     val nearbyDevices = displayDevices.filter {
-        it.second.kind in visibleKinds || (showHiddenAps && MonitorApVisibility.isHidden(it.first, hiddenAps))
+        (focusedKind == null || it.second.kind == focusedKind) || (showHiddenAps && MonitorApVisibility.isHidden(it.first, hiddenAps))
     }
     val noiseCount = nearbyDevices.count { row ->
         row.first.mac !in favorites && !MonitorApVisibility.isHidden(row.first, hiddenAps) &&
             MonitorNoiseFilter.matches(row, noisePatterns)
     }
     val categoryDevices = (if (replaying) replayDevices else displayDevices)
-        .filter { it.second.kind in visibleKinds && (replaying || !MonitorApVisibility.isHidden(it.first, hiddenAps)) }
+        .filter { (focusedKind == null || it.second.kind == focusedKind) && (replaying || !MonitorApVisibility.isHidden(it.first, hiddenAps)) }
     val newDevices = state.devices.count { incoming -> displayDevices.none { it.first.mac == incoming.first.mac } }
 
     val recordAction: (String, String) -> Unit = { event, details ->
@@ -298,6 +336,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     }
     var pendingStart by remember { mutableStateOf(false) }
     val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        locationPermissionRevision++
         if (pendingStart) {
             pendingStart = false
             beginMonitor()
@@ -320,7 +359,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             tabs.forEach { tab ->
                 val count = when (tab) {
                     MonitorTab.NEARBY, MonitorTab.MAPPING -> 0
-                    MonitorTab.MISSIONS -> missionCount
+                    MonitorTab.MISSIONS -> missions.size
                     else -> monitorRows(tab, categoryDevices).size
                 }
                 Tab(tab == selected, {
@@ -384,7 +423,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                     showApCards, { showApCards = !showApCards }, matchedMacs, matchesFirst, deviceStatus)
             }
         } else if (selected == MonitorTab.MISSIONS) {
-            MissionView(context, settingsRepository, state.reportPath,
+            MissionView(context, settingsRepository, missions, missionsLoading, { missionRevision++ }, vendorTable,
                 onOpenLocation = { path, mac ->
                     selectedMissionLogPath = path
                     selectedLocationMac = mac
@@ -409,14 +448,15 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 hiddenAps.filterNot { it.startsWith("ssid:") }.toSet() +
                     displayDevices.filter { MonitorApVisibility.isHidden(it.first, hiddenAps) }.map { it.first.mac },
                 settingsRepository.activeMonitorMissionId,
-                selectedMissionLogPath, activeReplay, showAllAps,
+                selectedMissionLogPath, activeReplay,
                 replayCutoffMs, followMe, selectedLocationMac,
                 { locationTargets = it }, { locationSummary = it }, locationRefresh, locationRecenter,
                 showLocationDetails, onSelectAp = { mac ->
                     selectedLocationMac = mac
                     followMe = false
                 }, onFavoriteAp = toggleFavorite,
-                Modifier.weight(1f), onUserPan = { followMe = false })
+                Modifier.weight(1f), onUserPan = { followMe = false }, liveLocations = liveLocations.values.toList(),
+                onLocationPermissionChanged = { locationPermissionRevision++ })
         } else {
             if (replaying && activeReplay?.snapshots?.isEmpty() == true) Text(
                 "This older mission did not save device roles or category snapshots.",
@@ -515,30 +555,30 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             val selectedTarget = selectedLocationMac?.takeIf { mac -> locationTargets.any { it.mac == mac } }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterChip(showAllAps, { showAllAps = !showAllAps }, label = { Text("All device estimates") })
-                FilterChip(selectedTarget == null, { selectedLocationMac = null },
-                    label = { Text("All (${locationTargets.size})") })
+                FilterChip(false, { selectedLocationMac = null; focusedKind = null }, label = { Text("All device estimates") })
+                FilterChip(false, { selectedLocationMac = null; focusedKind = null },
+                    label = { Text("Clear focus") })
                 locationTargets.forEach { target ->
-                    FilterChip(selectedTarget == target.mac, { selectedLocationMac = target.mac; followMe = false },
+                    FilterChip(selectedTarget == target.mac, { selectedLocationMac = if (selectedTarget == target.mac) null else target.mac; followMe = false },
                         label = { Text("${target.label} (${target.readings})") })
                 }
             }
         } else if (selected != MonitorTab.MISSIONS && selected != MonitorTab.MAPPING) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                FilterChip(matchesFirst, { matchesFirst = !matchesFirst; recordAction("matches_first", matchesFirst.toString()) },
+                FilterChip(matchesFirst, { focusedKind = null; matchesFirst = !matchesFirst; recordAction("matches_first", matchesFirst.toString()) },
                     label = { Text("Matches first (${matchedMacs.size})") })
                 if (selected == MonitorTab.NEARBY) FilterChip(showHiddenAps,
-                    { showHiddenAps = !showHiddenAps }, label = { Text("Hidden APs (${hiddenAps.size})") })
+                    { focusedKind = null; showHiddenAps = !showHiddenAps }, label = { Text("Hidden APs (${hiddenAps.size})") })
                 if (selected == MonitorTab.NEARBY) FilterChip(hideNoise, {
                     hideNoise = !hideNoise
                     settingsRepository.monitorHideNoise = hideNoise
                     recordAction("noise_filter", if (hideNoise) "on" else "off")
                 }, label = { Text("Hide noise ($noiseCount)") })
                 SniffedDevices.Kind.entries.forEach { kind ->
-                    FilterChip(kind in visibleKinds, {
-                        visibleKinds = if (kind in visibleKinds) visibleKinds - kind else visibleKinds + kind
-                        if (!replaying) recordAction("filter", "${kind.name}:${kind in visibleKinds}")
+                    FilterChip(kind == focusedKind, {
+                        focusedKind = if (focusedKind == kind) null else kind
+                        if (!replaying) recordAction("filter_focus", focusedKind?.name.orEmpty())
                     }, label = { Text("${kindIcon(kind)} ${kind.label}") })
                 }
             }

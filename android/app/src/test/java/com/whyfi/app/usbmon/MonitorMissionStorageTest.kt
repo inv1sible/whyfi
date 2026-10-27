@@ -10,6 +10,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class MonitorMissionStorageTest {
+    @Test fun cachedHeadersNeedNoExternalFileReadsAndKeepDatesAndSizes() {
+        val root = Files.createTempDirectory("whyfi-cached-headers").toFile()
+        try {
+            val directory = File(root, UUID.randomUUID().toString()).apply { mkdirs() }
+            File(directory, "mission.jsonl").writeText("evidence")
+            File(directory, "capture.pcap").writeBytes(byteArrayOf(1, 2, 3))
+            File(directory, "mission-name.txt").writeText("Survey")
+            File(directory, "mission-date.txt").writeText("1000")
+            val original = MonitorMission.listIn(root).single()
+            val index = File(root, "headers.json")
+            MonitorMissionHeaders.write(index, listOf(original))
+            directory.deleteRecursively() // Cache must not stat evidence or parse logs to render headers.
+            val cached = MonitorMissionHeaders.read(index, root).single()
+            assertEquals(original, cached)
+            assertTrue(cached.title.matches(Regex("Survey · \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}")))
+            assertEquals(3L, cached.pcapBytes)
+            index.writeText("broken index")
+            assertTrue(MonitorMissionHeaders.read(index, root).isEmpty())
+        } finally { root.deleteRecursively() }
+    }
+
     @Test fun listingTwentyThreeLargeMissionsReadsOnlyHeaders() {
         val root = Files.createTempDirectory("whyfi-headers").toFile()
         try {

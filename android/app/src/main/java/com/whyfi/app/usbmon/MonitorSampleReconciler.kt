@@ -15,7 +15,12 @@ internal object MonitorSampleReconciler {
         correlate(receiverFixes, snapshots, apOnly = false)
 
     private fun correlate(receiverFixes: List<MonitorReceiverFix>, snapshots: List<MonitorMission.DeviceSnapshot>,
-                          apOnly: Boolean): List<MonitorGeoSample> {
+                          apOnly: Boolean): List<MonitorGeoSample> = devicesParsed(receiverFixes,
+        snapshots.map { it to SniffedDevices.parse(it.tsv) }, apOnly)
+
+    internal fun devicesParsed(receiverFixes: List<MonitorReceiverFix>,
+                               snapshots: List<Pair<MonitorMission.DeviceSnapshot, List<SniffedDevices.Device>>>,
+                               apOnly: Boolean = false): List<MonitorGeoSample> {
         if (receiverFixes.isEmpty()) return emptyList()
         val orderedFixes = receiverFixes.sortedBy { it.atMs }
         fun fixesAt(atMs: Long): List<MonitorLocationCandidate> {
@@ -31,8 +36,8 @@ internal object MonitorSampleReconciler {
             return candidates
         }
         val seen = mutableMapOf<Pair<String, Long>, Long>()
-        return snapshots.flatMap { snapshot ->
-            SniffedDevices.parse(snapshot.tsv).mapNotNull { device ->
+        return snapshots.flatMap { (snapshot, devices) ->
+            devices.mapNotNull { device ->
                 val bootMs = device.lastRssiBootMs ?: return@mapNotNull null
                 val atMs = snapshot.atMs - snapshot.clockMs + bootMs
                 if ((apOnly && !device.isAp) || device.lastRssi == null || device.lastRssiChannel == null ||
