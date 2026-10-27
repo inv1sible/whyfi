@@ -30,4 +30,35 @@ class MonitorApVisibilityTest {
         assertFalse(MonitorApVisibility.isHidden(other, hidden))
         assertTrue(MonitorApVisibility.isHidden(device(unnamed.mac, "New name"), hidden))
     }
+
+    @Test fun legacyBssidHideBecomesWholeSsidGroupWhenNameIsKnown() {
+        val first = device("00:11:22:33:44:aa", "Campus WiFi")
+        val second = device("00:11:22:33:44:bb", "Campus WiFi")
+        val other = device("00:11:22:33:44:cc", "Campus Guest")
+        val devices = listOf(first, second, other)
+        val hidden = MonitorApVisibility.resolve(setOf(first.mac.uppercase()), devices)
+        assertEquals(setOf("ssid:Campus WiFi"), hidden)
+        assertTrue(MonitorApVisibility.isHidden(first, hidden))
+        assertTrue(MonitorApVisibility.isHidden(second, hidden))
+        assertFalse(MonitorApVisibility.isHidden(other, hidden))
+        val group = MonitorApVisibility.groups(setOf(first.mac), devices).single()
+        assertEquals("Campus WiFi", group.label)
+        assertEquals(2, group.count)
+        assertEquals(hidden.single(), group.key)
+    }
+
+    @Test fun unnamedHideExpandsAfterSsidArrivesAndRestoreSurvivesReplay() {
+        val unnamed = device("00:11:22:33:44:55", "")
+        val initial = setOf(MonitorApVisibility.key(unnamed))
+        assertEquals(initial, MonitorApVisibility.resolve(initial, listOf(unnamed)))
+        val named = unnamed.copy(ssid = "Campus: WiFi")
+        val resolved = MonitorApVisibility.resolve(initial, listOf(named))
+        val events = listOf(MonitorMission.ReplayEvent(1, "ap_hidden", "${unnamed.mac}:true"),
+            MonitorMission.ReplayEvent(2, "ap_hidden", "${unnamed.mac}:false"),
+            MonitorMission.ReplayEvent(3, "ap_hidden", "${resolved.single()}:true"),
+            MonitorMission.ReplayEvent(4, "ap_hidden", "${resolved.single()}:false"))
+        assertEquals(setOf("ssid:Campus: WiFi"), MonitorMission.hiddenApsAfter(events.take(3)))
+        assertTrue(MonitorMission.hiddenApsAfter(events).isEmpty())
+        assertTrue(MonitorApVisibility.groups(initial, listOf(unnamed)).single().label.contains("SSID not recorded"))
+    }
 }

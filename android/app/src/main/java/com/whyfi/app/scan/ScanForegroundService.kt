@@ -67,6 +67,7 @@ data class MonitorUiState(
     val pcapTruncated: Boolean = false,
     val eapolKeyFrames: Long = 0,
     val geoSamples: Int = 0,
+    val receiverFixCount: Int = 0,
     val snapshotRevisionMs: Long = 0,
     val geoStatus: String = "",
     val moveSuggested: Boolean = false,
@@ -641,7 +642,8 @@ class ScanForegroundService : Service() {
                         (previous + Location(fix)).takeLast(512) else previous
                 }
             }
-            var locationSubscription = LocationSnapshot.requestUpdates(applicationContext, includeFused = true, onLocation = onFix)
+            var locationSubscription = LocationSnapshot.requestUpdates(applicationContext, minDistanceM = 0f,
+                includeFused = true, onLocation = onFix)
             val seenSampleTimes = mutableMapOf<String, Long>()
             val countedSampleTimes = mutableMapOf<String, Long>()
             val savedFixTimes = mutableMapOf<String, Long>()
@@ -650,6 +652,7 @@ class ScanForegroundService : Service() {
             val snapshotMutex = Mutex()
             var lastSavedSnapshotAt = 0L
             var geoSampleCount = 0
+            var receiverFixCount = 0
             var geoDiagnostics = MonitorGeoDiagnostics()
             val sampledMacs = mutableSetOf<String>()
             val knownApMacs = mutableSetOf<String>()
@@ -661,7 +664,8 @@ class ScanForegroundService : Service() {
             }
             suspend fun snapshot(forceSave: Boolean = false) = snapshotMutex.withLock {
                 if (locationSubscription == null) {
-                    locationSubscription = LocationSnapshot.requestUpdates(applicationContext, includeFused = true, onLocation = onFix)
+                    locationSubscription = LocationSnapshot.requestUpdates(applicationContext, minDistanceM = 0f,
+                        includeFused = true, onLocation = onFix)
                 }
                 val deviceTsv = UsbMonitorNative.devices()
                 val raw = withContext(Dispatchers.Default) {
@@ -694,6 +698,7 @@ class ScanForegroundService : Service() {
                 }
                 if (freshReceiverFixes.isNotEmpty()) {
                     withContext(Dispatchers.IO) { MonitorMission.appendReceiverFixes(mission, freshReceiverFixes) }
+                    receiverFixCount += freshReceiverFixes.size
                     freshReceiverFixes.forEach { fix -> savedFixTimes[fix.provider] =
                         maxOf(savedFixTimes[fix.provider] ?: 0L, fix.bootMs) }
                 }
@@ -791,6 +796,7 @@ class ScanForegroundService : Service() {
                         pcapTruncated = nativeStats.getOrElse(UsbMonitorNative.Stat.PCAP_TRUNCATED.ordinal) { 0 } != 0L,
                         eapolKeyFrames = nativeStats.getOrElse(UsbMonitorNative.Stat.EAPOL_KEY_FRAMES.ordinal) { 0 },
                         geoSamples = geoSampleCount,
+                        receiverFixCount = receiverFixCount,
                         moveSuggested = movePrompted,
                         snapshotRevisionMs = lastSavedSnapshotAt,
                         locationFixes = latestFixes,

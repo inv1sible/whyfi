@@ -6,6 +6,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class MonitorEvidenceFilesTest {
+    @Test fun everyExportHasMissionDateAndDistinctIdentityWithoutChangingEvidenceName() {
+        fun mission(id: String) = MonitorMission.Stored(File(id), File(id, "report.pdf"), File(id, "mission.jsonl"),
+            File(id, "capture.pcap"), false, "Survey", 0L)
+        val first = mission("11111111-1111-4111-8111-111111111111")
+        val second = mission("22222222-2222-4222-8222-222222222222")
+        listOf(first.report, first.log, first.pcap!!).forEach { file ->
+            val name = MonitorEvidenceFiles.exportName(first, file)
+            assertTrue(name.startsWith("whyfi-19700101-000000Z-11111111-"))
+            assertTrue(name.endsWith(file.name))
+            assertNotEquals(name, MonitorEvidenceFiles.exportName(second, file))
+        }
+        assertEquals("capture.pcap", first.pcap!!.name)
+        assertEquals("mission.jsonl", first.log.name)
+        assertEquals("report.pdf", first.report.name)
+    }
+
     @Test fun exportAuthorityMatchesRegisteredProviderAndRestrictedPaths() {
         val manifest = DocumentBuilderFactory.newInstance().newDocumentBuilder()
             .parse(File("src/main/AndroidManifest.xml"))

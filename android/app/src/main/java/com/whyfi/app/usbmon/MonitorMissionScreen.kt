@@ -37,6 +37,7 @@ internal fun MissionView(
 ) {
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf<String?>(null) }
+    var deleting by remember { mutableStateOf(false) }
     var messages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var pendingDelete by remember { mutableStateOf<MonitorMission.Stored?>(null) }
     var pendingRename by remember { mutableStateOf<MonitorMission.Stored?>(null) }
@@ -85,13 +86,14 @@ internal fun MissionView(
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         mission.pcap?.let { pcap ->
-                            TextButton({ messages = messages + (id to shareFile(context, pcap, "application/vnd.tcpdump.pcap")) }) {
+                            TextButton({ messages = messages + (id to shareFile(context, mission, pcap, "application/vnd.tcpdump.pcap")) }) {
                                 Text("Export PCAP")
                             }
                         }
                         TextButton({ pendingDelete = mission }, enabled = busy == null && continuingMissionId == null &&
-                            mission.log.absolutePath != activeLogPath && id != settings.activeMonitorMissionId) {
-                            Text("Delete mission", color = MaterialTheme.colorScheme.error)
+                            mission.log.absolutePath != activeLogPath) {
+                            Text(if (deleting && busy == id) "Deleting…" else if (mission.log.absolutePath == activeLogPath)
+                                "Stop capture to delete" else "Delete mission", color = MaterialTheme.colorScheme.error)
                         }
                     }
                     Text(id, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
@@ -103,10 +105,10 @@ internal fun MissionView(
                     if (mission.uploaded) Text("Uploaded · local files retained", color = MaterialTheme.colorScheme.primary)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (reportReady) TextButton({
-                            messages = messages + (id to openReport(context, mission.report))
+                            messages = messages + (id to openReport(context, mission))
                         }) { Text("Open PDF") }
                         if (reportReady) TextButton({
-                            messages = messages + (id to shareFile(context, mission.report, "application/pdf"))
+                            messages = messages + (id to shareFile(context, mission, mission.report, "application/pdf"))
                         }) { Text("Export PDF") }
                         TextButton({
                             busy = id
@@ -124,7 +126,7 @@ internal fun MissionView(
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         TextButton({ showLog = !showLog }) { Text(if (showLog) "Hide log" else "Show log") }
-                        TextButton({ messages = messages + (id to shareFile(context, mission.log, "application/x-ndjson")) }) {
+                        TextButton({ messages = messages + (id to shareFile(context, mission, mission.log, "application/x-ndjson")) }) {
                             Text("Export full log")
                         }
                     }
@@ -186,13 +188,19 @@ internal fun MissionView(
     }
     pendingDelete?.let { mission ->
         AlertDialog(onDismissRequest = { pendingDelete = null }, title = { Text("Delete this mission?") },
-            text = { Text("Delete this local mission and its PDF, log and PCAP? Uploaded copies remain on the backend.") },
+            text = { Text("Delete this local mission and its PDF, log and PCAP?" +
+                (if (mission.directory.name == settings.activeMonitorMissionId) " This closes the open mission; the next Start creates a new one." else "") +
+                " Uploaded copies remain on the backend.") },
             confirmButton = { TextButton({
                 pendingDelete = null
+                busy = mission.directory.name
+                deleting = true
                 scope.launch {
                     val removed = withContext(Dispatchers.IO) { MonitorMission.delete(context, mission, activeLogPath) }
-                    if (removed) { onDeleted(mission.log.absolutePath); onRefresh() }
-                    else messages = messages + (mission.directory.name to "Could not delete this mission.")
+                    if (removed) onDeleted(mission.log.absolutePath)
+                    else messages = messages + (mission.directory.name to "Could not delete this mission. Stop any active capture and refresh the list.")
+                    deleting = false
+                    busy = null
                 }
             }) { Text("Delete") } }, dismissButton = { TextButton({ pendingDelete = null }) { Text("Cancel") } })
     }
@@ -205,16 +213,19 @@ private fun fileSize(bytes: Long?): String = when {
     else -> "%.1f MiB".format(bytes / (1024.0 * 1024.0))
 }
 
-private fun openReport(context: Context, file: File): String = try {
-    val intent = MonitorEvidenceFiles.intent(context, file, "application/pdf", Intent.ACTION_VIEW)
+private fun openReport(context: Context, mission: MonitorMission.Stored): String = try {
+    val file = mission.report
+    val intent = MonitorEvidenceFiles.intent(context, file, "application/pdf", Intent.ACTION_VIEW,
+        MonitorEvidenceFiles.exportName(mission, file))
     context.startActivity(Intent.createChooser(intent, "Open mission PDF").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     "PDF viewer opened."
 } catch (e: android.content.ActivityNotFoundException) {
     "No PDF viewer installed. Export the PDF to open it on another device."
 } catch (e: Exception) { "Could not open PDF: ${e.message}" }
 
-private fun shareFile(context: Context, file: File, type: String): String = try {
-    val intent = MonitorEvidenceFiles.intent(context, file, type, Intent.ACTION_SEND)
+private fun shareFile(context: Context, mission: MonitorMission.Stored, file: File, type: String): String = try {
+    val intent = MonitorEvidenceFiles.intent(context, file, type, Intent.ACTION_SEND,
+        MonitorEvidenceFiles.exportName(mission, file))
     context.startActivity(Intent.createChooser(intent, "Export mission evidence").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     "Export opened. Local file retained."
 } catch (e: Exception) { "Could not export: ${e.message}" }

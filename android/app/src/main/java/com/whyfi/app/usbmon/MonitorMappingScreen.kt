@@ -79,6 +79,8 @@ internal fun MonitorMappingView(
     onUserPan: () -> Unit = {},
     liveLocations: List<Location> = emptyList(),
     onLocationPermissionChanged: () -> Unit = {},
+    showUncertainty: Boolean = true,
+    onToggleUncertainty: () -> Unit = {},
 ) {
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         onLocationPermissionChanged()
@@ -231,6 +233,8 @@ internal fun MonitorMappingView(
                     mapKey = logPath.orEmpty(), recenterToken = recenterToken.toString(),
                     focusToken = if (replay && followReceiver) replayCutoffMs.toString() else "",
                     followReceiver = followReceiver && mac == null,
+                    showUncertainty = showUncertainty,
+                    onToggleUncertainty = onToggleUncertainty,
                     receiverPath = receiverPath, onUserPan = onUserPan, onEstimateTap = { tappedMac ->
                         if (tappedMac in apTargetMacs) {
                             onSelectAp(tappedMac)
@@ -305,9 +309,11 @@ private fun GeoDetailsContent(
                     if (ageMs > MonitorLocationPolicy.MAX_FIX_AGE_MS) " (too old for capture)" else ""),
                     style = MaterialTheme.typography.bodySmall)
             }
-            if (!replay && (state.running || state.geoDiagnostics.radioReadings > 0)) {
+            if (!replay && (state.running || state.receiverFixCount > 0 || state.geoDiagnostics.radioReadings > 0)) {
                 val diagnostics = state.geoDiagnostics
                 Text("Capture location updates: ${if (state.locationUpdatesRegistered) "registered" else "unavailable"}",
+                    style = MaterialTheme.typography.bodySmall)
+                Text("Saved receiver fixes in this capture: ${state.receiverFixCount} (independent of favorites)",
                     style = MaterialTheme.typography.bodySmall)
                 Text("Pinned devices heard: ${diagnostics.favoriteDevicesHeard} · without RSSI: ${diagnostics.favoriteWithoutRssi} · " +
                     "new signal readings: ${diagnostics.radioReadings} · saved: ${state.geoSamples} · " +

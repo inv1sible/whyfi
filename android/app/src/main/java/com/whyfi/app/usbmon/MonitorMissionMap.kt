@@ -3,20 +3,26 @@ package com.whyfi.app.usbmon
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.PointF
 import android.view.ViewGroup
 import android.view.MotionEvent
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.material3.Text
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.FilterChip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import java.io.File
@@ -47,10 +53,13 @@ internal fun MonitorLocationMap(
     receiverPath: List<MonitorReceiverFix> = emptyList(),
     onEstimateTap: (String) -> Unit = {},
     onUserPan: () -> Unit = {},
+    showUncertainty: Boolean = true,
+    onToggleUncertainty: () -> Unit = {},
 ) {
     val panAction = rememberUpdatedState(onUserPan)
     Column(modifier.clipToBounds()) {
-        key(mapKey) { AndroidView(modifier = Modifier.fillMaxWidth().weight(1f).clipToBounds(), factory = { context ->
+      Box(Modifier.fillMaxWidth().weight(1f)) {
+        key(mapKey) { AndroidView(modifier = Modifier.fillMaxSize().clipToBounds(), factory = { context ->
             Configuration.getInstance().userAgentValue = context.packageName
             Configuration.getInstance().osmdroidTileCache = File(context.cacheDir, "osmdroid")
             MapView(context).apply {
@@ -131,10 +140,18 @@ internal fun MonitorLocationMap(
             }
             map.overlays.clear()
             map.overlays.add(MonitorLocationOverlay(receiver, estimates, selectedMac,
-                selectedSamples, labels, receiverPath.takeLast(800), onEstimateTap))
+                selectedSamples, labels, receiverPath.takeLast(800), onEstimateTap, showUncertainty))
             map.invalidate()
         }) }
-        Text("© OpenStreetMap contributors · blue: phone/measurements with accuracy · teal: estimate ±uncertainty · cones: illustrative RSSI, not bearing · clients may move",
+        FilterChip(showUncertainty, onToggleUncertainty, label = { Text("±") },
+            modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp).semantics {
+                contentDescription = if (showUncertainty) "Hide uncertainty circles and RSSI cones"
+                    else "Show uncertainty circles and RSSI cones"
+            })
+      }
+        Text("© OpenStreetMap contributors · blue: phone fixes/measurements · teal: estimate" +
+            if (showUncertainty) " · circles: accuracy/uncertainty · cones: illustrative RSSI, not bearing"
+            else " · uncertainty hidden",
             style = MaterialTheme.typography.bodySmall)
     }
 }
@@ -152,6 +169,7 @@ private class MonitorLocationOverlay(
     private val labels: Map<String, String>,
     private val receiverPath: List<MonitorReceiverFix>,
     private val onEstimateTap: (String) -> Unit,
+    private val showUncertainty: Boolean,
 ) : Overlay() {
     private val measurements = samples.groupBy { it.mac }.filterKeys { it in estimates }.mapValues { (_, readings) ->
         readings.groupBy { (it.lat / 0.00005).roundToInt() to (it.lng / 0.00005).roundToInt() }
@@ -184,27 +202,20 @@ private class MonitorLocationOverlay(
             canvas.drawCircle(center.x.toFloat(), center.y.toFloat(), abs(edge.x - center.x).toFloat(), paint)
             paint.style = Paint.Style.FILL
         }
-        if (receiverPath.isNotEmpty()) {
-            val path = Path()
-            receiverPath.forEachIndexed { index, fix ->
-                val p = point(fix.lat, fix.lng)
-                if (index == 0) path.moveTo(p.x.toFloat(), p.y.toFloat())
-                else path.lineTo(p.x.toFloat(), p.y.toFloat())
-            }
+        // Fixes are recorded as independent observations; joining them implied a continuous track.
+        receiverPath.forEach { fix ->
+            val p = point(fix.lat, fix.lng)
             paint.color = Color.argb(170, 0, 94, 158)
-            paint.style = Paint.Style.STROKE
-            paint.strokeWidth = 4f
-            canvas.drawPath(path, paint)
-            paint.style = Paint.Style.FILL
+            canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 3.5f, paint)
         }
         estimates.forEach { (mac, estimate) ->
             val deviceSamples = measurements[mac].orEmpty().takeLast(80)
-            MonitorSignalCones.draw(canvas, estimate, deviceSamples) { lat, lng ->
+            if (showUncertainty) MonitorSignalCones.draw(canvas, estimate, deviceSamples) { lat, lng ->
                 val p = point(lat, lng)
                 PointF(p.x.toFloat(), p.y.toFloat())
             }
             deviceSamples.forEach { sample ->
-                circle(sample.lat, sample.lng,
+                if (showUncertainty) circle(sample.lat, sample.lng,
                     MonitorLocationPolicy.effectiveAccuracy(sample.gpsAccuracyM, sample.fixAgeMs, sample.speedMps),
                     Color.argb(65, 0, 94, 158))
                 val p = point(sample.lat, sample.lng)
@@ -214,7 +225,7 @@ private class MonitorLocationOverlay(
         }
         receiver?.let { selected ->
             val fix = selected.fix
-            circle(fix.lat, fix.lng, selected.effectiveAccuracyM, Color.rgb(0, 94, 158))
+            if (showUncertainty) circle(fix.lat, fix.lng, selected.effectiveAccuracyM, Color.rgb(0, 94, 158))
             val p = point(fix.lat, fix.lng)
             paint.color = Color.WHITE
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 12f, paint)
@@ -222,7 +233,7 @@ private class MonitorLocationOverlay(
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 9f, paint)
         }
         estimates.forEach { (mac, estimate) ->
-            circle(estimate.lat, estimate.lng, estimate.uncertaintyM, Color.rgb(0, 125, 113))
+            if (showUncertainty) circle(estimate.lat, estimate.lng, estimate.uncertaintyM, Color.rgb(0, 125, 113))
             val p = point(estimate.lat, estimate.lng)
             paint.color = Color.WHITE
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 11f, paint)
@@ -230,7 +241,7 @@ private class MonitorLocationOverlay(
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 8f, paint)
             val fullMac = mac.uppercase()
             val name = (labels[mac]?.removeSuffix(" · $fullMac")?.take(20) ?: "Device") +
-                " ±${estimate.uncertaintyM.toInt()}m"
+                if (showUncertainty) " ±${estimate.uncertaintyM.toInt()}m" else ""
             paint.textSize = 27f
             paint.setShadowLayer(3f, 1f, 1f, Color.WHITE)
             val labelWidth = max(paint.measureText(name), paint.measureText(fullMac))
