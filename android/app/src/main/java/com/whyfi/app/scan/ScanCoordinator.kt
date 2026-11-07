@@ -27,6 +27,7 @@ import com.whyfi.app.data.remote.UploadWorker
 import com.whyfi.app.data.remote.WifiObservationDto
 import com.whyfi.app.gnss.GnssStatusManager
 import com.whyfi.app.lan.LanScanner
+import com.whyfi.app.lan.LanTarget
 import java.text.SimpleDateFormat
 import kotlin.math.abs
 import kotlinx.coroutines.coroutineScope
@@ -161,6 +162,7 @@ class ScanCoordinator(private val context: Context) {
      * pass above, so it's its own explicit action with its own lightweight
      * session — same pattern the removed NFC tap flow used. */
     suspend fun runLanScan(
+        target: LanTarget = LanTarget.Auto,
         onProgress: (checked: Int, total: Int) -> Unit = { _, _ -> },
         onDeviceFound: (LanObservationDto) -> Unit = {},
     ): ScanSessionUploadRequest {
@@ -168,7 +170,7 @@ class ScanCoordinator(private val context: Context) {
         val startBootMs = SystemClock.elapsedRealtime()
         liveLocation.acquire()
         val (devices, location) = try {
-            val found = lanScanner.scan(onProgress, onDeviceFound)
+            val found = lanScanner.scan(target, onProgress, onDeviceFound)
             found to resolveLocation(midpoint(startBootMs), waitMs = FIRST_FIX_WAIT_MS)
         } finally {
             liveLocation.release()

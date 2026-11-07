@@ -4,16 +4,24 @@ import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.SystemClock
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ColorScheme
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -41,29 +49,59 @@ import kotlinx.coroutines.delay
  * adapter (a live, channel-tuned capture saved as missions) are different
  * jobs, so each gets its own tabs, settings and accent colour.
  *
- * The switch is always available, adapter or not, so the adapter screens
+ * The toggle is always available, adapter or not, so the adapter screens
  * can be developed, tested and demoed without one plugged in.
  */
-enum class Workspace(val key: String, val label: String) {
-    PHONE("phone", "Phone radios"),
-    ADAPTER("adapter", "USB adapter");
+enum class Workspace(val key: String, val label: String, val icon: String) {
+    PHONE("phone", "Phone radios", "📱"),
+    ADAPTER("adapter", "USB adapter", "🔌");
 
     companion object {
         fun from(key: String?): Workspace = entries.firstOrNull { it.key == key } ?: PHONE
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Compact two-way toggle that sits left of a workspace's tab row: phone on
+ * top, USB plug below, the active one filled. Sized to the tab row's height
+ * so it reads as part of the tab bar rather than a separate control.
+ */
 @Composable
-fun WorkspaceSwitch(current: Workspace, onChange: (Workspace) -> Unit) {
-    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
-        Workspace.entries.forEachIndexed { index, workspace ->
-            SegmentedButton(
-                selected = workspace == current,
-                onClick = { onChange(workspace) },
-                shape = SegmentedButtonDefaults.itemShape(index, Workspace.entries.size),
-            ) { Text(workspace.label, maxLines = 1) }
+fun WorkspaceToggle(current: Workspace, onChange: (Workspace) -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, scheme.outlineVariant),
+        modifier = Modifier.padding(start = 6.dp, end = 2.dp).width(TOGGLE_WIDTH),
+    ) {
+        Column {
+            Workspace.entries.forEach { workspace ->
+                val selected = workspace == current
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(TOGGLE_CELL_HEIGHT)
+                        .background(if (selected) scheme.primaryContainer else Color.Transparent)
+                        .selectable(selected = selected, role = Role.RadioButton) { onChange(workspace) }
+                        .semantics { contentDescription = workspace.label },
+                ) {
+                    Text(workspace.icon, fontSize = 16.sp, color = if (selected) scheme.onSurface else scheme.onSurfaceVariant)
+                }
+            }
         }
+    }
+}
+
+private val TOGGLE_WIDTH = 44.dp
+private val TOGGLE_CELL_HEIGHT = 28.dp
+
+/** The toggle followed by a workspace's tab row, which takes the rest. */
+@Composable
+fun WorkspaceTabBar(current: Workspace, onChange: (Workspace) -> Unit, tabs: @Composable () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        WorkspaceToggle(current, onChange)
+        Box(Modifier.weight(1f)) { tabs() }
     }
 }
 

@@ -1,17 +1,13 @@
 package com.whyfi.app.usbmon
 
 import android.content.Context
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Typeface
-import android.graphics.pdf.PdfDocument
-import android.graphics.RectF
 import android.os.SystemClock
 import com.whyfi.app.scan.MonitorUiState
 import java.io.File
 import java.io.IOException
 import java.text.DateFormat
 import java.util.Date
+import java.util.Locale
 import java.util.UUID
 import org.json.JSONObject
 import com.google.gson.Gson
@@ -385,6 +381,13 @@ object MonitorMission {
         }.toSet()
     }
 
+    /**
+     * The mission PDF: cover with key figures and contents, an overview map
+     * of the route and pinned devices, tables (positions, observations,
+     * devices, channels), one map per pinned device, then appendices with
+     * per-device details, evidence files, the event timeline and method notes.
+     * Table contents come from MonitorReportContent; drawing from MonitorReportPdf.
+     */
     private fun writeReport(context: Context, files: Files, state: MonitorUiState, evidence: MonitorEvidence) {
         val geoSamples = evidence.samples
         val deviceSamples = evidence.radioSamples
@@ -393,63 +396,7 @@ object MonitorMission {
         val deviceSamplesByMac = deviceSamples.groupBy { it.mac }
         val targetMacs = evidence.targets.sorted()
         val estimates = targetMacs.associateWith { MonitorLocalization.estimate(samplesByMac[it].orEmpty()) }
-        val pdf = PdfDocument()
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        val ink = Color.rgb(24, 43, 51)
-        val muted = Color.rgb(89, 109, 117)
-        val teal = Color.rgb(0, 153, 139)
-        var pageNumber = 0
-        var page: PdfDocument.Page? = null
-        var y = 0f
-        fun finishPage() {
-            page?.let {
-                paint.color = muted
-                paint.typeface = Typeface.DEFAULT
-                paint.textSize = 9f
-                it.canvas.drawText("whyfi  /  local monitor mission", 36f, 816f, paint)
-                it.canvas.drawText("$pageNumber", 550f, 816f, paint)
-                pdf.finishPage(it)
-            }
-        }
-        fun nextPage() {
-            finishPage()
-            pageNumber++
-            page = pdf.startPage(PdfDocument.PageInfo.Builder(595, 842, pageNumber).create())
-            val canvas = page!!.canvas
-            paint.color = ink
-            canvas.drawRect(0f, 0f, 595f, 116f, paint)
-            paint.color = teal
-            canvas.drawRect(0f, 112f, 595f, 116f, paint)
-            paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            paint.textSize = 13f
-            canvas.drawText("whyfi", 36f, 43f, paint)
-            paint.color = Color.WHITE
-            paint.textSize = 23f
-            canvas.drawText("Monitor mission", 36f, 80f, paint)
-            y = 145f
-        }
-        fun line(value: String, indent: Float = 0f, color: Int = ink) {
-            if (page == null || y > 790f) nextPage()
-            paint.color = color
-            paint.typeface = Typeface.DEFAULT
-            paint.textSize = 10f
-            val fit = paint.breakText(value, true, 523f - indent, null)
-            val shown = if (fit < value.length) value.take((fit - 3).coerceAtLeast(0)) + "..." else value
-            page!!.canvas.drawText(shown, 36f + indent, y, paint)
-            y += 16f
-        }
-        fun section(title: String) {
-            if (page == null || y > 730f) nextPage()
-            y += 12f
-            paint.color = teal
-            paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            paint.textSize = 12f
-            page!!.canvas.drawText(title, 36f, y, paint)
-            y += 9f
-            paint.color = Color.rgb(219, 231, 232)
-            page!!.canvas.drawRect(36f, y, 559f, y + 1f, paint)
-            y += 18f
-        }
+
         val savedDevices = evidence.inventoryAt()
         val allDevices = savedDevices.ifEmpty { state.devices.map { it.first } }
         val currentGuesses = state.devices.associate { it.first.mac to it.second }
@@ -457,100 +404,139 @@ object MonitorMission {
         val reportDevices = allDevices.map { device ->
             device to (currentGuesses[device.mac] ?: SniffedDevices.guess(device) { vendors?.vendorOf(it) })
         }
+        val names = reportDevices.associate { (device, guess) -> device.mac to SniffedDevices.displayName(device, guess) } +
+            evidence.labels.filterValues { it.isNotBlank() }
         val aps = allDevices.count { it.isAp }
         val clients = allDevices.count { it.isClient }
         val unassociated = allDevices.count { it.isClient && it.probeRequests > 0 && it.bssids.isEmpty() }
         val earlierFrames = evidence.events.filter { it.event == "monitor_finished" }
             .sumOf { it.details.substringAfter("frames=", "0").substringBefore(' ').toLongOrNull() ?: 0L }
-        nextPage()
-        line("${readName(files.directory)} · ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(readDate(files.directory, files.log)))}", color = muted)
-        line("Mission ID  ${files.directory.name}", color = muted)
-        line("Report generated  ${DateFormat.getDateTimeInstance().format(Date())}", color = muted)
-        section("Overview")
-        line("${earlierFrames.takeIf { it > 0 } ?: state.frames} frames across captures")
-        line("$aps access points     $clients clients     $unassociated probing without observed association")
-        line("EAPOL-Key frames in latest capture: ${state.eapolKeyFrames}")
-        line("Key-frame count does not establish a complete WPA handshake or usable hash.", color = muted)
-        line("Status: ${state.status}")
-        line("Adapter: ${state.device.ifBlank { "unknown" }}")
-        section("Pinned device positions (${targetMacs.size})")
-        line("${geoSamples.size} location-tagged radio readings · GPS, network or fused source", color = muted)
-        line("${receiverFixes.size} Android receiver fixes recorded for the mission route", color = muted)
-        if (receiverFixes.isEmpty() && geoSamples.isEmpty())
-            line("No Android fix was recorded; PCAP alone cannot recover the phone's route.", color = muted)
-        if (targetMacs.isEmpty()) line("Star a device in Nearby to collect position readings.", color = muted)
-        targetMacs.forEach { mac ->
-            val estimate = estimates[mac]
-            if (estimate == null) line("$mac  No matching location fix; keep it starred and enable Location.", color = muted)
-            else line("$mac  %.6f, %.6f  uncertainty >=%.0f m%s".format(
-                estimate.lat, estimate.lng, estimate.uncertaintyM, if (estimate.provisional) " provisional" else ""))
-        }
-        section("Device observations (${deviceSamplesByMac.size})")
-        line("${deviceSamples.size} AP/client signal readings matched to Android receiver fixes, including non-favorites.", color = muted)
-        line("Coordinates below are receiver-derived hints; one sighting cannot locate a device.", color = muted)
-        line("Clients may move; their estimate describes the recorded observation area.", color = muted)
-        deviceSamplesByMac.entries.sortedByDescending { it.value.size }.forEach { (mac, samples) ->
-            val estimate = MonitorLocalization.estimate(samples) ?: return@forEach
-            val name = allDevices.firstOrNull { it.mac == mac }?.ssid
-                ?.takeIf { it.isNotBlank() }?.take(18) ?: "Device"
-            line("$name $mac  ${samples.size} readings  %.5f, %.5f  >=%.0f m%s".format(
-                estimate.lat, estimate.lng, estimate.uncertaintyM,
-                if (estimate.provisional) " receiver hint" else " estimate"))
-        }
-        section("Evidence files")
-        line("PCAP: ${files.pcap?.name ?: "not recorded"}  (${files.pcap?.length() ?: 0} bytes)" +
-            if (state.pcapTruncated) " - 200 MB cap reached" else "")
-        line("Mission log: ${files.log.name}")
-        section("Channels / received frames in latest capture")
-        state.channelFrames.entries.sortedBy { it.key }.chunked(5).forEach { group ->
-            line(group.joinToString("   ") { "ch ${it.key}: ${it.value}" })
-        }
-        section("Observed devices (${reportDevices.size})")
-        reportDevices.sortedByDescending { it.first.lastMs }.forEach { (device, guess) ->
-            line("${device.mac}  ${device.ssid.ifBlank { guess.vendor ?: guess.kind.label }}  ${device.bestRssi ?: "?"} dBm  ch ${device.channels.joinToString()}")
-            line("${guess.kind.label}; frames ${device.frames}; probes ${device.probeRequests}; APs ${device.bssids.joinToString().ifBlank { "none observed" }}", 12f, muted)
-            if (device.probed.isNotEmpty()) line("Probed: ${device.probed.joinToString().take(90)}", 12f, muted)
-            device.securityDetails.split(" · ").filter { it.isNotBlank() }.forEach { line("Security: $it", 12f, muted) }
-            device.wpsDetails.split(" · ").filter { it.isNotBlank() }.forEach { line("WPS: $it", 12f, muted) }
-        }
-        section("Position maps (${targetMacs.size})")
-        targetMacs.forEach { mac ->
-            if (y > 355f) nextPage()
-            val device = allDevices.firstOrNull { it.mac == mac }
-            section("${device?.ssid?.takeIf { it.isNotBlank() } ?: "Device"}  $mac")
-            val samples = samplesByMac[mac].orEmpty()
-            val estimate = estimates[mac]
-            if (estimate == null) {
-                line("No location-tagged RSSI readings while this device was pinned.", color = muted)
-                line("Keep it pinned, enable Location, and walk to several positions.", color = muted)
-            } else {
-                line("Estimated position: %.6f, %.6f  |  uncertainty at least %.0f m".format(
-                    estimate.lat, estimate.lng, estimate.uncertaintyM))
-                line("${estimate.spatialGroups} independent places  |  %.0f m route span  |  ${estimate.band}".format(
-                    estimate.receiverSpreadM), color = muted)
-                line("Location sources: ${samples.map { it.locationSource.ifBlank { "unknown" } }.distinct().joinToString()}", color = muted)
-                if (estimate.provisional) line("Provisional estimate: geometry or sample count is weak.", color = muted)
-                line("RSSI centroid baseline: %.6f, %.6f".format(estimate.baselineLat, estimate.baselineLng), color = muted)
-                val map = RectF(36f, y + 6f, 559f, y + 306f)
-                MonitorTileMap.draw(context, page!!.canvas, map, estimate, samples)
-                y = map.bottom + 15f
-                estimate.advice.forEach { line(it, color = muted) }
-                line("Cones run from the estimated device position toward sampled receiver positions.", color = muted)
-                line("Green to orange/red shows relative RSSI; cone direction is not an antenna bearing.", color = muted)
-            }
-        }
-        section("Interpretation")
-        line("Device types and associations are inferences from sampled traffic.", color = muted)
-        line("No observed association does not prove a client is unassociated.", color = muted)
-        line("A device may move; receiver position and RSSI do not prove its physical location.", color = muted)
-        finishPage()
-        val temporary = File(files.directory, "report.pdf.tmp")
+        val missionName = readName(files.directory)
+        val dateTime = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+        val generated = DateFormat.getDateTimeInstance().format(Date())
+        val route = receiverFixes.sortedBy { it.atMs }.map { it.lat to it.lng }
+        val markers = MonitorReportContent.markers(targetMacs, estimates, names)
+        val timeFormat = DateFormat.getTimeInstance(DateFormat.MEDIUM)
+
+        val doc = MonitorReportPdf(missionName, "whyfi · local monitor mission · generated $generated")
         try {
-            temporary.outputStream().use { pdf.writeTo(it) }
-            if (!temporary.renameTo(files.report)) throw IOException("Could not save PDF report")
+            // Cover
+            doc.keyValues(listOf(
+                "Mission" to missionName,
+                "Recorded" to dateTime.format(Date(readDate(files.directory, files.log))),
+                "Mission ID" to files.directory.name,
+                "Adapter" to state.device.ifBlank { "unknown" },
+                "Status" to state.status,
+                "Report generated" to generated,
+            ))
+            doc.statTiles(MonitorReportContent.stats(
+                frames = earlierFrames.takeIf { it > 0 } ?: state.frames,
+                aps = aps, clients = clients, probingOnly = unassociated,
+                eapolKeyFrames = state.eapolKeyFrames, pinned = targetMacs.size,
+            ))
+            doc.paragraph("A count of EAPOL-Key frames does not establish a complete WPA handshake or a usable hash.", muted = true, size = 8.5f)
+            doc.subheading("Contents")
+            doc.bullets(listOf(
+                "1  Overview map", "2  Pinned device positions", "3  Device observations",
+                "4  Observed devices", "5  Channels", "6  Position maps",
+                "Appendix A  Device details", "Appendix B  Evidence files",
+                "Appendix C  Mission timeline", "Appendix D  Method and interpretation",
+            ), muted = false)
+
+            doc.heading("1", "Overview map")
+            if (route.isEmpty() && markers.isEmpty()) {
+                doc.paragraph("No Android location fix was recorded, so there is no route to draw. " +
+                    "A PCAP alone cannot recover the phone's route.", muted = true)
+            } else {
+                doc.figure(330f, "Phone route from ${receiverFixes.size} receiver fixes and ${markers.size} pinned-device " +
+                    "estimates, numbered as in section 2. Rings show each estimate's uncertainty.") { canvas, area ->
+                    MonitorTileMap.drawOverview(context, canvas, area, route, markers)
+                }
+            }
+
+            doc.heading("2", "Pinned device positions")
+            doc.paragraph("${geoSamples.size} location-tagged radio readings (GPS, network or fused source) for ${targetMacs.size} " +
+                "pinned devices.", muted = true)
+            doc.table(MonitorReportContent.positionsTable(targetMacs, estimates, names))
+
+            doc.heading("3", "Device observations")
+            doc.paragraph("${deviceSamples.size} access point and client readings matched to phone location fixes, " +
+                "including devices that were not pinned.", muted = true)
+            doc.table(MonitorReportContent.observationsTable(deviceSamplesByMac, names))
+
+            doc.heading("4", "Observed devices")
+            doc.table(MonitorReportContent.devicesTable(reportDevices))
+
+            doc.heading("5", "Channels")
+            doc.paragraph("Frames received per channel in the latest capture.", muted = true)
+            doc.table(MonitorReportContent.channelsTable(state.channelFrames))
+
+            doc.heading("6", "Position maps")
+            if (targetMacs.isEmpty()) doc.paragraph("No device was pinned.", muted = true)
+            targetMacs.forEachIndexed { index, mac ->
+                val samples = samplesByMac[mac].orEmpty()
+                val estimate = estimates[mac]
+                doc.ensureSpace(if (estimate == null) 80f else 430f)
+                doc.subheading("${index + 1}  ${names[mac] ?: "Device"}  ·  $mac")
+                if (estimate == null) {
+                    doc.paragraph("No location-tagged RSSI readings while this device was pinned. " +
+                        "Keep it pinned, enable Location, and walk to several positions.", muted = true)
+                    return@forEachIndexed
+                }
+                doc.keyValues(listOf(
+                    "Estimated position" to "%.6f, %.6f".format(Locale.US, estimate.lat, estimate.lng),
+                    "Uncertainty" to "at least %.0f m".format(Locale.US, estimate.uncertaintyM) +
+                        if (estimate.provisional) " · provisional: geometry or sample count is weak" else "",
+                    "Geometry" to "${estimate.spatialGroups} independent places · %.0f m route span · ${estimate.band}"
+                        .format(Locale.US, estimate.receiverSpreadM),
+                    "Location sources" to samples.map { it.locationSource.ifBlank { "unknown" } }.distinct().joinToString(),
+                    "RSSI centroid baseline" to "%.6f, %.6f".format(Locale.US, estimate.baselineLat, estimate.baselineLng),
+                ), labelWidth = 130f)
+                doc.figure(300f, "Cones run from the estimate toward sampled receiver positions; green to orange/red is " +
+                    "relative RSSI. Cone direction is not an antenna bearing.") { canvas, area ->
+                    MonitorTileMap.draw(context, canvas, area, estimate, samples)
+                }
+                if (estimate.advice.isNotEmpty()) doc.bullets(estimate.advice)
+            }
+
+            doc.pageBreak()
+            doc.heading("A", "Appendix A · Device details")
+            doc.paragraph("Associations, probed network names, security and WPS fields, and why each device type was guessed.", muted = true)
+            doc.table(MonitorReportContent.deviceDetailsTable(reportDevices))
+
+            doc.heading("B", "Appendix B · Evidence files")
+            doc.keyValues(listOf(
+                "PCAP" to (files.pcap?.let { "${it.name} · ${MonitorReportContent.number(it.length())} bytes" } ?: "not recorded") +
+                    if (state.pcapTruncated) " · 200 MB cap reached" else "",
+                "Mission log" to "${files.log.name} · ${MonitorReportContent.number(files.log.length())} bytes",
+                "Receiver fixes" to MonitorReportContent.number(receiverFixes.size.toLong()),
+                "Location-tagged readings" to MonitorReportContent.number(geoSamples.size.toLong()),
+                "Device snapshots" to MonitorReportContent.number(evidence.snapshots.size.toLong()),
+            ), labelWidth = 140f)
+
+            doc.heading("C", "Appendix C · Mission timeline")
+            doc.table(MonitorReportContent.timelineTable(evidence.events) { timeFormat.format(Date(it)) })
+
+            doc.heading("D", "Appendix D · Method and interpretation")
+            doc.bullets(listOf(
+                "Device types and associations are inferences from sampled traffic.",
+                "No observed association does not prove a client is unassociated.",
+                "A device may move; receiver position and RSSI do not prove its physical location.",
+                "Positions use a fixed path-loss slope with a bounded per-device transmit-power offset and Huber loss; " +
+                    "readings at one place are grouped so a long stop does not dominate.",
+                "The uncertainty is a lower bound from the fit, not a calibrated probability.",
+                "Map tiles © OpenStreetMap contributors. Tiles are cached on the phone for seven days.",
+            ), muted = false)
+
+            val temporary = File(files.directory, "report.pdf.tmp")
+            try {
+                temporary.outputStream().use { doc.writeTo(it) }
+                if (!temporary.renameTo(files.report)) throw IOException("Could not save PDF report")
+            } finally {
+                temporary.delete()
+            }
         } finally {
-            pdf.close()
-            temporary.delete()
+            doc.close()
         }
     }
 }

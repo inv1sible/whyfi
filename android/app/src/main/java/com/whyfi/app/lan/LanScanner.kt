@@ -64,6 +64,7 @@ class LanScanner(private val context: Context) {
     }
 
     suspend fun scan(
+        target: LanTarget = LanTarget.Auto,
         onProgress: (checked: Int, total: Int) -> Unit = { _, _ -> },
         // Fired as each alive host is confirmed (per completed chunk, not
         // per host — see hostConcurrency) so the UI can show devices
@@ -74,10 +75,12 @@ class LanScanner(private val context: Context) {
             // An empty result must mean "swept the subnet, nobody answered" —
             // never "couldn't sweep". Callers check unavailableReason() first;
             // this is the belt-and-braces half of the same contract.
-            val subnet = resolveSubnet() as? SubnetResolution.Hosts
+            val subnet = resolveSubnet(target) as? SubnetResolution.Hosts
                 ?: return@withContext emptyList()
             val hosts = subnet.addresses
-            val onvif = OnvifDiscovery.discover(subnet.localAddress, hosts.mapNotNull { it.hostAddress }.toSet())
+            val onvif = subnet.localAddress
+                ?.let { OnvifDiscovery.discover(it, hosts.mapNotNull { h -> h.hostAddress }.toSet()) }
+                .orEmpty()
             val arpTable = readArpTable()
             var checked = 0
 
@@ -225,7 +228,15 @@ class LanScanner(private val context: Context) {
     }
 
     /** Why a sweep can't run right now, or null if it can. */
-    fun unavailableReason(): String? = (resolveSubnet() as? SubnetResolution.Unavailable)?.reason
+    fun unavailableReason(target: LanTarget = LanTarget.Auto): String? =
+        (resolveSubnet(target) as? SubnetResolution.Unavailable)?.reason
+
+    /** The addresses [target] covers, for the LAN screen's preview line
+     * ("192.168.1.1 – 192.168.1.254 · 254 addresses"), or the reason it can't run. */
+    fun describeTarget(target: LanTarget): String = when (val r = resolveSubnet(target)) {
+        is SubnetResolution.Unavailable -> r.reason
+        is SubnetResolution.Hosts -> r.range.describe()
+    }
 
     data class NetworkCandidate(
         val interfaceName: String,
@@ -242,6 +253,19 @@ class LanScanner(private val context: Context) {
         val truncated: Boolean = false,
     ) {
         val usable: Boolean get() = skipReason == null
+
+        /** Network and broadcast address of this interface's subnet. */
+        fun networkBounds(): Pair<Long, Long> {
+            val addr = LanRange.ip(address) ?: 0L
+            val hostBits = 32 - prefixLength.coerceIn(0, 32)
+            val network = addr and ((0xFFFFFFFFL shl hostBits) and 0xFFFFFFFFL)
+            return network to network + (1L shl hostBits) - 1
+        }
+
+        fun contains(value: Long): Boolean = networkBounds().let { (lo, hi) -> value in lo..hi }
+
+        /** Addresses a sweep of this interface covers, for the picker. */
+        val hostCount: Int get() = if (prefixLength >= 31) 0 else minOf((1 shl (32 - prefixLength)) - 2, MAX_HOSTS_TO_SCAN)
         fun describe(): String {
             val head = "$interfaceName  $address/$prefixLength  ($kind)"
             return when {
@@ -303,48 +327,52 @@ class LanScanner(private val context: Context) {
     }
 
     private sealed interface SubnetResolution {
-        data class Hosts(val addresses: List<InetAddress>, val localAddress: InetAddress) : SubnetResolution
+        /** [localAddress] is where ONVIF discovery is sent from; null for a
+         * custom range with no usable local interface (ONVIF is skipped). */
+        data class Hosts(val range: LanRange.Ok, val localAddress: InetAddress?) : SubnetResolution {
+            val addresses: List<InetAddress> by lazy {
+                range.addresses().mapNotNull { runCatching { InetAddress.getByAddress(LanRange.toBytes(it)) }.getOrNull() }
+            }
+        }
         data class Unavailable(val reason: String) : SubnetResolution
     }
 
-    private fun resolveSubnet(): SubnetResolution {
+    private fun resolveSubnet(target: LanTarget): SubnetResolution {
         val candidates = inspectNetworks()
         // WiFi first, then wired, then anything else usable — a phone with
         // both WiFi and USB tethering up should sweep the WiFi it's on.
-        val chosen = candidates.filter { it.usable }
+        val auto = candidates.filter { it.usable }
             .minByOrNull { KIND_PREFERENCE.indexOf(it.kind).takeIf { i -> i >= 0 } ?: KIND_PREFERENCE.size }
-            ?: return SubnetResolution.Unavailable(explainNoCandidate(candidates))
+        val chosen = when (target) {
+            LanTarget.Auto -> auto ?: return SubnetResolution.Unavailable(explainNoCandidate(candidates))
+            is LanTarget.Interface -> {
+                val nic = candidates.firstOrNull { it.interfaceName == target.name }
+                    ?: return SubnetResolution.Unavailable("Interface ${target.name} is gone. Pick another one.")
+                if (!nic.usable) return SubnetResolution.Unavailable("${nic.interfaceName} can't be swept: ${nic.skipReason}.")
+                nic
+            }
+            is LanTarget.Custom -> {
+                val range = when (val parsed = LanRange.parse(target.text)) {
+                    is LanRange.Invalid -> return SubnetResolution.Unavailable(parsed.reason)
+                    is LanRange.Ok -> parsed
+                }
+                // Send ONVIF probes from the interface whose subnet holds the
+                // range, else from the automatic choice; routed ranges (e.g.
+                // behind the router) are still swept by TCP connect.
+                val local = candidates.filter { it.usable }.firstOrNull { it.contains(range.first) } ?: auto
+                return SubnetResolution.Hosts(range, local?.let { InetAddress.getByName(it.address) })
+            }
+        }
+        return SubnetResolution.Hosts(subnetRange(chosen), InetAddress.getByName(chosen.address))
+    }
 
-        val prefixLength = chosen.prefixLength
-        val hostBits = 32 - prefixLength
-        // Capped at MAX_HOSTS_TO_SCAN regardless of how large the subnet
-        // actually is (see NetworkCandidate.truncated) — enumerating and
-        // sweeping the first N addresses of a big network is still useful,
-        // and this cap is what keeps that bounded rather than needing the
-        // whole subnet refused up front.
-        val hostCount = minOf((1 shl hostBits) - 2, MAX_HOSTS_TO_SCAN) // exclude network + broadcast addresses
-
-        val addressBytes = (InetAddress.getByName(chosen.address) as Inet4Address).address
-
-        val baseInt = ((addressBytes[0].toInt() and 0xFF) shl 24) or
-            ((addressBytes[1].toInt() and 0xFF) shl 16) or
-            ((addressBytes[2].toInt() and 0xFF) shl 8) or
-            (addressBytes[3].toInt() and 0xFF)
-        val networkInt = baseInt and (-1 shl hostBits)
-
-        return SubnetResolution.Hosts(
-            (1..hostCount).mapNotNull { offset ->
-            val hostInt = networkInt + offset
-            val bytes = byteArrayOf(
-                ((hostInt shr 24) and 0xFF).toByte(),
-                ((hostInt shr 16) and 0xFF).toByte(),
-                ((hostInt shr 8) and 0xFF).toByte(),
-                (hostInt and 0xFF).toByte(),
-            )
-                runCatching { InetAddress.getByAddress(bytes) }.getOrNull()
-            },
-            InetAddress.getByName(chosen.address),
-        )
+    /** The interface's subnet without network and broadcast addresses,
+     * capped at MAX_HOSTS_TO_SCAN (see NetworkCandidate.truncated) — the
+     * first N addresses of a big network are still worth sweeping. */
+    private fun subnetRange(nic: NetworkCandidate): LanRange.Ok {
+        val (network, _) = nic.networkBounds()
+        val hostCount = minOf((1L shl (32 - nic.prefixLength)) - 2, MAX_HOSTS_TO_SCAN.toLong())
+        return LanRange.Ok(network + 1, network + hostCount)
     }
 
     private fun readArpTable(): Map<String, String> = runCatching {

@@ -895,7 +895,9 @@ its own scans.
 
 ## Two workspaces: phone radios vs USB adapter (2026-11-07)
 
-The app has a workspace switch at the top (`ui/Workspace.kt`): **Phone
+The app has a compact workspace toggle (📱/🔌) left of each workspace's tab
+row (`ui/Workspace.kt`, `WorkspaceToggle`; maintainer asked for it smaller
+than the first full-width segmented switch): **Phone
 radios** (Dashboard, Scan, LAN, Settings; teal) and **USB adapter**
 (Live, Map, Devices, Missions, Setup; amber, with a status strip: REC time,
 channels, devices, PCAP size). They are different jobs (periodic passes
@@ -911,3 +913,17 @@ locked screen shows Setup so the test is reachable there. The choice is
 saved (`SettingsRepository.workspace`). A plugged-in USB device shows a
 banner in the phone workspace offering to switch (deviceList is polled
 every 2 s; attach broadcasts aren't reliable for runtime receivers).
+
+## LAN sweep targets and the mission PDF layout (2026-11-07)
+
+- LAN sweeps take a `LanTarget` (`lan/LanTarget.kt`): Automatic (WiFi first,
+  then wired), one interface, or a custom range (CIDR, start-end, start-last
+  octet). Custom ranges are **private address space only** (RFC 1918 +
+  100.64/10) and capped at `MAX_HOSTS_TO_SCAN`: a TCP-connect sweep of
+  public addresses would probe other people's machines.
+- The mission PDF is built from `MonitorReportContent` (pure table/legend
+  data, tested) and drawn by `MonitorReportPdf` (layout primitives). Order:
+  cover (key/values, stat tiles, contents), 1 overview map (route + numbered
+  pinned devices), 2–5 tables, 6 per-device maps, appendices A details,
+  B evidence files, C timeline, D method. Marker numbers must match the
+  positions table's # column. No emulator, so layout is checked on a phone.

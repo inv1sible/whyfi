@@ -28,6 +28,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.scan.MonitorUiState
 import com.whyfi.app.scan.LocationSnapshot
@@ -53,9 +54,15 @@ fun MonitorScreen(
     service: ScanForegroundService?,
     settingsRepository: SettingsRepository,
     unlocked: Boolean,
+    toggle: @Composable () -> Unit,
     setup: @Composable () -> Unit,
 ) {
     if (!unlocked) {
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                toggle()
+                Text("${MonitorSection.SETUP.icon} Setup", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 10.dp))
+            }
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Monitor is locked until this phone has received frames during the USB monitor test.")
@@ -63,7 +70,8 @@ fun MonitorScreen(
                 style = MaterialTheme.typography.bodySmall)
             setup()
         }
-    } else MonitorWorkspace(service, settingsRepository, setup)
+        }
+    } else MonitorWorkspace(service, settingsRepository, toggle, setup)
 }
 
 /** What a capture is filtered to. The six device categories are grouped
@@ -78,8 +86,11 @@ private val DEVICE_CATEGORIES = listOf(
     MonitorTab.CAMERAS, MonitorTab.PHONES_LAPTOPS, MonitorTab.CLIENTS,
 )
 
-/** The adapter workspace's top-level tabs. */
-private enum class MonitorSection(val label: String) { LIVE("Live"), MAP("Map"), DEVICES("Devices"), MISSIONS("Missions"), SETUP("Setup") }
+/** The adapter workspace's top-level tabs, with emoji icons like the phone
+ * workspace's tabs (no icon library dependency). */
+private enum class MonitorSection(val label: String, val icon: String) {
+    LIVE("Live", "📡"), MAP("Map", "🗺️"), DEVICES("Devices", "📋"), MISSIONS("Missions", "🗂️"), SETUP("Setup", "🛠️"),
+}
 
 private fun sectionOf(tab: MonitorTab): MonitorSection = when (tab) {
     MonitorTab.NEARBY -> MonitorSection.LIVE
@@ -92,7 +103,12 @@ private fun sectionOf(tab: MonitorTab): MonitorSection = when (tab) {
 private enum class NearbySort { RSSI, LAST_SEEN }
 
 @Composable
-private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository: SettingsRepository, setup: @Composable () -> Unit) {
+private fun MonitorWorkspace(
+    service: ScanForegroundService?,
+    settingsRepository: SettingsRepository,
+    toggle: @Composable () -> Unit,
+    setup: @Composable () -> Unit,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // Warm up location independently of capture and of which Monitor tab is visible.
@@ -404,20 +420,23 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             if (tab in DEVICE_CATEGORIES) lastCategoryName = tab.name
             selectedName = tab.name
         }
-        TabRow(section.ordinal) {
-            MonitorSection.entries.forEach { entry ->
-                Tab(entry == section, {
-                    selectTab(when (entry) {
-                        MonitorSection.LIVE -> MonitorTab.NEARBY
-                        MonitorSection.MAP -> MonitorTab.MAPPING
-                        MonitorSection.MISSIONS -> MonitorTab.MISSIONS
-                        MonitorSection.SETUP -> MonitorTab.SETUP
-                        MonitorSection.DEVICES -> MonitorTab.entries.firstOrNull { it.name == lastCategoryName } ?: MonitorTab.ACCESS_POINTS
-                    })
-                }, text = {
-                    Text(if (entry == MonitorSection.MISSIONS) "${entry.label} (${missions.size})" else entry.label,
-                        maxLines = 1, style = MaterialTheme.typography.labelMedium)
-                })
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            toggle()
+            TabRow(section.ordinal, Modifier.weight(1f)) {
+                MonitorSection.entries.forEach { entry ->
+                    Tab(entry == section, {
+                        selectTab(when (entry) {
+                            MonitorSection.LIVE -> MonitorTab.NEARBY
+                            MonitorSection.MAP -> MonitorTab.MAPPING
+                            MonitorSection.MISSIONS -> MonitorTab.MISSIONS
+                            MonitorSection.SETUP -> MonitorTab.SETUP
+                            MonitorSection.DEVICES -> MonitorTab.entries.firstOrNull { it.name == lastCategoryName } ?: MonitorTab.ACCESS_POINTS
+                        })
+                    }, text = {
+                        Text(if (entry == MonitorSection.MISSIONS && missions.isNotEmpty()) "${entry.label} ${missions.size}" else entry.label,
+                            maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelSmall)
+                    }, icon = { Text(entry.icon, fontSize = 16.sp) })
+                }
             }
         }
         if (section == MonitorSection.DEVICES) {

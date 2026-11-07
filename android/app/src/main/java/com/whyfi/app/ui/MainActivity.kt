@@ -277,12 +277,12 @@ private fun WhyfiApp(
         MaterialTheme(colorScheme = adapterColorScheme(MaterialTheme.colorScheme)) {
             Surface(Modifier.fillMaxSize()) {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    WorkspaceSwitch(workspace, switchWorkspace)
                     AdapterStatusStrip(monitorState, attachedUsb)
                     MonitorScreen(
                         service = service,
                         settingsRepository = settingsRepository,
                         unlocked = advancedMode,
+                        toggle = { WorkspaceToggle(workspace, switchWorkspace) },
                         setup = { AdapterSettings(settingsRepository, onAdvancedModeChange = { advancedMode = it }) },
                     )
                 }
@@ -292,18 +292,19 @@ private fun WhyfiApp(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        WorkspaceSwitch(workspace, switchWorkspace)
         if (attachedUsb.isNotEmpty() && bannerDismissedFor != usbKey) {
             AdapterAttachedBanner(
                 onSwitch = { switchWorkspace(Workspace.ADAPTER) },
                 onDismiss = { bannerDismissedFor = usbKey },
             )
         }
-        TabRow(selectedTabIndex = selectedTab.coerceAtMost(tabCount - 1)) {
-            WhyfiTab(DASHBOARD_ICON, "Dashboard", 0, selectedTab) { goToTab(0) }
-            WhyfiTab(SCAN_ICON, "Scan", 1, selectedTab) { goToTab(1) }
-            WhyfiTab(LAN_ICON, "LAN", 2, selectedTab) { goToTab(2) }
-            WhyfiTab(SETTINGS_ICON, "Settings", 3, selectedTab) { goToTab(3) }
+        WorkspaceTabBar(workspace, switchWorkspace) {
+            TabRow(selectedTabIndex = selectedTab.coerceAtMost(tabCount - 1)) {
+                WhyfiTab(DASHBOARD_ICON, "Dashboard", 0, selectedTab) { goToTab(0) }
+                WhyfiTab(SCAN_ICON, "Scan", 1, selectedTab) { goToTab(1) }
+                WhyfiTab(LAN_ICON, "LAN", 2, selectedTab) { goToTab(2) }
+                WhyfiTab(SETTINGS_ICON, "Settings", 3, selectedTab) { goToTab(3) }
+            }
         }
 
         val openMission: () -> Unit = { showMission = true }

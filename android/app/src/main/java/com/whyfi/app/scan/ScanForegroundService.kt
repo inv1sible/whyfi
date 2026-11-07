@@ -21,6 +21,7 @@ import com.whyfi.app.R
 import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.local.WhyfiDatabase
 import com.whyfi.app.data.remote.LanObservationDto
+import com.whyfi.app.lan.LanTarget
 import com.whyfi.app.data.remote.ScanPolicyResponse
 import com.whyfi.app.data.remote.ScanSessionUploadRequest
 import com.whyfi.app.data.remote.SensorHeartbeatRequest
@@ -115,6 +116,8 @@ data class ScanUiState(
     // Shown on the LAN screen so a refusal can be checked rather than taken
     // on trust — the /32 tunnel bug looked exactly like a correct answer.
     val lanNetworkReport: List<String> = emptyList(),
+    /** What the last/current sweep covers, e.g. "192.168.1.1 – 192.168.1.254 · 254 addresses". */
+    val lanTargetLabel: String? = null,
     val isLanScanning: Boolean = false,
     val lanChecked: Int = 0,
     val lanTotal: Int = 0,
@@ -574,7 +577,7 @@ class ScanForegroundService : Service() {
         return waitMs.coerceIn(500L, 30_000L)
     }
 
-    fun scanLan() {
+    fun scanLan(target: LanTarget = LanTarget.Auto) {
         if (_uiState.value.isLanScanning) return
 
         // Ask before sweeping. A sweep that can't run produced an empty device
@@ -582,7 +585,8 @@ class ScanForegroundService : Service() {
         // uploaded a zero-observation session, which then consumed a slot in
         // the "last N scans" filter for no information at all.
         val report = scanCoordinator.lanScanner.inspectNetworks().map { it.describe() }
-        val unavailable = scanCoordinator.lanScanner.unavailableReason()
+        val unavailable = scanCoordinator.lanScanner.unavailableReason(target)
+        val targetLabel = scanCoordinator.lanScanner.describeTarget(target)
         if (unavailable != null) {
             _uiState.update {
                 it.copy(
@@ -601,12 +605,13 @@ class ScanForegroundService : Service() {
             it.copy(
                 isLanScanning = true, lanChecked = 0, lanTotal = 0,
                 lanDeviceCount = null, lanDevices = emptyList(), lanUnavailableReason = null,
-                lanNetworkReport = report,
+                lanNetworkReport = report, lanTargetLabel = targetLabel,
             )
         }
         updateNotification("Scanning LAN…")
         serviceScope.launch {
             val result = scanCoordinator.runLanScan(
+                target = target,
                 onProgress = { checked, total -> _uiState.update { it.copy(lanChecked = checked, lanTotal = total) } },
                 onDeviceFound = { device -> _uiState.update { it.copy(lanDevices = it.lanDevices + device) } },
             )
