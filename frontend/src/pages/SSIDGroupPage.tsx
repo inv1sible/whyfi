@@ -7,6 +7,7 @@ import { RadioMap } from "../components/RadioMap";
 import type { CoveragePolygon, MapPoint } from "../components/RadioMap";
 import { ReportHeader } from "../components/ReportHeader";
 import { SightingTable } from "../components/SightingTable";
+import { SignatureChips } from "../components/SignatureChips";
 import { SortableTh } from "../components/SortableTh";
 import { SimpleLineChart } from "../components/SimpleLineChart";
 import { COVERAGE_STROKE_COLOR, classifyDeviceCoverage, soloShapes } from "../coverageConfig";
@@ -210,6 +211,7 @@ export function SSIDGroupPage() {
           <thead>
             <tr>
               <SortableTh label="BSSID" sortKey="bssid" currentKey={apSortKey} direction={apDirection} onSort={requestApSort} />
+              <th className="hide-mobile">Type</th>
               <SortableTh label="Band" sortKey="latest_band" currentKey={apSortKey} direction={apDirection} onSort={requestApSort} hideMobile />
               <SortableTh label="Channel" sortKey="latest_channel" currentKey={apSortKey} direction={apDirection} onSort={requestApSort} hideMobile />
               <SortableTh label="Signal" sortKey="latest_rssi" currentKey={apSortKey} direction={apDirection} onSort={requestApSort} />
@@ -218,7 +220,7 @@ export function SSIDGroupPage() {
           </thead>
           <tbody>
             {sortedAps.length === 0 && (
-              <tr><td colSpan={5} className="empty-state">No access points match your search.</td></tr>
+              <tr><td colSpan={6} className="empty-state">No access points match your search.</td></tr>
             )}
             {sortedAps.map((ap) => {
               const color = polygons.find((p) => p.label === ap.bssid)?.color;
@@ -238,6 +240,9 @@ export function SSIDGroupPage() {
                       />
                     )}
                     <Link to={`/networks/${encodeURIComponent(ap.bssid)}`}>{ap.bssid}</Link>
+                  </td>
+                  <td className="hide-mobile">
+                    <SignatureChips signatures={ap.signatures ?? []} />
                   </td>
                   <td className="hide-mobile">{ap.latest_band ?? "—"}</td>
                   <td className="hide-mobile">{ap.latest_channel ?? "—"}</td>

@@ -132,6 +132,8 @@ export interface AccessPoint {
   latest_channel: number | null;
   latest_security_type: string | null;
   latest_has_location: boolean;
+  signature_ids: string[];
+  signatures: BleSignatureRef[];
 }
 
 export interface WiFiObservation {
@@ -154,6 +156,9 @@ export interface WiFiObservation {
   latitude: number | null;
   longitude: number | null;
   location_accuracy_meters: number | null;
+  vendor_ie_ouis?: string[];
+  signature_matches?: { id: string; rule: string; via?: string }[];
+  signature_catalog_version?: number | null;
 }
 
 export interface ScanSession {
@@ -255,6 +260,8 @@ export interface BleSignatureRef {
   name: string;
   kind: string;
   rules: string[];
+  // Wi-Fi only: how address rules hit ("bssid", "bssid_universal", "vendor_ie").
+  vias?: string[];
   // Detail view only.
   notes?: string;
   attention_note?: string;
@@ -410,6 +417,8 @@ export interface AccessPointCoverage {
   bssid: string;
   ssid: string;
   detail_path: string;
+  // Catalog signature names of this AP.
+  signature_names?: string[];
   // scan_session_id/accuracy_meters identify the one (almost always
   // exactly one, since buckets are rounded to ~1m) reading behind this
   // point — lets the frontend's "show device location pins" toggle mark

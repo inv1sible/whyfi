@@ -1,4 +1,5 @@
-import type { AccessPoint } from "./api/types";
+import type { AccessPoint, BleSignatureRef } from "./api/types";
+import { mergeSignatures } from "./components/SignatureChips";
 
 // One row per SSID (mesh networks share one name across several BSSIDs,
 // same idea as Cellular/LAN/BLE grouping their own raw readings into one
@@ -12,6 +13,9 @@ export interface SsidGroupRow {
   channels: string;
   security: string;
   vendor: string;
+  // Union of the members' catalog signatures (pattern matches).
+  signatures: BleSignatureRef[];
+  signatureLabel: string;
   strongestRssi: number | null;
   lastSeen: string;
   hasLocation: boolean;
@@ -53,6 +57,11 @@ export function groupBySsid(accessPoints: AccessPoint[]): SsidGroupRow[] {
       channels: channels.length > 0 ? channels.join(", ") : "—",
       security: securityTypes.length === 1 ? securityTypes[0] : securityTypes.length > 1 ? "Mixed" : "—",
       vendor: vendors.length === 1 ? vendors[0] : vendors.length > 1 ? "Multiple" : "—",
+      signatures: mergeSignatures(members.map((m) => m.signatures ?? [])),
+      // Sort key for the Type column.
+      signatureLabel: mergeSignatures(members.map((m) => m.signatures ?? []))
+        .map((s) => s.name)
+        .join(", "),
       strongestRssi,
       lastSeen,
       hasLocation: members.some((m) => m.latest_has_location),

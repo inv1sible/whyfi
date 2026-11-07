@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, areaQuery, searchQueryPart } from "../api/client";
 import { Pager } from "../components/Pager";
 import { SecurityBadge } from "../components/SecurityBadge";
+import { SignatureChips, signatureClassLabel } from "../components/SignatureChips";
 import { SimpleBarChart } from "../components/SimpleBarChart";
 import { SortableTh } from "../components/SortableTh";
 import { TableControls } from "../components/TableControls";
@@ -28,6 +29,13 @@ export function ChannelCongestionPage() {
   const filter = useFilter();
   const debouncedSearch = useDebouncedValue(filter.searchQuery);
   const [page, setPage] = useState(1);
+  const [signatureClass, setSignatureClass] = useState("");
+
+  // The catalog only changes on deploy, so this barely needs refreshing.
+  const catalog = usePolling(() => api.wifiSignatures(), 10 * 60 * 1000, []);
+  const signatureClasses = [...new Set((catalog.data?.results ?? []).map((fleet) => fleet.kind))].sort((a, b) =>
+    signatureClassLabel(a).localeCompare(signatureClassLabel(b)),
+  );
 
   const congestion = usePolling(
     () => api.channelCongestion(band, { since: filter.since, until: filter.until, sessionLimit: filter.sessionLimit }),
@@ -38,6 +46,7 @@ export function ChannelCongestionPage() {
   const rangeDeps = [
     band,
     debouncedSearch,
+    signatureClass,
     filter.since,
     filter.until,
     filter.sessionLimit,
@@ -56,7 +65,8 @@ export function ChannelCongestionPage() {
         `?band=${encodeURIComponent(band)}&limit=${PAGE_SIZE}&page=${page}` +
           searchQueryPart(debouncedSearch) +
           activeWindowQuery(filter) +
-          areaQuery(filter.area),
+          areaQuery(filter.area) +
+          (signatureClass ? `&signature_class=${encodeURIComponent(signatureClass)}` : ""),
       ),
     15000,
     [page, ...rangeDeps],
@@ -97,6 +107,21 @@ export function ChannelCongestionPage() {
 
       <h2>Networks by channel</h2>
       <p className="page-hint">Grouped by SSID — a mesh network's individual BSSIDs are listed on its detail page.</p>
+      <p className="page-hint">
+        Type chips are pattern matches against a signature catalog (BSSID prefix, SSID, vendor elements in the
+        beacon), shown for information only — not proof of what the device is.
+      </p>
+      <label className="print-hide signature-class-filter">
+        Signature class{" "}
+        <select value={signatureClass} onChange={(e) => setSignatureClass(e.target.value)}>
+          <option value="">All networks</option>
+          {signatureClasses.map((kind) => (
+            <option key={kind} value={kind}>
+              {signatureClassLabel(kind)}
+            </option>
+          ))}
+        </select>
+      </label>
       {accessPoints.loading && !accessPoints.data && <p>Loading…</p>}
       {accessPoints.error && <p className="error-text">Could not reach the backend: {accessPoints.error.message}</p>}
 
@@ -118,7 +143,7 @@ export function ChannelCongestionPage() {
                     <SortableTh label="SSID" sortKey="ssid" currentKey={sortKey} direction={direction} onSort={requestSort} />
                     <SortableTh label="Channel" sortKey="channels" currentKey={sortKey} direction={direction} onSort={requestSort} hideMobile />
                     <SortableTh label="Security" sortKey="security" currentKey={sortKey} direction={direction} onSort={requestSort} hideMobile />
-                    <SortableTh label="Vendor" sortKey="vendor" currentKey={sortKey} direction={direction} onSort={requestSort} hideMobile />
+                    <SortableTh label="Type" sortKey="signatureLabel" currentKey={sortKey} direction={direction} onSort={requestSort} hideMobile />
                     <SortableTh label="Signal" sortKey="strongestRssi" currentKey={sortKey} direction={direction} onSort={requestSort} />
                     <SortableTh label="Last seen" sortKey="lastSeen" currentKey={sortKey} direction={direction} onSort={requestSort} />
                   </tr>
@@ -136,7 +161,9 @@ export function ChannelCongestionPage() {
                       <td className="hide-mobile">
                         <SecurityBadge securityType={row.security} />
                       </td>
-                      <td className="hide-mobile">{row.vendor}</td>
+                      <td className="hide-mobile">
+                        {row.signatures.length > 0 ? <SignatureChips signatures={row.signatures} /> : row.vendor}
+                      </td>
                       <td>{row.strongestRssi !== null ? `${row.strongestRssi} dBm` : "—"}</td>
                       <td>{new Date(row.lastSeen).toLocaleString()}</td>
                     </tr>

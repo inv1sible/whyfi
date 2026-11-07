@@ -36,8 +36,8 @@ const SOURCE_SHORT: Record<HeatmapSource, string> = {
 
 function describeType(source: HeatmapSource, deviceTypeGuess?: string, signatureNames?: string[]): string {
   // A catalog signature match beats the on-device legacy guess.
-  if (source === "ble" && signatureNames && signatureNames.length > 0) {
-    return `BLE — ${signatureNames[0]} (pattern match)`;
+  if ((source === "ble" || source === "wifi") && signatureNames && signatureNames.length > 0) {
+    return `${SOURCE_SHORT[source]} — ${signatureNames[0]} (pattern match)`;
   }
   if (source === "ble" && deviceTypeGuess) {
     return `BLE — ${BLE_LABELS[deviceTypeGuess] ?? deviceTypeGuess}`;

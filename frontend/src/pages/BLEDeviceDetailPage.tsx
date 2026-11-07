@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { CompassArrow } from "../components/CompassArrow";
-import { SignatureChips } from "../components/SignatureChips";
+import { SignatureChips, SignatureNotes } from "../components/SignatureChips";
 import { MapDisplayModeControls } from "../components/MapDisplayModeControls";
 import { PrintReportButton } from "../components/PrintReportButton";
 import { RadioMap } from "../components/RadioMap";
@@ -245,28 +245,7 @@ export function BLEDeviceDetailPage() {
         </dl>
       )}
 
-      {device.data && device.data.signatures.length > 0 && (
-        <>
-          <h2>Pattern match</h2>
-          {/* Informational only, like the type badge: no alert state or
-              "following you" logic hangs off this (see MEMORY.md). */}
-          <p className="page-hint">A pattern match on the advertisement, not proof of what the device is.</p>
-          <dl className="signature-notes">
-            {device.data.signatures.map((signature) => (
-              <div key={signature.id}>
-                <dt>
-                  <SignatureChips signatures={[signature]} />
-                </dt>
-                <dd>
-                  {signature.notes || "No notes in the signature catalog."}
-                  {/* Plain text, not .warning-text: a catalog caution, not an alert. */}
-                  {signature.attention_note && <p className="signature-attention">{signature.attention_note}</p>}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </>
-      )}
+      {device.data && <SignatureNotes signatures={device.data.signatures} subject="advertisement" />}
 
       {/* Print-hidden: this is a live bearing from whoever is *reading* the
           screen to the device, so on paper it's either stale or, more often,

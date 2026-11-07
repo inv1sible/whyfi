@@ -6,6 +6,7 @@ import { RadioMap } from "../components/RadioMap";
 import type { CoveragePolygon, MapPoint } from "../components/RadioMap";
 import { ReportHeader } from "../components/ReportHeader";
 import { SightingTable } from "../components/SightingTable";
+import { SignatureChips, SignatureNotes } from "../components/SignatureChips";
 import { SecurityBadge } from "../components/SecurityBadge";
 import { SimpleLineChart } from "../components/SimpleLineChart";
 import { COVERAGE_STROKE_COLOR, classifyDeviceCoverage, soloShapes } from "../coverageConfig";
@@ -206,8 +207,10 @@ export function NetworkDetailPage() {
           </dd>
           <dt>Band</dt>
           <dd>{ap.data.latest_band ?? "—"}</dd>
-          <dt>Vendor</dt>
-          <dd>{ap.data.vendor_oui || "—"}</dd>
+          <dt>Type</dt>
+          <dd>
+            {ap.data.signatures.length > 0 ? <SignatureChips signatures={ap.data.signatures} /> : ap.data.vendor_oui || "—"}
+          </dd>
           <dt>First seen</dt>
           <dd>{new Date(ap.data.first_seen_at).toLocaleString()}</dd>
           <dt>Last seen</dt>
@@ -237,6 +240,8 @@ export function NetworkDetailPage() {
           )}
         </dl>
       )}
+
+      {ap.data && <SignatureNotes signatures={ap.data.signatures} subject="BSSID, network name and beacon" />}
 
       <h2>Sighting locations</h2>
       {geotagged.length === 0 && <p className="empty-state">No geotagged sightings yet.</p>}
