@@ -22,6 +22,12 @@
   type badge remains as a fallback.
 - GNSS satellite view (per-satellite Cn0/elevation/azimuth/used-in-fix) plus
   derived location (lat/lon, accuracy, provider).
+- Scan positions from live location while scanning (GPS 1 s, network,
+  platform fused) through Fieldwatch-style gates, with GPS-only jump
+  overrides; implausible stored positions are corrected or cleared
+  non-destructively (`manage.py clean_session_locations`, originals kept).
+  Later: GNSS interference/spoofing hints (Fieldwatch `GnssInterference.kt`)
+  would need continuous GNSS measurement epochs with AGC, not scan snapshots.
 - LAN device discovery (TCP-connect subnet sweep + common-port probe) — its
   own explicit "Scan LAN" action, not part of the regular radio pass.
 - Geotagging + heatmap/map visualization across all of the above.

@@ -130,7 +130,31 @@ stale, and don't duplicate what's already obvious from code/tests.
   `signature_ids` union is a read-modify-write (a review found relabel
   could drop a concurrent sighting's ids).
 
-- **UWB precision ranging only works with compatible trackers.** Apple's
+- **Scan positions come from a live subscription, never getLastKnownLocation()
+  alone.** Until 2026-11 each scan took the newest last-known GPS/network fix
+  with no age, accuracy or jump checks, which is why positions jumped: 944 of
+  1,459 positions were network fixes, and 45 sat over 1 km from the fused fix
+  taken at the same moment. `scan/LiveLocationTracker.kt` now keeps GPS (1 s),
+  network and platform fused running while scanning (battery cost accepted,
+  same as Fieldwatch), and `scan/FixSelector.kt` applies Fieldwatch's gates:
+  75 m, 30 s, no hop over 40 m faster than 42 m/s (raised by the fix's own
+  measured speed, for the Autobahn and trains).
+  **Only GPS may override the jump gate.** Network *and* fused positions come
+  from Wi-Fi/cell databases that relocated access points fool: in August the
+  live DB had Las Vegas scans with hours of identical network/fused fixes in
+  Iowa, Germany, New York, California and Tokyo, claiming 7–42 m accuracy,
+  while every one of the 45 GPS fixes that week was in Vegas.
+  The stored history is cleaned non-destructively by
+  `manage.py clean_session_locations` (`scans/location_quality.py`;
+  originals in `raw_*`, `--revert` undoes it). Two rehearsals on a copy of
+  the live DB showed simpler rules doing harm: "prefer fused" swapped
+  correct positions for wrong ones, and majority voting kept the fake Iowa
+  run. Hence the track-consistency pass with GPS weighted 10x, and airliner
+  speed allowed only for stretches the phone recorded nothing (otherwise
+  dropping scans "explains" a teleport as a flight). Run the cleanup with
+  `--dry-run` first, and check against a DB copy before changing its rules.
+
+ Apple's
   AirTag U1 ranging protocol is proprietary and not accessible to
   third-party Android apps. `UwbLocateManager` only attempts real UWB ranging
   when both the phone has UWB hardware *and* the target supports an

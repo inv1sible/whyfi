@@ -130,6 +130,13 @@ credentials, or publish secrets.
   detector. The three intervals live on `SensorScanPolicy` so the app and
   `/remote` stay consistent; the device reports its motion state so a slow
   cadence never looks like a hang. See `docs/architecture.md`.
+- **Scan positions go through `scan/LiveLocationTracker` + `scan/FixSelector`**
+  (live GPS/network/fused while scanning, Fieldwatch-style gates, GPS-only
+  overrides). Don't go back to `getLastKnownLocation()` for a scan's position,
+  and don't let network/fused fixes override the jump gate: relocated Wi-Fi
+  fools both. History is repaired non-destructively by
+  `manage.py clean_session_locations` (dry-run first; `--revert` exists). See
+  MEMORY.md.
 - **`android/…/scan/RadioFormat.kt` mirrors `backend/scans/serializers.py`**
   (`band_for_frequency`, `channel_for_frequency`,
   `security_type_from_capabilities`). Change one side and you must change the
