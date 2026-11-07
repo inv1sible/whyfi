@@ -133,9 +133,10 @@ fun SettingsScreen(
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Location source", style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    "Each scan records both the GPS/network reading and Android's fused location " +
-                        "(API 31+) side by side, so the two can be compared on the backend. The " +
-                        "device picks whichever fix is freshest; no manual selection needed.",
+                    "While scanning, whyfi keeps GPS, network and Android's fused location (API 31+) " +
+                        "running and gives each scan the best fresh fix: within 75 m and 30 s, with " +
+                        "implausible jumps rejected. A scan with no such fix gets no position rather " +
+                        "than a stale one. GPS stays on while scanning, which costs battery.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

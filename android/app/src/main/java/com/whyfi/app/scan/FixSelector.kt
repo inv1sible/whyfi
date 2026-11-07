@@ -96,6 +96,15 @@ class FixSelector {
         const val REANCHOR_COUNT = 3
         private const val HISTORY_MS = 120_000L
 
+        /** One-shot use of the same gates, e.g. on cached last-known fixes when
+         * no live subscription is running. Oldest first, so the jump gate sees
+         * them in time order. */
+        fun bestOf(candidates: List<LocationFix>, referenceBootMs: Long, nowBootMs: Long): LocationFix? {
+            val selector = FixSelector()
+            candidates.sortedBy { it.bootMs }.forEach { selector.offer(it, nowBootMs) }
+            return selector.best(referenceBootMs)
+        }
+
         fun valid(fix: LocationFix): Boolean =
             fix.lat.isFinite() && fix.lng.isFinite() && fix.lat in -90.0..90.0 && fix.lng in -180.0..180.0 &&
                 !(fix.lat == 0.0 && fix.lng == 0.0) &&

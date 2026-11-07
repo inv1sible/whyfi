@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.google.gson.Gson
@@ -27,6 +28,8 @@ import com.whyfi.app.data.remote.WifiObservationDto
 import com.whyfi.app.gnss.GnssStatusManager
 import com.whyfi.app.lan.LanScanner
 import java.text.SimpleDateFormat
+import kotlin.math.abs
+import kotlinx.coroutines.delay
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
@@ -65,6 +68,8 @@ class ScanCoordinator(private val context: Context) {
     val bleDeviceScanner = BleDeviceScanner(context)
     val gnssStatusManager = GnssStatusManager(context)
     val lanScanner = LanScanner(context)
+    /** Live GPS/network/fused fixes while anything here needs a position. */
+    val liveLocation = LiveLocationTracker(context)
     private val settingsRepository = SettingsRepository(context)
     private val gson = Gson()
 
@@ -80,8 +85,22 @@ class ScanCoordinator(private val context: Context) {
         onPartialResult: (PartialScanResult) -> Unit = {},
     ): ScanSessionUploadRequest {
         val startedAt = isoNow()
-        val location = resolveLocation()
+        val passStartBootMs = SystemClock.elapsedRealtime()
+        liveLocation.acquire()
+        try {
+            return runScanPass(options, startedAt, passStartBootMs, onPhaseChange, onPartialResult)
+        } finally {
+            liveLocation.release()
+        }
+    }
 
+    private suspend fun runScanPass(
+        options: ScanOptions,
+        startedAt: String,
+        passStartBootMs: Long,
+        onPhaseChange: (ScanPhase) -> Unit,
+        onPartialResult: (PartialScanResult) -> Unit,
+    ): ScanSessionUploadRequest {
         val wifiObservations = if (options.includeWifi) {
             onPhaseChange(ScanPhase.WIFI)
             runPhaseCatching("WiFi") { wifiScanManager.scan() }.also { onPartialResult(PartialScanResult.Wifi(it)) }
@@ -112,18 +131,11 @@ class ScanCoordinator(private val context: Context) {
             emptyList()
         }
 
+        // Resolved at the end, against the pass midpoint: the radios were
+        // heard across the whole pass, and GPS has had the pass to warm up.
+        val location = resolveLocation(midpoint(passStartBootMs), waitMs = FIRST_FIX_WAIT_MS)
         onPhaseChange(ScanPhase.UPLOADING)
-        val payload = ScanSessionUploadRequest(
-            clientScanId = UUID.randomUUID().toString(),
-            startedAt = startedAt,
-            completedAt = isoNow(),
-            latitude = location.primary?.latitude,
-            longitude = location.primary?.longitude,
-            locationAccuracyMeters = location.primary?.accuracy,
-            locationProvider = location.primary?.provider ?: "",
-            fusedLatitude = location.fused?.latitude,
-            fusedLongitude = location.fused?.longitude,
-            fusedAccuracyMeters = location.fused?.accuracy,
+        val payload = location.toRequest(startedAt).copy(
             wifiObservations = wifiObservations,
             cellObservations = cellObservations,
             bleObservations = bleObservations,
@@ -143,22 +155,16 @@ class ScanCoordinator(private val context: Context) {
         onDeviceFound: (LanObservationDto) -> Unit = {},
     ): ScanSessionUploadRequest {
         val startedAt = isoNow()
-        val location = resolveLocation()
-        val devices = lanScanner.scan(onProgress, onDeviceFound)
+        val startBootMs = SystemClock.elapsedRealtime()
+        liveLocation.acquire()
+        val (devices, location) = try {
+            val found = lanScanner.scan(onProgress, onDeviceFound)
+            found to resolveLocation(midpoint(startBootMs), waitMs = FIRST_FIX_WAIT_MS)
+        } finally {
+            liveLocation.release()
+        }
 
-        val payload = ScanSessionUploadRequest(
-            clientScanId = UUID.randomUUID().toString(),
-            startedAt = startedAt,
-            completedAt = isoNow(),
-            latitude = location.primary?.latitude,
-            longitude = location.primary?.longitude,
-            locationAccuracyMeters = location.primary?.accuracy,
-            locationProvider = location.primary?.provider ?: "",
-            fusedLatitude = location.fused?.latitude,
-            fusedLongitude = location.fused?.longitude,
-            fusedAccuracyMeters = location.fused?.accuracy,
-            lanObservations = devices,
-        )
+        val payload = location.toRequest(startedAt).copy(lanObservations = devices)
 
         enqueueForUpload(payload)
         return payload
@@ -176,21 +182,17 @@ class ScanCoordinator(private val context: Context) {
         val scanResult = wifiScanManager.lastScanResults().firstOrNull { it.BSSID == bssid }
             ?: return FtmObservationDto(bssid = bssid, success = false, status = "no_recent_scan")
 
-        val result = ftmRangingManager.range(scanResult)
-        val location = resolveLocation()
-        val payload = ScanSessionUploadRequest(
-            clientScanId = UUID.randomUUID().toString(),
-            startedAt = isoNow(),
-            completedAt = isoNow(),
-            latitude = location.primary?.latitude,
-            longitude = location.primary?.longitude,
-            locationAccuracyMeters = location.primary?.accuracy,
-            locationProvider = location.primary?.provider ?: "",
-            fusedLatitude = location.fused?.latitude,
-            fusedLongitude = location.fused?.longitude,
-            fusedAccuracyMeters = location.fused?.accuracy,
-            ftmObservations = listOf(result),
-        )
+        val startedAt = isoNow()
+        liveLocation.acquire()
+        val (result, location) = try {
+            val ranged = ftmRangingManager.range(scanResult)
+            // A range is only as useful as the position it was taken from,
+            // so this one waits longer for a first fix than a scan pass does.
+            ranged to resolveLocation(SystemClock.elapsedRealtime(), waitMs = FTM_FIX_WAIT_MS)
+        } finally {
+            liveLocation.release()
+        }
+        val payload = location.toRequest(startedAt).copy(ftmObservations = listOf(result))
         enqueueForUpload(payload)
         return result
     }
@@ -235,18 +237,47 @@ class ScanCoordinator(private val context: Context) {
         if (doomed.isNotEmpty()) dao.deleteAll(doomed)
     }
 
-    private data class ResolvedLocation(val primary: Location?, val fused: Location?)
+    private data class ResolvedLocation(val primary: LocationFix?, val fused: Location?, val fixAgeMs: Long?)
 
-    /** GPS mode's primary is untouched (identical call as always); BOTH
-     * mode's primary is *also* untouched — it just additionally captures a
-     * fused reading alongside it, so the two can be compared rather than
-     * only ever recording whichever one "won". FUSED mode reports the
-     * fused reading as primary, falling back to the GPS/network pick if
-     * fused is unavailable (older API level, or no fix yet). */
-    private fun resolveLocation(): ResolvedLocation =
-        ResolvedLocation(primary = lastKnownLocation(), fused = fusedLocation())
+    private fun ResolvedLocation.toRequest(startedAt: String) = ScanSessionUploadRequest(
+        clientScanId = UUID.randomUUID().toString(),
+        startedAt = startedAt,
+        completedAt = isoNow(),
+        latitude = primary?.lat,
+        longitude = primary?.lng,
+        locationAccuracyMeters = primary?.accuracyM?.toFloat(),
+        locationProvider = primary?.provider ?: "",
+        locationFixAgeMs = fixAgeMs,
+        fusedLatitude = fused?.latitude,
+        fusedLongitude = fused?.longitude,
+        fusedAccuracyMeters = fused?.takeIf { it.hasAccuracy() }?.accuracy,
+    )
 
-    private fun lastKnownLocation(): Location? = LocationSnapshot.lastKnown(context)
+    private fun midpoint(startBootMs: Long): Long = (startBootMs + SystemClock.elapsedRealtime()) / 2
+
+    /**
+     * The position for a pass centred on [referenceBootMs]: the best live fix
+     * through FixSelector's gates, else cached last-known fixes through the
+     * same gates, else none at all. No position is better than a stale one:
+     * stale and coarse last-known fixes are what made scans jump.
+     * `fused` stays the freshest platform fused fix (when under a minute
+     * old) so the backend can compare the two.
+     */
+    private suspend fun resolveLocation(referenceBootMs: Long, waitMs: Long = 0L): ResolvedLocation {
+        var best = liveLocation.selector.best(referenceBootMs)
+        val deadline = SystemClock.elapsedRealtime() + waitMs
+        while (best == null && liveLocation.isRunning() && SystemClock.elapsedRealtime() < deadline) {
+            delay(FIX_POLL_MS)
+            best = liveLocation.selector.best(referenceBootMs)
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (best == null) {
+            best = FixSelector.bestOf(LocationSnapshot.lastKnownCandidates(context).map { it.toFix() }, referenceBootMs, now)
+        }
+        val fused = (liveLocation.latestFused() ?: fusedLocation())
+            ?.takeIf { now - it.elapsedRealtimeNanos / 1_000_000L <= FUSED_MAX_AGE_MS }
+        return ResolvedLocation(best, fused, best?.let { abs(it.bootMs - referenceBootMs) })
+    }
 
     // FUSED_PROVIDER was added in API 31 (S) — combines GPS/network/sensor
     // data via the platform's own fusion, no Play Services dependency
@@ -280,5 +311,13 @@ class ScanCoordinator(private val context: Context) {
         val format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
         format.timeZone = TimeZone.getTimeZone("UTC")
         return format.format(Date())
+    }
+
+    private companion object {
+        /** A pass with no fix yet waits this long at the end for a first one. */
+        const val FIRST_FIX_WAIT_MS = 5_000L
+        const val FTM_FIX_WAIT_MS = 10_000L
+        const val FIX_POLL_MS = 250L
+        const val FUSED_MAX_AGE_MS = 60_000L
     }
 }

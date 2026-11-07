@@ -17,13 +17,6 @@ enum class ThemePreference {
  * (API 31+) as the reported location instead. BOTH keeps the GPS/network
  * pick as the primary reading (identical to GPS mode) *and* additionally
  * captures a fused reading alongside it, for comparing sources. */
-enum class LocationSourcePreference {
-    GPS, FUSED, BOTH;
-
-    companion object {
-        fun fromStored(value: String?): LocationSourcePreference = entries.find { it.name == value } ?: GPS
-    }
-}
 
 /**
  * Which algorithm estimates a transmitter's position. Mirrors the PWA's
@@ -79,9 +72,6 @@ class SettingsRepository(context: Context) {
         get() = ThemePreference.fromStored(prefs.getString(KEY_THEME, null))
         set(value) = prefs.edit { putString(KEY_THEME, value.name) }
 
-    var locationSourcePreference: LocationSourcePreference
-        get() = LocationSourcePreference.fromStored(prefs.getString(KEY_LOCATION_SOURCE, null))
-        set(value) = prefs.edit { putString(KEY_LOCATION_SOURCE, value.name) }
 
     /** Which estimator Mission view uses for a target's position (the cone
      * apex). Device-local, same as [themePreference] — the PWA keeps its own
@@ -205,7 +195,6 @@ class SettingsRepository(context: Context) {
         private const val KEY_BACKEND_URL = "backend_url"
         private const val KEY_SENSOR_TOKEN = "sensor_token"
         private const val KEY_THEME = "theme_preference"
-        private const val KEY_LOCATION_SOURCE = "location_source_preference"
         private const val KEY_POSITION_ESTIMATOR = "position_estimator"
         private const val KEY_REMOTE_CONTROL = "remote_control_enabled"
         private const val KEY_MONITOR_TEST_PASSED = "monitor_test_passed"

@@ -12,8 +12,8 @@ import android.os.Looper
 import androidx.core.content.ContextCompat
 
 /** One-shot "roughly where am I right now" reads, shared by [ScanCoordinator]
- * (which additionally supports a fused-vs-GPS comparison for scan uploads —
- * see [com.whyfi.app.data.LocationSourcePreference]) and the Mission view,
+ * (cached-fix fallback behind [LiveLocationTracker], same gates as live
+ * fixes — see [FixSelector]) and the Mission view,
  * which only ever needs the plain GPS/network pick — plus, for Mission
  * view's live "which way to walk" tracking, a continuous-updates variant. */
 object LocationSnapshot {

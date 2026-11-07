@@ -449,6 +449,10 @@ class ScanForegroundService : Service() {
         gracefulStopRequested = false
         _uiState.update { it.copy(isContinuous = true) }
         if (settingsRepository.adaptiveScanEnabled) motionDetector.start()
+        // Keep live location running for the whole loop, not just during
+        // passes: GPS stays warm between passes, so each pass starts with a
+        // fresh fix instead of a cold start (see LiveLocationTracker).
+        scanCoordinator.liveLocation.acquire()
         continuousJob = serviceScope.launch {
             try {
                 while (isActive && !gracefulStopRequested) {
@@ -463,6 +467,7 @@ class ScanForegroundService : Service() {
             } finally {
                 // Runs on cancellation too, so both stop paths converge here.
                 continuousJob = null
+                scanCoordinator.liveLocation.release()
                 motionDetector.stop()
                 _uiState.update {
                     it.copy(

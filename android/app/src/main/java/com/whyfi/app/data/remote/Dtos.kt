@@ -15,6 +15,8 @@ data class ScanSessionUploadRequest(
     @SerializedName("longitude") val longitude: Double?,
     @SerializedName("location_accuracy_meters") val locationAccuracyMeters: Float?,
     @SerializedName("location_provider") val locationProvider: String = "",
+    // Age of the chosen fix at the pass midpoint (LiveLocationTracker/FixSelector).
+    @SerializedName("location_fix_age_ms") val locationFixAgeMs: Long? = null,
     @SerializedName("fused_latitude") val fusedLatitude: Double? = null,
     @SerializedName("fused_longitude") val fusedLongitude: Double? = null,
     @SerializedName("fused_accuracy_meters") val fusedAccuracyMeters: Float? = null,

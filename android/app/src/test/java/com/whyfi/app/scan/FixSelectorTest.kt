@@ -130,4 +130,15 @@ class FixSelectorTest {
         assertTrue(selector.offer(fix("gps", 10.0), at(10.0)))
         assertFalse(selector.offer(fix("network", 9.5, northM = 900.0, accuracyM = 25.0), at(10.0)))
     }
+
+    @Test
+    fun lastKnownFallbackUsesTheSameGates() {
+        val candidates = listOf(
+            fix("gps", 0.0, accuracyM = 5.0), // 60 s old at the reference: too stale
+            fix("network", 55.0, northM = 3000.0, accuracyM = 150.0), // too coarse
+            fix("fused", 58.0, northM = 20.0, accuracyM = 15.0),
+        )
+        assertEquals("fused", FixSelector.bestOf(candidates, referenceBootMs = at(60.0), nowBootMs = at(60.0))?.provider)
+        assertNull(FixSelector.bestOf(candidates.take(2), at(60.0), at(60.0)))
+    }
 }
