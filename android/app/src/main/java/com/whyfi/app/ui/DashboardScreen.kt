@@ -95,6 +95,10 @@ fun DashboardScreen(
             }
         }
 
+        uiState.publicIp?.let { ip ->
+            Text("Public IP  $ip  · ${formatClock(uiState.publicIpAtMs)}", style = MaterialTheme.typography.bodyMedium)
+        }
+
         Text("Unique devices heard", style = MaterialTheme.typography.titleMedium)
         Row(
             modifier = Modifier.fillMaxWidth(),

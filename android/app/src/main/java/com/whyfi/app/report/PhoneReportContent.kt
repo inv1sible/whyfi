@@ -277,3 +277,30 @@ data class BleDeviceSummary(
     /** Manufacturer records and service data as advertised. */
     val raw: String,
 )
+
+/** The session report written when scanning stops. */
+object ScanReportContent {
+    /** One table per radio of every unique device this session, strongest reading first. */
+    fun sessionTable(kind: RadioKind, devices: List<com.whyfi.app.scan.SurveyTally.SeenDevice>): ReportTable {
+        val (label, id, detail) = when (kind) {
+            RadioKind.WIFI -> Triple("SSID", "BSSID", "Band")
+            RadioKind.CELLULAR -> Triple("Carrier", "Cell", "Type · cell ID")
+            else -> Triple("Name", "MAC", "Type")
+        }
+        return ReportTable(
+            columns = listOf(ReportColumn(label, 1.6f), ReportColumn(id, 1.6f, CellKind.MONO), ReportColumn(detail, 1.3f),
+                ReportColumn("Best signal", 0.8f, CellKind.NUMBER)),
+            rows = devices.map { listOf(it.label.ifBlank { "–" }, it.id, it.detail.ifBlank { "–" }, "${it.best} dBm") },
+            empty = "Nothing heard this session.",
+        )
+    }
+
+    fun stats(survey: SurveyStats, publicIp: String?): List<ReportStat> = listOf(
+        ReportStat(ReportFormat.number(survey.passCount.toLong()), "scan passes"),
+        ReportStat(ReportFormat.number(survey.uniqueWifi.toLong()), "WiFi access points"),
+        ReportStat(ReportFormat.number(survey.uniqueCellular.toLong()), "cell towers"),
+        ReportStat(ReportFormat.number(survey.uniqueBle.toLong()), "Bluetooth devices"),
+        ReportStat(ReportFormat.number(survey.uniqueSatellites.toLong()), "satellites"),
+        ReportStat(publicIp ?: "–", "public IP"),
+    )
+}

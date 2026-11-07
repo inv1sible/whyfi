@@ -22,6 +22,7 @@ import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.local.WhyfiDatabase
 import com.whyfi.app.data.remote.LanObservationDto
 import com.whyfi.app.lan.LanTarget
+import com.whyfi.app.report.PhoneReports
 import com.whyfi.app.data.remote.ScanPolicyResponse
 import com.whyfi.app.data.remote.ScanSessionUploadRequest
 import com.whyfi.app.data.remote.SensorHeartbeatRequest
@@ -125,6 +126,14 @@ data class ScanUiState(
     // Grows live as devices are confirmed during a LAN scan, and stays
     // populated afterwards as the "last results" until the next scan starts.
     val lanDevices: List<LanObservationDto> = emptyList(),
+    /** Public IP from ident.me after a pass (see PublicIp), and when. */
+    val publicIp: String? = null,
+    val publicIpAtMs: Long = 0L,
+    /** Where each pass this session was taken, for the scan report's map. */
+    val passPositions: List<TrackPoint> = emptyList(),
+    /** The scan report written when scanning stopped, and the pass count it covers. */
+    val scanReportPath: String? = null,
+    val scanReportPasses: Int = 0,
     /** Where and when the last sweep finished, for the LAN report. */
     val lanLatitude: Double? = null,
     val lanLongitude: Double? = null,
@@ -360,6 +369,7 @@ class ScanForegroundService : Service() {
         _uiState.update {
             it.copy(
                 completedScanCount = 0,
+                passPositions = emptyList(),
                 wifiCount = null,
                 cellularCount = null,
                 bleCount = null,
@@ -478,6 +488,7 @@ class ScanForegroundService : Service() {
         if (_uiState.value.isScanning || _uiState.value.isContinuous) return
         serviceScope.launch {
             runOnePass(options)
+            craftScanReport()
             stopIfNothingKeepsUsAlive()
         }
     }
@@ -524,6 +535,7 @@ class ScanForegroundService : Service() {
                         effectiveIntervalSeconds = null,
                     )
                 }
+                craftScanReport()
                 stopIfNothingKeepsUsAlive()
             }
         }
@@ -647,6 +659,8 @@ class ScanForegroundService : Service() {
                 _uiState.update {
                     it.copy(
                         isLanScanning = false, lanDeviceCount = result.lanObservations.size,
+                        // The final list carries the names found after the sweep.
+                        lanDevices = result.lanObservations,
                         lanLatitude = result.latitude, lanLongitude = result.longitude,
                         lanAccuracyM = result.locationAccuracyMeters, lanFinishedAtMs = System.currentTimeMillis(),
                     )
@@ -1026,6 +1040,36 @@ class ScanForegroundService : Service() {
         // Persist only the last pass + count so the Dashboard survives a
         // restart. SurveyStats and previousPass are deliberately not persisted.
         LastScanStore.save(applicationContext, _uiState.value.completedScanCount, pass)
+        if (lat != null && lng != null) {
+            val position = TrackPoint(System.currentTimeMillis(), lat, lng, pass.locationAccuracyMeters?.toDouble(), pass.locationProvider)
+            _uiState.update { it.copy(passPositions = (it.passPositions + position).takeLast(MAX_PASS_POSITIONS)) }
+        }
+        refreshPublicIp()
+    }
+
+    /** Re-reads the public IP when it's older than PublicIp.REFRESH_MS. */
+    private fun refreshPublicIp(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && !PublicIp.due(_uiState.value.publicIpAtMs, now)) return
+        _uiState.update { it.copy(publicIpAtMs = now) }
+        serviceScope.launch(Dispatchers.IO) {
+            PublicIp.fetch()?.let { ip -> _uiState.update { it.copy(publicIp = ip, publicIpAtMs = System.currentTimeMillis()) } }
+        }
+    }
+
+    /** Session devices for the scan report (see SurveyTally.devices). */
+    fun sessionDevices(): SurveyTally.SessionDevices = surveyTally.devices()
+
+    /** Writes the scan report when scanning stops, so it's ready on the Scan tab. */
+    private fun craftScanReport() {
+        if (_uiState.value.latestPass == null) return
+        serviceScope.launch {
+            runCatching {
+                PhoneReports.scan(applicationContext, _uiState.value, locationTrack.value, surveyTally.devices())
+            }.onSuccess { file ->
+                _uiState.update { it.copy(scanReportPath = file.absolutePath, scanReportPasses = it.completedScanCount) }
+            }.onFailure { android.util.Log.w("ScanForegroundService", "scan report failed", it) }
+        }
     }
 
     /** Drops the persistent notification once nothing needs us alive.
@@ -1117,6 +1161,7 @@ class ScanForegroundService : Service() {
     }
 
     companion object {
+        private const val MAX_PASS_POSITIONS = 2_000
         private const val CHANNEL_ID = "whyfi_scanning"
         private const val NOTIFICATION_ID = 1001
         private const val MONITOR_MOVE_CHANNEL_ID = "whyfi_monitor_move"

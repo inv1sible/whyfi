@@ -140,9 +140,12 @@ fun ScanDetailScreen(
             TextButton(onClick = onBack) { Text("← Back") }
             Text("Last scan", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.weight(1f))
-            // The GPS view has its own report in GpsPanel.
-            if (kind != RadioKind.SATELLITE) {
-                val track = service?.locationTrack?.collectAsState()
+            val track = service?.locationTrack?.collectAsState()
+            if (kind == RadioKind.SATELLITE) {
+                ReportButton(enabled = track?.value.orEmpty().isNotEmpty() || uiState.latestPass != null) {
+                    PhoneReports.gps(context, uiState, track?.value.orEmpty())
+                }
+            } else {
                 ReportButton(enabled = uiState.latestPass != null) {
                     PhoneReports.radio(context, kind, uiState, track?.value.orEmpty(), bleInfo)
                 }

@@ -115,7 +115,10 @@ class LanScanner(private val context: Context) {
                 found.forEach(onDeviceFound)
                 results += found
             }
-            results
+            // Ask the hosts reverse DNS couldn't name (see LanNameResolver).
+            val unnamed = results.filter { it.hostname.isBlank() }.map { it.ipAddress }
+            val names = LanNameResolver.resolve(unnamed)
+            results.map { device -> names[device.ipAddress]?.let { device.copy(hostname = it) } ?: device }
         }
 
     /** Returns the open ports plus the fastest successful connect time

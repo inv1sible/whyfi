@@ -28,6 +28,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.whyfi.app.scan.SurveyTally
+import com.whyfi.app.report.PhoneReports
+import java.io.File
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -134,7 +137,19 @@ fun ScanScreen(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("whyfi scanner", style = MaterialTheme.typography.headlineSmall)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("whyfi scanner", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+            // Written automatically when scanning stops (all radios, public
+            // IP, location); regenerated if passes ran since.
+            if (uiState.latestPass != null && !uiState.isScanning && !uiState.isContinuous) {
+                ReportButton(enabled = true) {
+                    uiState.scanReportPath?.let(::File)
+                        ?.takeIf { it.isFile && uiState.scanReportPasses == uiState.completedScanCount }
+                        ?: PhoneReports.scan(context, uiState, service?.locationTrack?.value.orEmpty(),
+                            service?.sessionDevices() ?: SurveyTally().devices())
+                }
+            }
+        }
 
         // One row, always — not three separate fragments that only
         // sometimes render. Before any scan it shows zeros/dashes and

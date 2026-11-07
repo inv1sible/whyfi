@@ -344,7 +344,8 @@ private fun WhyfiTab(
         selected = selectedTab == index,
         onClick = onClick,
         enabled = enabled,
-        text = { Text(label) },
+        // Small enough that "Overview" stays on one line beside the toggle.
+        text = { Text(label, fontSize = 12.sp, maxLines = 1, softWrap = false) },
         icon = { Text(icon, fontSize = 16.sp) },
     )
 }

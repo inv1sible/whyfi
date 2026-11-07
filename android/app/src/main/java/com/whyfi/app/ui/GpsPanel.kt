@@ -83,10 +83,6 @@ fun GpsPanel(service: ScanForegroundService?, uiState: ScanUiState) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             FilterChip(follow, { follow = !follow }, label = { Text("Follow") })
             TextButton(onClick = { service?.clearLocationTrack() }, enabled = track.isNotEmpty()) { Text("Clear path") }
-            Spacer(Modifier.weight(1f))
-            ReportButton(enabled = track.isNotEmpty() || uiState.latestPass != null) {
-                PhoneReports.gps(context, uiState, track)
-            }
         }
     }
 }

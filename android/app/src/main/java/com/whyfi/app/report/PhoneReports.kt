@@ -145,6 +145,22 @@ object PhoneReports {
         write(doc, file(context, "gps"))
     }
 
+    /**
+     * Numbered report sections that exist only when they have something to
+     * show, so a report never carries sections the screen didn't (the
+     * contents list is built from the same list).
+     */
+    private class Sections {
+        val items = mutableListOf<Pair<String, () -> Unit>>()
+        fun add(title: String, present: Boolean, render: () -> Unit) { if (present) items += title to render }
+        fun contents(appendix: List<String>): List<String> =
+            items.mapIndexed { i, (title, _) -> "${i + 1}  $title" } + appendix
+        fun render(doc: ReportPdf) = items.forEachIndexed { i, (title, body) -> doc.heading("${i + 1}", title); body() }
+    }
+
+    private fun publicIpLine(state: ScanUiState): String =
+        state.publicIp?.let { "$it · checked ${time.format(Date(state.publicIpAtMs))} via ident.me" } ?: "not known"
+
     suspend fun overview(context: Context, state: ScanUiState, track: List<TrackPoint>): File = withContext(Dispatchers.IO) {
         val generated = now()
         val survey = state.survey
@@ -154,35 +170,41 @@ object PhoneReports {
         doc.keyValues(listOf(
             "Session started" to if (survey.startedAtMs > 0) DateFormat.getDateTimeInstance().format(Date(survey.startedAtMs)) else "–",
             "Last pass" to (state.latestPass?.startedAt ?: "none"),
+            "Public IP" to publicIpLine(state),
             "Report generated" to generated,
         ))
         doc.statTiles(OverviewReportContent.stats(survey, state.lanDeviceCount))
-        doc.subheading("Contents")
-        doc.bullets(listOf("1  Map", "2  Changes since the previous pass", "3  WiFi by band", "4  Strongest heard",
-            "Appendix A–D  Last pass: WiFi, cellular, Bluetooth, satellites", "Appendix E  Notes"), muted = false)
 
-        doc.heading("1", "Map")
         val pass = state.latestPass
         val passMarker = pass?.latitude?.let { lat -> pass.longitude?.let { lng ->
             MonitorReportContent.MapMarker(1, "Last pass", lat, lng, (pass.locationAccuracyMeters ?: 0f).toDouble())
         } }
-        if (track.isEmpty() && passMarker == null) doc.paragraph("No position was recorded this session.", muted = true)
-        else doc.figure(320f, "The phone's path this session (blue); marker 1 is where the last pass was taken, its ring the fix accuracy.") { canvas, area ->
-            MonitorTileMap.drawOverview(context, canvas, area, route(track), listOfNotNull(passMarker))
+        val sections = Sections()
+        sections.add("Map", track.isNotEmpty() || passMarker != null) {
+            doc.figure(320f, "The phone's path this session (blue); marker 1 is where the last pass was taken, its ring the fix accuracy.") { canvas, area ->
+                MonitorTileMap.drawOverview(context, canvas, area, route(track), listOfNotNull(passMarker))
+            }
         }
-        doc.heading("2", "Changes since the previous pass")
-        doc.table(OverviewReportContent.changesTable(rowsByKind))
-        doc.heading("3", "WiFi by band")
-        doc.table(OverviewReportContent.bandsTable(survey))
-        doc.heading("4", "Strongest heard")
-        doc.table(OverviewReportContent.strongestTable(survey))
-
-        listOf(RadioKind.WIFI to "A", RadioKind.CELLULAR to "B", RadioKind.BLE to "C", RadioKind.SATELLITE to "D").forEachIndexed { i, (kind, letter) ->
-            if (i == 0) doc.pageBreak()
-            doc.heading(letter, "Appendix $letter · Last pass: ${kind.label}")
+        val changes = OverviewReportContent.changesTable(rowsByKind)
+        sections.add("Changes since the previous pass", changes.rows.isNotEmpty()) { doc.table(changes) }
+        val bands = OverviewReportContent.bandsTable(survey)
+        sections.add("WiFi by band", bands.rows.isNotEmpty()) { doc.table(bands) }
+        val strongest = OverviewReportContent.strongestTable(survey)
+        sections.add("Strongest heard", strongest.rows.isNotEmpty()) { doc.table(strongest) }
+        val appendices = listOf(RadioKind.WIFI, RadioKind.CELLULAR, RadioKind.BLE, RadioKind.SATELLITE)
+            .filter { rowsByKind[it].orEmpty().isNotEmpty() }
+        val letters = "ABCDEFG"
+        doc.subheading("Contents")
+        doc.bullets(sections.contents(appendices.mapIndexed { i, k -> "Appendix ${letters[i]}  Last pass: ${k.label}" } +
+            "Appendix ${letters[appendices.size]}  Notes"), muted = false)
+        sections.render(doc)
+        doc.pageBreak()
+        appendices.forEachIndexed { i, kind ->
+            doc.heading("${letters[i]}", "Appendix ${letters[i]} · Last pass: ${kind.label}")
             doc.table(OverviewReportContent.passTable(kind, rowsByKind[kind].orEmpty()))
         }
-        doc.heading("E", "Appendix E · Notes")
+        val notes = letters[appendices.size]
+        doc.heading("$notes", "Appendix $notes · Notes")
         doc.bullets(listOf(
             "Totals cover this scanning session only and reset when the scanner stops; the web app has every uploaded scan.",
             "Bluetooth devices rotate their MAC address, so some new and gone entries are the same device.",
@@ -190,6 +212,72 @@ object PhoneReports {
             "Map tiles © OpenStreetMap contributors.",
         ), muted = false)
         write(doc, file(context, "overview"))
+    }
+
+    /** The whole session, written when scanning stops (Scan tab). */
+    suspend fun scan(
+        context: Context,
+        state: ScanUiState,
+        track: List<TrackPoint>,
+        devices: com.whyfi.app.scan.SurveyTally.SessionDevices,
+    ): File = withContext(Dispatchers.IO) {
+        val generated = now()
+        val survey = state.survey
+        val positions = state.passPositions
+        val doc = ReportPdf("Scan report", "Scanning session", "whyfi · scan · generated $generated")
+        val last = track.lastOrNull() ?: positions.lastOrNull()
+        doc.keyValues(listOf(
+            "Session" to (if (survey.startedAtMs > 0) DateFormat.getDateTimeInstance().format(Date(survey.startedAtMs)) else "–") +
+                " – " + time.format(Date()),
+            "Passes" to "${survey.passCount} this session · ${state.completedScanCount} completed",
+            "Public IP" to publicIpLine(state),
+            "Last position" to (last?.let { "%.6f, %.6f".format(Locale.US, it.lat, it.lng) +
+                (it.accuracyM?.let { a -> " · ±%.0f m · ${it.provider}".format(Locale.US, a) } ?: "") } ?: "no fix"),
+            "Report generated" to generated,
+        ))
+        doc.statTiles(ScanReportContent.stats(survey, state.publicIp))
+
+        val path = track.ifEmpty { positions }
+        val markers = positions.lastOrNull()?.let { listOf(MonitorReportContent.MapMarker(1, "Last pass", it.lat, it.lng, it.accuracyM ?: 0.0)) }.orEmpty()
+        val satellites = ScanDiff.rowsFor(RadioKind.SATELLITE, state.latestPass, state.previousPass)
+        val sections = Sections()
+        sections.add("Map", path.isNotEmpty()) {
+            doc.figure(330f, "The phone's path (blue) over ${positions.size} pass positions; marker 1 is the last pass, its ring the fix accuracy.") { canvas, area ->
+                MonitorTileMap.drawOverview(context, canvas, area, route(path), markers)
+            }
+        }
+        sections.add("Location accuracy", path.isNotEmpty()) {
+            doc.statTiles(GpsReportContent.stats(path, satellites).take(5))
+            doc.table(GpsReportContent.providersTable(path))
+        }
+        sections.add("WiFi access points", devices.wifi.isNotEmpty()) { doc.table(ScanReportContent.sessionTable(RadioKind.WIFI, devices.wifi)) }
+        sections.add("Cell towers", devices.cellular.isNotEmpty()) { doc.table(ScanReportContent.sessionTable(RadioKind.CELLULAR, devices.cellular)) }
+        sections.add("Bluetooth devices", devices.ble.isNotEmpty()) { doc.table(ScanReportContent.sessionTable(RadioKind.BLE, devices.ble)) }
+        sections.add("Satellites in the last pass", satellites.isNotEmpty()) { doc.table(OverviewReportContent.passTable(RadioKind.SATELLITE, satellites)) }
+        val lan = state.lanDevices.isNotEmpty()
+        sections.add("LAN devices (last sweep)", lan) { doc.table(LanReportContent.devicesTable(state.lanDevices)) }
+        doc.subheading("Contents")
+        doc.bullets(sections.contents(listOfNotNull(
+            if (positions.isNotEmpty()) "Appendix A  Pass positions" else null,
+            "Appendix ${if (positions.isNotEmpty()) "B" else "A"}  Notes",
+        )), muted = false)
+        sections.render(doc)
+        doc.pageBreak()
+        var notes = "A"
+        if (positions.isNotEmpty()) {
+            doc.heading("A", "Appendix A · Pass positions")
+            doc.table(GpsReportContent.trackTable(positions) { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM).format(Date(it)) })
+            notes = "B"
+        }
+        doc.heading(notes, "Appendix $notes · Notes")
+        doc.bullets(listOf(
+            "Each device is listed once with the strongest reading this session; the web app has every pass.",
+            "Bluetooth devices rotate their MAC address, so one device can appear several times.",
+            "The public IP comes from ident.me and is what the internet saw at that time; it changes with the network.",
+            "Positions use GPS first, then fused, then network fixes; accuracy is Android's 68 % radius.",
+            "Map tiles © OpenStreetMap contributors.",
+        ), muted = false)
+        write(doc, file(context, "scan"))
     }
 
     /** WiFi, cellular or BLE: the last pass from the detail screen. */

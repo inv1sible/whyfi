@@ -78,3 +78,15 @@ class RadioReportContentTest {
         assertEquals("aa", RadioReportContent.bleDetailsTable(info).rows[0][0])
     }
 }
+
+class ScanReportContentTest {
+    @Test
+    fun sessionTablesNameTheirColumnsPerRadio() {
+        val wifi = ScanReportContent.sessionTable(RadioKind.WIFI,
+            listOf(com.whyfi.app.scan.SurveyTally.SeenDevice("aa:bb", "Home", "5GHz", -41)))
+        assertEquals(listOf("SSID", "BSSID", "Band", "Best signal"), wifi.columns.map { it.header })
+        assertEquals(listOf("Home", "aa:bb", "5GHz", "-41 dBm"), wifi.rows.single())
+        assertEquals("Carrier", ScanReportContent.sessionTable(RadioKind.CELLULAR, emptyList()).columns[0].header)
+        assertEquals("198.51.100.4", ScanReportContent.stats(SurveyStats(), "198.51.100.4").last().value)
+    }
+}

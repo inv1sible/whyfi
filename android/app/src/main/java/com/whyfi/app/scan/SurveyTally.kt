@@ -64,11 +64,13 @@ class SurveyTally {
      * — those are called once per radio phase as each finishes (see
      * ScanForegroundService.runOnePass), and must NOT themselves touch
      * passCount, or one pass would count as up to four. */
+    @Synchronized
     fun beginPass() {
         if (passCount == 0) startedAtMs = System.currentTimeMillis()
         passCount++
     }
 
+    @Synchronized
     fun recordWifi(observations: List<WifiObservationDto>) {
         for (ap in observations) {
             val existing = wifi[ap.bssid]
@@ -84,6 +86,7 @@ class SurveyTally {
         }
     }
 
+    @Synchronized
     fun recordCellular(observations: List<CellObservationDto>) {
         for (cell in observations) {
             val key = ScanDiff.cellKey(cell.mcc, cell.mnc, cell.tacOrLac, cell.cellId)
@@ -99,6 +102,7 @@ class SurveyTally {
         }
     }
 
+    @Synchronized
     fun recordBle(observations: List<BleObservationDto>) {
         for (device in observations) {
             val existing = ble[device.bleMac]
@@ -112,12 +116,29 @@ class SurveyTally {
         }
     }
 
+    @Synchronized
     fun recordSatellite(observations: List<SatelliteObservationDto>) {
         for (sat in observations) {
             satellites += "${sat.constellation}-${sat.svid}"
         }
     }
 
+    /** Every unique device this session with its strongest reading, for
+     * the scan report: (id, label, detail, best signal), strongest first. */
+    data class SeenDevice(val id: String, val label: String, val detail: String, val best: Int)
+    data class SessionDevices(
+        val wifi: List<SeenDevice>, val cellular: List<SeenDevice>, val ble: List<SeenDevice>, val satellites: List<String>,
+    )
+
+    @Synchronized
+    fun devices(): SessionDevices = SessionDevices(
+        wifi = wifi.map { (bssid, w) -> SeenDevice(bssid, w.ssid, w.band, w.bestRssi) }.sortedByDescending { it.best },
+        cellular = cellular.map { (key, c) -> SeenDevice(key, c.label, c.detail, c.best) }.sortedByDescending { it.best },
+        ble = ble.map { (mac, b) -> SeenDevice(mac, b.label, b.detail, b.best) }.sortedByDescending { it.best },
+        satellites = satellites.sorted(),
+    )
+
+    @Synchronized
     fun reset() {
         wifi.clear()
         cellular.clear()
@@ -127,6 +148,7 @@ class SurveyTally {
         startedAtMs = 0L
     }
 
+    @Synchronized
     fun snapshot(): SurveyStats = SurveyStats(
         passCount = passCount,
         startedAtMs = startedAtMs,

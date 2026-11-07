@@ -946,3 +946,18 @@ every 2 s; attach broadcasts aren't reliable for runtime receivers).
   `report/ReportPdf`, contents in `report/PhoneReportContent.kt`), written to
   external files `reports/` (FileProvider path added) and opened in the
   default PDF viewer. One file per kind is kept.
+
+## Public IP, LAN names, scan report (2026-11-07)
+
+- After a pass the app asks `https://ident.me` for the public IP (at most
+  every 5 min, `scan/PublicIp.kt`, maintainer request); shown on Overview and
+  in the Overview/scan reports. It's a third-party call: don't add it to
+  uploads without asking.
+- LAN hostnames: reverse DNS, then unicast mDNS PTR (5353) and NetBIOS node
+  status (137) for unnamed hosts after the sweep (`lan/LanNameResolver.kt`).
+- When scanning stops (continuous Stop, or a single scan finishing) the
+  service writes the scan report (`PhoneReports.scan`: session devices from
+  `SurveyTally.devices()`, pass positions, path, public IP); the Scan tab's
+  Report button opens it, regenerating if passes ran since.
+- Reports only contain sections that have data (`PhoneReports.Sections`),
+  matching what the screen shows.
