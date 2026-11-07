@@ -6,9 +6,15 @@
   history, channel congestion).
 - Cellular serving/neighbor-cell info (TelephonyManager) — phone's own radio
   only, no SDR, no spectrum scanning.
-- BLE device discovery — passive observation log with informational device
-  type badges (e.g. "possible AirTag/Tile"). No alerting, no correlation, no
-  "dismiss"/"mark as mine" workflow.
+- BLE device discovery — passive observation log labeled against Fieldwatch's
+  signature catalog (255 fleets, 173 BLE-capable, e.g. "Flipper Zero",
+  "DJI", "Axon", "Apple AirTags", grouped into classes such as DRONE,
+  HACKING, FINDER). Matching runs on the backend at ingest
+  (`backend/scans/ble_signatures.py`) and history is relabeled when the
+  catalog changes; see `backend/scans/signatures/README.md` for updating it.
+  Labels are pattern matches, informational only: no alerting, no
+  correlation, no "dismiss"/"mark as mine" workflow. The legacy on-device
+  type badge remains as a fallback.
 - GNSS satellite view (per-satellite Cn0/elevation/azimuth/used-in-fix) plus
   derived location (lat/lon, accuracy, provider).
 - LAN device discovery (TCP-connect subnet sweep + common-port probe) — its
@@ -181,8 +187,10 @@ implementation.
 - Multi-user authentication / per-user data isolation.
 - WebSocket/live-push updates (v1 is request/poll-based).
 - Self-hosted offline map tiles for fully air-gapped deployments.
-- Server-managed/updatable BLE signature reference list (v1 ships a static
-  bundled asset).
+- On-device (Android live screen) BLE signature labels, reusing
+  `backend/scans/fixtures/ble_signature_cases.json` as the conformance
+  fixture. Wi-Fi signature labeling (OUI / vendor-IE rules from the same
+  catalog), payload `decode` fields and peer-clustered fleets.
 
 ## Explicitly not planned
 

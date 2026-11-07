@@ -107,6 +107,22 @@ stale, and don't duplicate what's already obvious from code/tests.
   no sighting-clustering job, no dismiss/"mark as mine" workflow. Do not
   reintroduce this without an explicit new ask.
 
+- **BLE signature labels come from a vendored catalog, matched only on the
+  backend.** Fieldwatch's `fieldwatch-signatures-v2.json` (MIT, see `NOTICE`)
+  is kept byte-for-byte unmodified in `backend/scans/signatures/` so an update
+  is a file swap plus `manage.py relabel_ble_signatures`. The matcher is a
+  port of Fieldwatch's `SignatureEngine.kt`; it stays in one place, like the
+  position estimators, so stored history can be relabeled and phone and PWA
+  never disagree. The phone only sends the complete advert
+  (`manufacturer_records`, `service_data`). Old APKs send just the first
+  record in `manufacturer_data`, which is still labeled. Labels are
+  pattern matches, not identifications, and carry no alert state (see the
+  anti-stalking entry below): the catalog's `attentionNote` is shown as plain
+  text, deliberately not styled as a warning. Quirks ported on purpose: a
+  device UUID spelled `0xFEED` gets no 16-bit alias (Fieldwatch's `hexOnly`
+  keeps the `x`), and Apple Continuity / Find My filtering keys on the first
+  payload byte only.
+
 - **UWB precision ranging only works with compatible trackers.** Apple's
   AirTag U1 ranging protocol is proprietary and not accessible to
   third-party Android apps. `UwbLocateManager` only attempts real UWB ranging
