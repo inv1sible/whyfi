@@ -1,9 +1,11 @@
+from datetime import timedelta
+
 from django.db import transaction
 from rest_framework import serializers
 
 from .ble_signatures import label_ble_observation, load_catalog, merge_signature_ids
 from .geocoding import GEOCODE_PRECISION
-from .location_quality import ingest_correction
+from .location_quality import HOP_MAX_DT_S, ingest_correction
 from .wifi_signatures import match_wifi, normalize_vendor_ies, parse_wifi
 from .models import (
     AccessPoint,
@@ -655,9 +657,26 @@ class ScanSessionIngestSerializer(serializers.Serializer):
             "fused_longitude": validated_data.get("fused_longitude"),
             "fused_accuracy_meters": validated_data.get("fused_accuracy_meters"),
         }
-        # A position far from its own fused fix (old APKs' stale last-known
-        # fixes) is replaced by the fused fix, keeping the original in raw_*.
-        location.update(ingest_correction(location))
+        # A position far from its own fused fix is checked against this
+        # sensor's previous scan: swapped for the fused fix only when that
+        # alone fits (original kept in raw_*). Neither reading is trusted
+        # blindly: relocated Wi-Fi fools both (scans/location_quality.py).
+        previous = (
+            ScanSession.objects.filter(
+                sensor=sensor,
+                started_at__lt=validated_data["started_at"],
+                started_at__gte=validated_data["started_at"] - timedelta(seconds=HOP_MAX_DT_S),
+            )
+            .exclude(latitude__isnull=True).exclude(longitude__isnull=True)
+            .order_by("-started_at").first()
+        )
+        location.update(ingest_correction(
+            {**location, "started_at": validated_data["started_at"], "completed_at": validated_data["completed_at"]},
+            None if previous is None else (
+                previous.latitude, previous.longitude,
+                (previous.started_at + (previous.completed_at - previous.started_at) / 2).timestamp(),
+            ),
+        ))
         session, created = ScanSession.objects.get_or_create(
             client_scan_id=validated_data["client_scan_id"],
             defaults={
