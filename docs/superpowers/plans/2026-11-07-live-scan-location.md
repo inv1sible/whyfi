@@ -13,7 +13,7 @@
 - **Live subscription while scanning** (`scan/LiveLocationTracker.kt`): GPS every 1 s with no distance floor, network every 4 s, platform `FUSED_PROVIDER` every 2 s on API 31+ (no Play Services, per MEMORY.md). Started when a pass or continuous scanning starts, stopped when the continuous loop ends or a single pass finishes. Runs in `ScanForegroundService` (already `foregroundServiceType=location`). Battery cost accepted: GPS stays on while scanning, as in Fieldwatch.
 - **Pure selector** (`scan/FixSelector.kt`, no Android types, unit-tested):
   - Accept a fix only if coordinates are valid and finite, accuracy ≤ 75 m and age ≤ 30 s.
-  - Jump gate (`hopPlausible`): reject a fix that moves more than 40 m from the last accepted fix at more than 42 m/s (over ≥ 0.8 s) **unless it is markedly more precise** (accuracy ≤ 0.75 × the anchor's), so a coarse anchor can't lock out good GPS. Three consecutive rejected fixes that agree among themselves (pairwise plausible) re-anchor, so one bad anchor can't freeze the track.
+  - Jump gate (`hopPlausible`): reject a fix that moves more than 40 m from the last accepted fix at more than 42 m/s (over ≥ 0.8 s; the limit rises to 1.5 × measured speed + 5 m/s when either fix reports a speed, capped at 100 m/s, so an Autobahn or a train doesn't freeze the track) **unless it is markedly more precise** (accuracy ≤ 0.75 × the anchor's), so a coarse anchor can't lock out good GPS. Three consecutive rejected fixes that agree among themselves (pairwise plausible) re-anchor, so one bad anchor can't freeze the track.
   - Pass position: among accepted fixes, the one with the lowest `MonitorLocationPolicy.effectiveAccuracy(accuracy, |fix time − reference|, speed)`, reference = pass midpoint, within 30 s of it.
   - Times use `elapsedRealtimeNanos` (immune to wall-clock changes).
 - **Pass timing:** location is resolved at the **end** of a pass, against its midpoint (GPS has had the pass to warm up; the radios were heard across the pass).
@@ -21,7 +21,7 @@
 - **Upload:** new optional `location_fix_age_ms` (fix age at the pass midpoint).
 - **Backend history cleanup** (`scans/location_quality.py`, command `clean_session_locations [--dry-run] [--revert]`), non-destructive. A session is suspect when:
   - (a) its position is more than `max(100 m, 3 × (accuracy + fused accuracy))` from its own fused fix; or
-  - (b) it is unreachable from **both** neighbours of the same sensor: more than 40 m and more than 42 m/s on each leg, over ≥ 0.8 s.
+  - (b) it is a spike: unreachable from **both** neighbours of the same sensor (more than 40 m and more than 42 m/s on each leg, over ≥ 0.8 s) **and** an out-and-back (the neighbours are within 0.4 × either leg of each other, Fieldwatch's `despikeOnce` geometry), so a fast train isn't mistaken for spikes.
 
   Originals move to `raw_latitude` / `raw_longitude` / `raw_location_accuracy_meters` / `raw_location_provider`. The position becomes the fused fix when (a) applies and the fused fix itself isn't suspect, otherwise it is cleared. `location_correction` = `"fused"` / `"cleared"` plus `location_correction_reason`. `--revert` restores originals. Ingest applies (a) to every new payload, including from old APKs. All 34 existing coordinate reads stay unchanged.
 - **Export** writes the original (raw) coordinates, so an import re-runs the same checks.

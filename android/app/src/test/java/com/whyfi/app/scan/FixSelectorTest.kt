@@ -141,4 +141,27 @@ class FixSelectorTest {
         assertEquals("fused", FixSelector.bestOf(candidates, referenceBootMs = at(60.0), nowBootMs = at(60.0))?.provider)
         assertNull(FixSelector.bestOf(candidates.take(2), at(60.0), at(60.0)))
     }
+
+    @Test
+    fun fastTravelWithMeasuredSpeedIsKept() {
+        // 42 m/s is ~151 km/h: an Autobahn at 200 km/h or an ICE at 300 km/h
+        // must not freeze the track when GPS reports that speed itself.
+        for (mps in listOf(56.0, 83.0)) {
+            val selector = FixSelector()
+            for (i in 0..20) {
+                assertTrue("$mps m/s fix $i", selector.offer(fix("gps", i.toDouble(), northM = i * mps, speedMps = mps), at(i.toDouble())))
+            }
+        }
+    }
+
+    @Test
+    fun fastHopWithoutMeasuredSpeedIsStillRejected() {
+        val selector = FixSelector()
+        assertTrue(selector.offer(fix("gps", 0.0, speedMps = 1.0), at(0.0)))
+        assertFalse(selector.offer(fix("network", 1.0, northM = 80.0, accuracyM = 20.0), at(1.0)))
+        // A claimed speed doesn't excuse a hop far beyond it.
+        assertFalse(selector.offer(fix("gps", 2.0, northM = 900.0, speedMps = 30.0), at(2.0)))
+        // A glitchy reported speed is capped at 100 m/s.
+        assertFalse(selector.offer(fix("gps", 3.0, northM = 1500.0, speedMps = 900.0), at(3.0)))
+    }
 }

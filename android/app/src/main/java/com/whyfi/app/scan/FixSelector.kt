@@ -92,6 +92,9 @@ class FixSelector {
         const val SPIKE_MAX_SPEED_MPS = 42.0
         const val SPIKE_MIN_HOP_M = 40.0
         const val SPIKE_MIN_DT_MS = 800L
+        const val SPEED_HEADROOM = 1.5
+        const val SPEED_SLACK_MPS = 5.0
+        const val MAX_TRUSTED_SPEED_MPS = 100.0
         const val PRECISE_FACTOR = 0.75
         const val REANCHOR_COUNT = 3
         private const val HISTORY_MS = 120_000L
@@ -110,12 +113,17 @@ class FixSelector {
                 !(fix.lat == 0.0 && fix.lng == 0.0) &&
                 (fix.accuracyM == null || (fix.accuracyM.isFinite() && fix.accuracyM in 0.0..MAX_ACCURACY_M))
 
-        /** Fieldwatch's Geo.hopPlausible, with the time gap clamped to 0.8 s. */
+        /** Fieldwatch's Geo.hopPlausible, with the time gap clamped to 0.8 s,
+         * and the 42 m/s (~151 km/h) limit raised to what either fix's own
+         * measured speed allows: otherwise an Autobahn or a train freezes the
+         * track. Network fixes rarely report speed, so their jumps still fail. */
         fun hopPlausible(from: LocationFix, to: LocationFix): Boolean {
             val d = distanceM(from, to)
             if (d <= SPIKE_MIN_HOP_M) return true
             val dtS = max(abs(to.bootMs - from.bootMs), SPIKE_MIN_DT_MS) / 1000.0
-            return d / dtS <= SPIKE_MAX_SPEED_MPS
+            // Capped like MonitorLocationPolicy: a glitchy speed can't open the gate.
+            val measured = max(from.speedMps ?: 0.0, to.speedMps ?: 0.0).coerceAtMost(MAX_TRUSTED_SPEED_MPS)
+            return d / dtS <= max(SPIKE_MAX_SPEED_MPS, measured * SPEED_HEADROOM + SPEED_SLACK_MPS)
         }
 
         private fun morePrecise(fix: LocationFix, anchor: LocationFix): Boolean =
