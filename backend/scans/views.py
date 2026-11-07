@@ -18,6 +18,7 @@ from sensors.models import Sensor
 from .ble_signatures import is_ble_capable, load_catalog
 from .wifi_signatures import is_wifi_capable
 from .calibration import fit_path_loss
+from .location_quality import original_position
 from .floorplan import (
     derive_scale_and_bearing,
     image_to_world,
@@ -264,10 +265,10 @@ def export_session_payload(session):
         "sensor_name": session.sensor.name if session.sensor else None,
         "started_at": session.started_at.isoformat(),
         "completed_at": session.completed_at.isoformat(),
-        "latitude": session.latitude,
-        "longitude": session.longitude,
-        "location_accuracy_meters": session.location_accuracy_meters,
-        "location_provider": session.location_provider,
+        # The phone's original position (raw_* once corrected), so an
+        # import re-runs the same checks instead of freezing a correction.
+        **original_position(session),
+        "location_fix_age_ms": session.location_fix_age_ms,
         "fused_latitude": session.fused_latitude,
         "fused_longitude": session.fused_longitude,
         "fused_accuracy_meters": session.fused_accuracy_meters,

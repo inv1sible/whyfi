@@ -52,14 +52,25 @@ class ScanSession(models.Model):
     longitude = models.FloatField(null=True, blank=True)
     location_accuracy_meters = models.FloatField(null=True, blank=True)
     location_provider = models.CharField(max_length=16, blank=True)
-    # Populated only when the Android app's location-source setting is
-    # "Fused" or "Both" (see SettingsRepository.LocationSourcePreference) —
-    # a *second*, independent reading alongside latitude/longitude above,
-    # not a replacement. Lets the two be compared for positioning-accuracy
-    # analysis rather than only ever recording whichever one "won".
+    # The platform fused fix taken at the same moment (Android 12+): a
+    # second, independent reading alongside latitude/longitude, used by
+    # scans/location_quality.py to catch a primary fix that is far off.
     fused_latitude = models.FloatField(null=True, blank=True)
     fused_longitude = models.FloatField(null=True, blank=True)
     fused_accuracy_meters = models.FloatField(null=True, blank=True)
+    # Age of the chosen fix at the pass midpoint (APKs from 2026-11 on,
+    # which select fixes live: android scan/FixSelector.kt).
+    location_fix_age_ms = models.IntegerField(null=True, blank=True)
+    # Non-destructive position correction (scans/location_quality.py): when
+    # a position is implausible, the phone's original moves here and
+    # latitude/longitude become the fused fix ("fused") or empty
+    # ("cleared"). `manage.py clean_session_locations --revert` undoes it.
+    raw_latitude = models.FloatField(null=True, blank=True)
+    raw_longitude = models.FloatField(null=True, blank=True)
+    raw_location_accuracy_meters = models.FloatField(null=True, blank=True)
+    raw_location_provider = models.CharField(max_length=16, blank=True)
+    location_correction = models.CharField(max_length=8, blank=True)
+    location_correction_reason = models.CharField(max_length=128, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

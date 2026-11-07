@@ -3,6 +3,7 @@ from rest_framework import serializers
 
 from .ble_signatures import label_ble_observation, load_catalog, merge_signature_ids
 from .geocoding import GEOCODE_PRECISION
+from .location_quality import ingest_correction
 from .wifi_signatures import match_wifi, normalize_vendor_ies, parse_wifi
 from .models import (
     AccessPoint,
@@ -611,6 +612,13 @@ class ScanSessionIngestSerializer(serializers.Serializer):
     fused_latitude = serializers.FloatField(required=False, allow_null=True)
     fused_longitude = serializers.FloatField(required=False, allow_null=True)
     fused_accuracy_meters = serializers.FloatField(required=False, allow_null=True)
+    # Optional (APKs from 2026-11 on). Clamped rather than validated: a bad
+    # value must not reject the whole scan session.
+    location_fix_age_ms = serializers.IntegerField(required=False, allow_null=True,
+                                                   min_value=-(2**63), max_value=2**63 - 1)
+
+    def validate_location_fix_age_ms(self, value):
+        return None if value is None else max(0, min(value, 2**31 - 1))
     wifi_observations = WiFiObservationInputSerializer(many=True, required=False, default=list)
     ftm_observations = FTMRangingObservationInputSerializer(many=True, required=False, default=list)
     cell_observations = CellObservationInputSerializer(many=True, required=False, default=list)
@@ -636,19 +644,26 @@ class ScanSessionIngestSerializer(serializers.Serializer):
         duplicate-POST recovery it does still works inside this block.
         """
         sensor = self.context["sensor"]
+        location = {
+            "latitude": validated_data.get("latitude"),
+            "longitude": validated_data.get("longitude"),
+            "location_accuracy_meters": validated_data.get("location_accuracy_meters"),
+            "location_provider": validated_data.get("location_provider", ""),
+            "fused_latitude": validated_data.get("fused_latitude"),
+            "fused_longitude": validated_data.get("fused_longitude"),
+            "fused_accuracy_meters": validated_data.get("fused_accuracy_meters"),
+        }
+        # A position far from its own fused fix (old APKs' stale last-known
+        # fixes) is replaced by the fused fix, keeping the original in raw_*.
+        location.update(ingest_correction(location))
         session, created = ScanSession.objects.get_or_create(
             client_scan_id=validated_data["client_scan_id"],
             defaults={
                 "sensor": sensor,
                 "started_at": validated_data["started_at"],
                 "completed_at": validated_data["completed_at"],
-                "latitude": validated_data.get("latitude"),
-                "longitude": validated_data.get("longitude"),
-                "location_accuracy_meters": validated_data.get("location_accuracy_meters"),
-                "location_provider": validated_data.get("location_provider", ""),
-                "fused_latitude": validated_data.get("fused_latitude"),
-                "fused_longitude": validated_data.get("fused_longitude"),
-                "fused_accuracy_meters": validated_data.get("fused_accuracy_meters"),
+                "location_fix_age_ms": validated_data.get("location_fix_age_ms"),
+                **location,
             },
         )
         if not created:
