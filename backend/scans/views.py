@@ -894,22 +894,21 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
         observations, truncated = capped_take(qs, COVERAGE_OBSERVATION_CAP)
         by_ap = {}
         for obs in observations:
-            entry = by_ap.setdefault(
-                obs.access_point_id,
-                {
+            entry = by_ap.get(obs.access_point_id)
+            if entry is None:
+                catalog = load_catalog()
+                entry = by_ap[obs.access_point_id] = {
                     "bssid": obs.access_point.bssid,
                     "ssid": obs.access_point.ssid,
                     "detail_path": f"/networks/{quote(obs.access_point_id, safe='')}",
                     # The AP's catalog signature names (an id from an older
                     # catalog shows as itself).
                     "signature_names": [
-                        (fleet.name if fleet else fleet_id)
+                        (catalog.get(fleet_id).name if catalog.get(fleet_id) else fleet_id)
                         for fleet_id in obs.access_point.signature_ids or ()
-                        for fleet in [load_catalog().get(fleet_id)]
                     ],
                     "points": {},
-                },
-            )
+                }
             key = (round(obs.scan_session.latitude, 5), round(obs.scan_session.longitude, 5))
             entry["points"].setdefault(key, []).append(
                 {

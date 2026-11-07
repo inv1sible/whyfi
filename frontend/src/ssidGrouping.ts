@@ -49,6 +49,8 @@ export function groupBySsid(accessPoints: AccessPoint[]): SsidGroupRow[] {
       members[0].last_seen_at,
     );
 
+    const signatures = mergeSignatures(members.map((m) => m.signatures ?? []));
+
     return {
       key: ssid ? `ssid:${ssid}` : `bssid:${members[0].bssid}`,
       ssid: ssid || "(hidden)",
@@ -57,11 +59,9 @@ export function groupBySsid(accessPoints: AccessPoint[]): SsidGroupRow[] {
       channels: channels.length > 0 ? channels.join(", ") : "—",
       security: securityTypes.length === 1 ? securityTypes[0] : securityTypes.length > 1 ? "Mixed" : "—",
       vendor: vendors.length === 1 ? vendors[0] : vendors.length > 1 ? "Multiple" : "—",
-      signatures: mergeSignatures(members.map((m) => m.signatures ?? [])),
+      signatures,
       // Sort key for the Type column.
-      signatureLabel: mergeSignatures(members.map((m) => m.signatures ?? []))
-        .map((s) => s.name)
-        .join(", "),
+      signatureLabel: signatures.map((s) => s.name).join(", "),
       strongestRssi,
       lastSeen,
       hasLocation: members.some((m) => m.latest_has_location),

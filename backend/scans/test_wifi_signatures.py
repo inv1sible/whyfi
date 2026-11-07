@@ -153,7 +153,7 @@ class IngestWifiSignatureTests(TestCase):
     def test_new_payload_is_labeled(self):
         self._post("w-1", _wifi("9E:AA:BB:00:00:01", "DJI-Mavic-3", vendor_ie_ouis=["FA:0B:BC", "00:50:F2"]))
         obs = WiFiObservation.objects.get()
-        self.assertEqual(obs.vendor_ie_ouis, ["FA:0B:BC", "00:50:F2"])
+        self.assertEqual(obs.vendor_ie_ouis, ["FA:0B:BC", "00:50:F2"])  # stored normalised
         self.assertEqual(obs.signature_matches, [
             {"id": "fleet-dji", "rule": "NAME_CONTAINS"},
             {"id": "fleet-remote-id", "rule": "VENDOR_IE_OUI", "via": "vendor_ie"},
@@ -170,6 +170,16 @@ class IngestWifiSignatureTests(TestCase):
     def test_vendor_ies_truncated_not_rejected(self):
         self._post("w-many", _wifi("9E:AA:BB:00:00:02", "x", vendor_ie_ouis=[f"AA:BB:{i:02X}" for i in range(40)]))
         self.assertEqual(len(WiFiObservation.objects.get().vendor_ie_ouis), 32)
+
+    def test_malformed_vendor_ies_never_reject_the_session(self):
+        for i, junk in enumerate([None, "FA:0B:BC", [""], [None], ["x" * 40], [7], {"a": 1}]):
+            with self.subTest(junk=junk):
+                self._post(f"w-junk-{i}", _wifi(f"9E:AA:BB:00:01:{i:02X}", "x", vendor_ie_ouis=junk))
+        # Stored normalised: uppercase colon form, distinct, junk dropped.
+        self._post("w-norm", _wifi("9E:AA:BB:00:02:00", "x", vendor_ie_ouis=["fa0bbc", "junk", "FA:0B:BC", "00-50-f2"]))
+        self.assertEqual(
+            WiFiObservation.objects.get(access_point_id="9E:AA:BB:00:02:00").vendor_ie_ouis, ["FA:0B:BC", "00:50:F2"],
+        )
 
     def test_hidden_sighting_uses_the_known_ssid(self):
         # The SSID lives on AccessPoint; a later hidden sighting keeps its name.

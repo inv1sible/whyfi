@@ -267,6 +267,9 @@ export interface BleSignatureRef {
   attention_note?: string;
 }
 
+// The /ble-signatures/ and /wifi-signatures/ listings share this shape.
+export type SignatureCatalog = BleSignatureCatalog;
+
 export interface BleSignatureCatalog {
   catalog_version: number;
   results: { id: string; name: string; kind: string }[];

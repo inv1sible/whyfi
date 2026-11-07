@@ -4,6 +4,7 @@ import type {
   AppRelease,
   BLEDevice,
   BleSignatureCatalog,
+  SignatureCatalog,
   BLEObservation,
   BuildStatusResponse,
   CappedList,
@@ -473,7 +474,7 @@ export const api = {
   bleDevices: (query = "") => get<Paginated<BLEDevice>>(`/ble-devices/${query}`),
   bleDevice: (deviceKey: string) => get<BLEDevice>(`/ble-devices/${encodeURIComponent(deviceKey)}/`),
   bleSignatures: () => get<BleSignatureCatalog>("/ble-signatures/"),
-  wifiSignatures: () => get<BleSignatureCatalog>("/wifi-signatures/"),
+  wifiSignatures: () => get<SignatureCatalog>("/wifi-signatures/"),
   bleObservationsForDevice: (
     deviceKey: string,
     opts: { since?: string; until?: string; sessionLimit?: number; limit?: number } = {},

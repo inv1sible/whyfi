@@ -3,7 +3,7 @@ from rest_framework import serializers
 
 from .ble_signatures import label_ble_observation, load_catalog, merge_signature_ids
 from .geocoding import GEOCODE_PRECISION
-from .wifi_signatures import MAX_VENDOR_IES, match_wifi, parse_wifi
+from .wifi_signatures import match_wifi, normalize_vendor_ies, parse_wifi
 from .models import (
     AccessPoint,
     BLEDevice,
@@ -108,7 +108,9 @@ def signature_refs(obj, include_notes=False, include_vias=False):
         return []
     rules: dict[str, set[str]] = {}
     vias: dict[str, set[str]] = {}
-    for matches in obj.observations.exclude(signature_matches=[]).values_list("signature_matches", flat=True):
+    # Distinct match lists only: one AP's sightings mostly repeat the same.
+    distinct = obj.observations.exclude(signature_matches=[]).order_by().values_list("signature_matches", flat=True)
+    for matches in distinct.distinct():
         for match in matches:
             rules.setdefault(match["id"], set()).add(match["rule"])
             if match.get("via"):
@@ -497,13 +499,14 @@ class WiFiObservationInputSerializer(serializers.Serializer):
     is_80211mc_responder = serializers.BooleanField(default=False)
     operator_friendly_name = serializers.CharField(max_length=128, allow_blank=True, default="")
     venue_name = serializers.CharField(max_length=128, allow_blank=True, default="")
-    # Optional (Android 11+ APKs from 2026-11 on). Truncated, never rejected:
-    # a 400 would drop the whole scan session.
-    vendor_ie_ouis = serializers.ListField(child=serializers.CharField(max_length=17), default=list)
+    # Optional (Android 11+ APKs from 2026-11 on). Accepts anything and
+    # normalises it (normalize_vendor_ies): a 400 here would drop the whole
+    # scan session over an optional field.
+    vendor_ie_ouis = serializers.JSONField(required=False, allow_null=True, default=list)
     observed_at = serializers.DateTimeField(required=False)
 
     def validate_vendor_ie_ouis(self, value):
-        return value[:MAX_VENDOR_IES]
+        return normalize_vendor_ies(value)
 
 
 class FTMRangingObservationInputSerializer(serializers.Serializer):
@@ -664,6 +667,19 @@ class ScanSessionIngestSerializer(serializers.Serializer):
 
         # Signature catalog (scans/ble_signatures.py), cached per process.
         catalog = load_catalog()
+        # Lock the session's existing APs / BLE devices up front, in primary
+        # key order: the signature_ids unions below are read-modify-writes,
+        # and relabel_all_wifi / relabel_all lock batches in the same order,
+        # so the two can't deadlock (row-by-row payload order could).
+        list(AccessPoint.objects.select_for_update().filter(
+            pk__in={item["bssid"] for item in validated_data.get("wifi_observations", [])}
+        ).order_by("pk").values_list("pk", flat=True))
+        list(BLEDevice.objects.select_for_update().filter(
+            pk__in={
+                item.get("ble_mac") or item.get("stable_identifier")
+                for item in validated_data.get("ble_observations", [])
+            } - {"", None}
+        ).order_by("pk").values_list("pk", flat=True))
         for item in validated_data.get("wifi_observations", []):
             # ap_created, not `created` — that name belongs to the session
             # get_or_create above, and shadowing it here made the
@@ -673,10 +689,7 @@ class ScanSessionIngestSerializer(serializers.Serializer):
                 bssid=item["bssid"], defaults={"ssid": item.get("ssid", "")}
             )
             if not ap_created:
-                # Row lock: the signature_ids union below is a
-                # read-modify-write, and relabel_all_wifi locks the same rows.
-                access_point = AccessPoint.objects.select_for_update().get(pk=access_point.pk)
-                # Always save (not just on SSID change) so last_seen_at
+                # (Row already locked above.) Always save (not just on SSID change) so last_seen_at
                 # (auto_now) actually reflects this sighting — an AP seen
                 # again with an unchanged SSID otherwise never updates it.
                 if item.get("ssid") and access_point.ssid != item["ssid"]:
@@ -684,7 +697,7 @@ class ScanSessionIngestSerializer(serializers.Serializer):
 
             # Labels use the AP's known SSID (observations don't store one),
             # exactly as relabel_all_wifi does, so the two always agree.
-            vendor_ie_ouis = item.get("vendor_ie_ouis", [])
+            vendor_ie_ouis = item.get("vendor_ie_ouis") or []
             matches = match_wifi(parse_wifi(item["bssid"], access_point.ssid, vendor_ie_ouis), catalog)
             access_point.signature_ids = merge_signature_ids(access_point.signature_ids, matches)
             access_point.save(update_fields=["ssid", "signature_ids", "last_seen_at"])
@@ -808,11 +821,7 @@ class ScanSessionIngestSerializer(serializers.Serializer):
                     },
                 )
                 if not device_created:
-                    # Row lock so concurrent ingests (and relabel_all, which
-                    # locks the same rows) can't drop each other's
-                    # signature_ids from the read-modify-write below.
-                    ble_device = BLEDevice.objects.select_for_update().get(pk=ble_device.pk)
-                    # Always save (not just on change) so last_seen_at
+                    # (Row already locked above, see the Wi-Fi loop.) Always save (not just on change) so last_seen_at
                     # (auto_now) actually reflects this sighting — same
                     # reasoning as AccessPoint/CellTower/LANDevice above.
                     ble_device.device_name = item.get("device_name", "") or ble_device.device_name

@@ -66,6 +66,14 @@ def parse_wifi(bssid, ssid, vendor_ie_ouis) -> WifiAdvert:
     )
 
 
+def normalize_vendor_ies(value) -> list[str]:
+    """Ingest-side cleanup of `vendor_ie_ouis`: whatever a client sent becomes
+    a list of distinct "AA:BB:CC" strings (junk dropped, max 32). Never
+    raises: a bad optional field must not reject the whole scan session."""
+    ouis = parse_wifi("", "", value if isinstance(value, list) else []).vendor_ie_ouis
+    return [f"{o[0:2]}:{o[2:4]}:{o[4:6]}" for o in ouis]
+
+
 def _vendor_ies(advert: WifiAdvert) -> list[str]:
     return [ie for ie in advert.vendor_ie_ouis if ie[:6] not in PROTOCOL_IE_OUIS]
 
