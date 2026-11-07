@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
+import com.whyfi.app.ble.BleDeviceInfo
 import com.whyfi.app.scan.RadioKind
 import com.whyfi.app.scan.ScanDiff
 import com.whyfi.app.scan.ScanUiState
@@ -189,6 +190,81 @@ object PhoneReports {
             "Map tiles © OpenStreetMap contributors.",
         ), muted = false)
         write(doc, file(context, "overview"))
+    }
+
+    /** WiFi, cellular or BLE: the last pass from the detail screen. */
+    suspend fun radio(
+        context: Context,
+        kind: RadioKind,
+        state: ScanUiState,
+        track: List<TrackPoint>,
+        bleInfo: Map<String, BleDeviceInfo.Info>,
+    ): File = withContext(Dispatchers.IO) {
+        val generated = now()
+        val rows = ScanDiff.rowsFor(kind, state.latestPass, state.previousPass)
+        val pass = state.latestPass
+        val raw = (state.previousPass?.bleObservations.orEmpty() + pass?.bleObservations.orEmpty()).associateBy { it.bleMac }
+        val summaries = if (kind != RadioKind.BLE) emptyMap() else rows.associate { row ->
+            val i = bleInfo[row.key]
+            val dto = raw[row.key]
+            row.key to BleDeviceSummary(
+                vendor = i?.vendor ?: "–", vendorSource = i?.vendorSource.orEmpty(),
+                services = i?.services?.joinToString(", ").orEmpty(), addressType = i?.addressType ?: "–",
+                connectable = if (i?.connectable == true) "yes" else "no", txPower = i?.txPower?.let { "$it dBm" } ?: "–",
+                raw = dto?.let { (it.manufacturerRecords.ifEmpty { listOfNotNull(it.manufacturerData.ifBlank { null }) } + it.serviceData).joinToString("\n") }.orEmpty(),
+            )
+        }
+        val title = "${kind.label} report"
+        val doc = ReportPdf(title, "Last scan pass", "whyfi · ${kind.label} · generated $generated")
+        doc.keyValues(listOf(
+            "Pass started" to (pass?.startedAt ?: "none"),
+            "Location" to (pass?.latitude?.let { "%.6f, %.6f".format(Locale.US, it, pass.longitude ?: 0.0) +
+                (pass.locationAccuracyMeters?.let { a -> " · ±%.0f m".format(Locale.US, a) } ?: "") } ?: "no fix"),
+            "Report generated" to generated,
+        ))
+        doc.statTiles(RadioReportContent.stats(kind, rows,
+            if (kind == RadioKind.BLE) summaries.values.map { it.vendor }.filter { it != "–" }.distinct().size else null))
+        doc.subheading("Contents")
+        doc.bullets(listOfNotNull("1  Map", "2  Devices", if (kind == RadioKind.BLE) "3  Vendors" else null,
+            if (kind == RadioKind.BLE) "Appendix A  Advertisement details" else null, "Appendix ${if (kind == RadioKind.BLE) "B" else "A"}  Notes"), muted = false)
+
+        doc.heading("1", "Map")
+        val marker = pass?.latitude?.let { lat -> pass.longitude?.let { lng ->
+            MonitorReportContent.MapMarker(1, "Pass", lat, lng, (pass.locationAccuracyMeters ?: 0f).toDouble())
+        } }
+        if (marker == null && track.isEmpty()) doc.paragraph("No location fix was recorded for this pass.", muted = true)
+        else doc.figure(300f, "Marker 1 is where the pass was taken, its ring the fix accuracy; blue is the phone's path this session.") { canvas, area ->
+            MonitorTileMap.drawOverview(context, canvas, area, route(track), listOfNotNull(marker))
+        }
+
+        doc.heading("2", "Devices")
+        doc.table(if (kind == RadioKind.BLE) RadioReportContent.bleTable(rows, summaries) else OverviewReportContent.passTable(kind, rows))
+        var notes = "A"
+        if (kind == RadioKind.BLE) {
+            doc.heading("3", "Vendors")
+            doc.table(RadioReportContent.vendorsTable(summaries.values))
+            doc.pageBreak()
+            doc.heading("A", "Appendix A · Advertisement details")
+            doc.table(RadioReportContent.bleDetailsTable(summaries))
+            notes = "B"
+        }
+        doc.heading(notes, "Appendix $notes · Notes")
+        doc.bullets(when (kind) {
+            RadioKind.BLE -> listOf(
+                "Vendors come from the Bluetooth SIG company identifier in manufacturer data, else a vendor's registered service UUID, else the MAC prefix (only meaningful for a public address).",
+                "Most phones and wearables use rotating private addresses, so one device can appear under several MACs.",
+                "Android does not report whether an address is public or random; the address column is read from the MAC's top bits.",
+            )
+            RadioKind.CELLULAR -> listOf(
+                "Neighbouring cells often report only partial identity; those rows show what the modem gave.",
+                "Signal is what this phone's modem measured; it depends on the band and the phone.",
+            )
+            else -> listOf(
+                "Hidden networks are listed by BSSID; one access point often broadcasts several BSSIDs.",
+                "Signal is what this phone heard; it depends on its antenna, orientation and surroundings.",
+            )
+        } + "Map tiles © OpenStreetMap contributors.", muted = false)
+        write(doc, file(context, kind.name.lowercase(Locale.ROOT)))
     }
 
     /** Opens [file] in the default PDF viewer; returns an error message, or null. */

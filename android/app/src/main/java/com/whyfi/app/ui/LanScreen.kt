@@ -5,8 +5,6 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,7 +14,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalIconToggleButton
 import androidx.compose.material3.HorizontalDivider
@@ -37,7 +34,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -93,7 +97,11 @@ fun LanScreen(service: ScanForegroundService?, uiState: ScanUiState) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilledTonalIconToggleButton(
                     checked = custom,
-                    onCheckedChange = { custom = it },
+                    onCheckedChange = {
+                        custom = it
+                        // Start from the network you're on; edit from there.
+                        if (it && customText.isBlank()) customText = wifiSubnet.orEmpty()
+                    },
                     enabled = !uiState.isLanScanning,
                     modifier = Modifier.semantics {
                         contentDescription = if (custom) "Custom range. Tap to sweep the WiFi network." else "WiFi network. Tap to enter a custom range."
@@ -156,39 +164,43 @@ fun LanScreen(service: ScanForegroundService?, uiState: ScanUiState) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LanDeviceRow(device: LanObservationDto) {
     val context = LocalContext.current
-    val links = remember(device.ipAddress, device.openPorts) { LanWebLinks.links(device.ipAddress, device.openPorts) }
+    val links = remember(device.ipAddress, device.openPorts) {
+        LanWebLinks.links(device.ipAddress, device.openPorts).associateBy { it.label.substringAfter(':').toInt() }
+    }
+    val linkStyle = TextLinkStyles(SpanStyle(color = MaterialTheme.colorScheme.primary, textDecoration = TextDecoration.Underline))
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(device.hostname.ifBlank { device.ipAddress }, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
             Text(lanDeviceTypeLabel(device.deviceTypeGuess), style = MaterialTheme.typography.labelMedium)
         }
-        val details = listOfNotNull(
-            device.ipAddress.takeIf { device.hostname.isNotBlank() },
-            device.openPorts.takeIf { it.isNotEmpty() }?.let { "ports ${it.joinToString(", ")}" },
-            device.onvif.takeIf { it.isNotEmpty() }?.let { "ONVIF ${it["name"]?.takeIf { n -> n.isNotBlank() } ?: "device"}" },
-        )
-        if (details.isNotEmpty()) Text(details.joinToString(" · "), style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (links.isNotEmpty()) {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                links.forEach { link ->
-                    AssistChip(
-                        onClick = {
-                            try {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                            } catch (_: Exception) {
-                                Toast.makeText(context, "No browser to open ${link.url}", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        label = { Text("🌐 ${link.label}") },
-                    )
+        // "192.168.1.1 · ports 22, 80, 443": web ports are underlined links
+        // that open the default browser.
+        val details = buildAnnotatedString {
+            val parts = mutableListOf<AnnotatedString.Builder.() -> Unit>()
+            if (device.hostname.isNotBlank()) parts += { append(device.ipAddress) }
+            if (device.openPorts.isNotEmpty()) parts += {
+                append("ports ")
+                device.openPorts.forEachIndexed { i, port ->
+                    if (i > 0) append(", ")
+                    val link = links[port]
+                    if (link == null) append("$port")
+                    else withLink(LinkAnnotation.Url(link.url, linkStyle) {
+                        try {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        } catch (_: Exception) {
+                            Toast.makeText(context, "No browser to open ${link.url}", Toast.LENGTH_SHORT).show()
+                        }
+                    }) { append("$port") }
                 }
             }
+            if (device.onvif.isNotEmpty()) parts += { append("ONVIF ${device.onvif["name"]?.takeIf { n -> n.isNotBlank() } ?: "device"}") }
+            parts.forEachIndexed { i, part -> if (i > 0) append(" · "); part() }
         }
+        if (details.isNotEmpty()) Text(details, style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     HorizontalDivider()
 }

@@ -102,6 +102,8 @@ fun DataTable(
     rows: List<DataTableRow>,
     modifier: Modifier = Modifier,
     showBadgeColumn: Boolean = true,
+    /** Off for short lists (cellular) where a search box only takes room. */
+    showSearch: Boolean = true,
 ) {
     val scrollState = rememberScrollState()
     val leadingWidth = if (showBadgeColumn) BADGE_COLUMN_WIDTH else 0.dp
@@ -131,7 +133,7 @@ fun DataTable(
         }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        OutlinedTextField(
+        if (showSearch) OutlinedTextField(
             value = query,
             onValueChange = { query = it },
             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),

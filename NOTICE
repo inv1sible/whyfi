@@ -44,3 +44,9 @@ registries, which are not licensed as MIT by Off Grid Pete LLC:
   https://bitbucket.org/bluetooth-SIG/public/src/main/assigned_numbers/
 
 Use of those values is subject to the IEEE and Bluetooth SIG terms.
+
+The Android app bundles `android/app/src/main/assets/ble_assigned.tsv`, a
+conversion of the Bluetooth SIG Assigned Numbers lists (company
+identifiers, member UUIDs, service UUIDs) from
+https://bitbucket.org/bluetooth-SIG/public/src/main/assigned_numbers/,
+used to name BLE advertisers. Subject to the Bluetooth SIG terms.

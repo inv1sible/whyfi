@@ -51,3 +51,30 @@ class PhoneReportContentTest {
         assertEquals(listOf("Cafe", "–", "–", "–", "–", "gone"), pass.rows[1])
     }
 }
+
+class RadioReportContentTest {
+    private val rows = listOf(
+        DeviceRow("aa", "Watch", "", "-48 dBm", listOf("Watch", "aa", "-48 dBm", "WEARABLE"), DeviceChange.NEW),
+        DeviceRow("bb", "(unnamed)", "", "-80 dBm", listOf("(unnamed)", "bb", "-80 dBm", ""), DeviceChange.PRESENT),
+        DeviceRow("cc", "Old", "", "-70 dBm", listOf("Old", "cc", "-70 dBm", "PHONE"), DeviceChange.GONE),
+    )
+    private fun summary(vendor: String) = BleDeviceSummary(vendor, "manufacturer data", "", "random static", "yes", "–", "004c:10")
+
+    @Test
+    fun statsCountPresentDevicesAndSignals() {
+        val stats = RadioReportContent.stats(RadioKind.BLE, rows, vendors = 1)
+        assertEquals(listOf("2", "1", "1", "-48 dBm", "-48 dBm", "1"), stats.map { it.value })
+        assertEquals(5, RadioReportContent.stats(RadioKind.CELLULAR, rows, null).size)
+    }
+
+    @Test
+    fun bleTablesUseVendorSummaries() {
+        val info = mapOf("aa" to summary("Apple, Inc."), "bb" to summary("Apple, Inc."), "cc" to summary("–"))
+        val table = RadioReportContent.bleTable(rows, info)
+        assertEquals(listOf("Watch", "aa", "-48 dBm", "Apple, Inc.", "WEARABLE", "random static", "new"), table.rows[0])
+        assertEquals("–", table.rows[1][4])
+        val vendors = RadioReportContent.vendorsTable(info.values)
+        assertEquals(listOf("Apple, Inc.", "2", "0.6667"), vendors.rows.single())
+        assertEquals("aa", RadioReportContent.bleDetailsTable(info).rows[0][0])
+    }
+}

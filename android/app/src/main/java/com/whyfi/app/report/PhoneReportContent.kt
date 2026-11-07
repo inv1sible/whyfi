@@ -202,3 +202,78 @@ object OverviewReportContent {
         )
     }
 }
+
+/** The per-radio report from the detail screen (WiFi, cellular, BLE). */
+object RadioReportContent {
+
+    private fun signal(row: DeviceRow): Int? = Regex("-?\\d+").find(row.metric)?.value?.toIntOrNull()
+
+    fun stats(kind: RadioKind, rows: List<DeviceRow>, vendors: Int?): List<ReportStat> {
+        val present = rows.filter { it.change != DeviceChange.GONE }
+        val comparable = rows.any { it.change != DeviceChange.UNKNOWN }
+        val signals = present.mapNotNull(::signal).sorted()
+        return listOfNotNull(
+            ReportStat(ReportFormat.number(present.size.toLong()), "${kind.label} devices in the last pass"),
+            ReportStat(if (comparable) "${rows.count { it.change == DeviceChange.NEW }}" else "–", "new since the previous pass"),
+            ReportStat(if (comparable) "${rows.count { it.change == DeviceChange.GONE }}" else "–", "gone since the previous pass"),
+            ReportStat(signals.lastOrNull()?.let { "$it dBm" } ?: "–", "strongest signal"),
+            ReportStat(signals.getOrNull(signals.size / 2)?.let { "$it dBm" } ?: "–", "median signal"),
+            vendors?.let { ReportStat(ReportFormat.number(it.toLong()), "vendors identified") },
+        )
+    }
+
+    /** BLE main table: the useful subset of the detail screen's columns. */
+    fun bleTable(rows: List<DeviceRow>, info: Map<String, BleDeviceSummary>): ReportTable = ReportTable(
+        columns = listOf(
+            ReportColumn("Name", 1.3f), ReportColumn("MAC", 1.3f, CellKind.MONO), ReportColumn("Signal", 0.7f, CellKind.NUMBER),
+            ReportColumn("Vendor", 1.5f), ReportColumn("Type", 0.9f), ReportColumn("Address", 1.1f), ReportColumn("Change", 0.7f),
+        ),
+        rows = rows.map { row ->
+            val i = info[row.key]
+            listOf(row.columns.getOrElse(0) { "–" }, row.key, row.metric, i?.vendor ?: "–",
+                row.columns.getOrElse(3) { "–" }.ifBlank { "–" }, i?.addressType ?: "–", changeLabel(row.change))
+        },
+        empty = "No Bluetooth device in the last pass.",
+    )
+
+    fun vendorsTable(info: Collection<BleDeviceSummary>): ReportTable {
+        val known = info.filter { it.vendor != "–" }
+        return ReportTable(
+            columns = listOf(ReportColumn("Vendor", 2f), ReportColumn("Devices", 0.8f, CellKind.NUMBER), ReportColumn("Share", 3f, CellKind.BAR)),
+            rows = known.groupBy { it.vendor }.entries.sortedByDescending { it.value.size }.map { (vendor, list) ->
+                listOf(vendor, "${list.size}", ReportFormat.fraction(list.size.toDouble() / info.size.coerceAtLeast(1)))
+            },
+            empty = "No vendor could be identified.",
+            note = "Share of all ${info.size} devices; ${info.size - known.size} have no identifiable vendor.",
+        )
+    }
+
+    fun bleDetailsTable(info: Map<String, BleDeviceSummary>): ReportTable = ReportTable(
+        columns = listOf(ReportColumn("MAC", 1.2f, CellKind.MONO), ReportColumn("Vendor source", 1.2f), ReportColumn("Services", 2f),
+            ReportColumn("Connectable", 0.8f), ReportColumn("TX power", 0.7f, CellKind.NUMBER), ReportColumn("Advertisement", 2.2f, CellKind.MONO)),
+        rows = info.entries.sortedBy { it.key }.map { (mac, i) ->
+            listOf(mac, i.vendorSource.ifBlank { "–" }, i.services.ifBlank { "–" }, i.connectable, i.txPower, i.raw.ifBlank { "–" })
+        },
+        empty = "No Bluetooth device in the last pass.",
+    )
+
+    fun changeLabel(change: DeviceChange) = when (change) {
+        DeviceChange.NEW -> "new"
+        DeviceChange.GONE -> "gone"
+        DeviceChange.PRESENT -> "seen before"
+        DeviceChange.UNKNOWN -> "–"
+    }
+}
+
+/** BleDeviceInfo flattened to report strings (kept here so the report
+ * content stays independent of the BLE package's types). */
+data class BleDeviceSummary(
+    val vendor: String,
+    val vendorSource: String,
+    val services: String,
+    val addressType: String,
+    val connectable: String,
+    val txPower: String,
+    /** Manufacturer records and service data as advertised. */
+    val raw: String,
+)

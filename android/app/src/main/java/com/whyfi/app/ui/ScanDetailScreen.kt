@@ -37,6 +37,14 @@ import com.whyfi.app.ui.components.DataTable
 import com.whyfi.app.ui.components.DataTableRow
 import com.whyfi.app.ui.components.TableBadge
 import com.whyfi.app.ui.components.TableColumn
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.runtime.produceState
+import com.whyfi.app.ble.BleAssignedNumbers
+import com.whyfi.app.ble.BleDeviceInfo
+import com.whyfi.app.report.PhoneReports
+import com.whyfi.app.usbmon.OuiTable
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 
 private val NEW_COLOR = Color(0xFF2DD4BF)
@@ -66,6 +74,11 @@ private fun columnsFor(kind: RadioKind): List<TableColumn> = when (kind) {
         TableColumn("MAC", 140.dp),
         TableColumn("Signal", 80.dp),
         TableColumn("Type", 110.dp),
+        TableColumn("Vendor", 160.dp),
+        TableColumn("Services", 200.dp),
+        TableColumn("Address", 150.dp),
+        TableColumn("Connectable", 100.dp),
+        TableColumn("TX power", 80.dp),
     )
     RadioKind.SATELLITE -> listOf(
         TableColumn("Constellation", 120.dp),
@@ -90,6 +103,7 @@ fun ScanDetailScreen(
         ScanDiff.rowsFor(kind, uiState.latestPass, uiState.previousPass)
     }
     val summary = remember(rows) { ScanDiff.summarize(rows) }
+    val bleInfo = rememberBleInfo(uiState, enabled = kind == RadioKind.BLE)
 
     // A ranging measurement doesn't need the foreground service running —
     // it's a direct OS API call against whatever WifiScanManager's own
@@ -125,6 +139,14 @@ fun ScanDetailScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text("← Back") }
             Text("Last scan", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.weight(1f))
+            // The GPS view has its own report in GpsPanel.
+            if (kind != RadioKind.SATELLITE) {
+                val track = service?.locationTrack?.collectAsState()
+                ReportButton(enabled = uiState.latestPass != null) {
+                    PhoneReports.radio(context, kind, uiState, track?.value.orEmpty(), bleInfo)
+                }
+            }
         }
 
         // Switching radio here rather than going back and tapping another
@@ -194,7 +216,9 @@ fun ScanDetailScreen(
         } else {
             DataTable(
                 columns = columnsFor(kind),
-                rows = rows.map { row ->
+                rows = rows.map { raw ->
+                    val row = if (kind == RadioKind.BLE) raw.copy(columns = raw.columns +
+                        (bleInfo[raw.key]?.let { BleDeviceInfo.columns(it) } ?: BleDeviceInfo.HEADERS.map { "–" })) else raw
                     val id = row.favoriteId
                     val canRange = kind == RadioKind.WIFI && row.is80211mcResponder && row.change != DeviceChange.GONE
                     row.toTableRow(
@@ -209,6 +233,7 @@ fun ScanDetailScreen(
                     )
                 }.sortedByDescending { it.isFavorite }, // favorites to top; stable within each group
                 showBadgeColumn = summary.comparable,
+                showSearch = kind != RadioKind.CELLULAR,
             )
         }
     }
@@ -249,4 +274,24 @@ private fun summaryLine(total: Int, new: Int, gone: Int, comparable: Boolean): S
     // support — see ScanDiff.canCompare.
     if (!comparable) return "$devices · no previous scan to compare against"
     return "$devices · $new new · $gone gone since the previous scan"
+}
+
+/** Vendor, services and address kind per BLE MAC, for the last two passes.
+ * The SIG and OUI tables are read once, off the main thread. */
+@Composable
+private fun rememberBleInfo(uiState: ScanUiState, enabled: Boolean): Map<String, BleDeviceInfo.Info> {
+    val context = LocalContext.current
+    val tables by produceState<Pair<BleAssignedNumbers, OuiTable?>?>(null, enabled) {
+        if (enabled) value = withContext(Dispatchers.IO) {
+            val numbers = runCatching { context.assets.open("ble_assigned.tsv").use { BleAssignedNumbers.read(it) } }
+                .getOrDefault(BleAssignedNumbers.EMPTY)
+            val oui = runCatching { context.assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
+            numbers to oui
+        }
+    }
+    val (numbers, oui) = tables ?: return emptyMap()
+    return remember(uiState.latestPass, uiState.previousPass, numbers) {
+        (uiState.previousPass?.bleObservations.orEmpty() + uiState.latestPass?.bleObservations.orEmpty())
+            .associate { it.bleMac to BleDeviceInfo.describe(it, numbers) { mac -> oui?.vendorOf(mac) } }
+    }
 }
