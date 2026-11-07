@@ -177,6 +177,16 @@ export interface ScanSession {
   fused_latitude: number | null;
   fused_longitude: number | null;
   fused_accuracy_meters: number | null;
+  // Age of the chosen fix at the pass midpoint (APKs from 2026-11 on).
+  location_fix_age_ms?: number | null;
+  // Non-destructive correction (backend scans/location_quality.py): the
+  // phone's original position lives in raw_* when this is set.
+  location_correction?: "" | "fused" | "cleared";
+  location_correction_reason?: string;
+  raw_latitude?: number | null;
+  raw_longitude?: number | null;
+  raw_location_accuracy_meters?: number | null;
+  raw_location_provider?: string;
   created_at: string;
   wifi_count: number;
   cell_count: number;

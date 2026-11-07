@@ -315,6 +315,20 @@ export function ManageScansPage() {
                     ) : (
                       "—"
                     )}
+                    {s.location_correction && (
+                      <div
+                        className="identifier-subtext"
+                        title={`${s.location_correction_reason ?? ""}. Original: ${
+                          s.raw_latitude != null && s.raw_longitude != null
+                            ? `${s.raw_latitude.toFixed(4)}, ${s.raw_longitude.toFixed(4)}`
+                            : "none"
+                        }${s.raw_location_provider ? ` (${s.raw_location_provider})` : ""}`}
+                      >
+                        {s.location_correction === "fused"
+                          ? "Position corrected to the fused fix"
+                          : "Implausible position left off the map"}
+                      </div>
+                    )}
                   </td>
                   <td className="hide-mobile">{formatObservationCounts(s)}</td>
                 </tr>

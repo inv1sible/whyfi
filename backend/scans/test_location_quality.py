@@ -84,6 +84,16 @@ class IngestLocationTests(TestCase):
         self.assertEqual(session.location_correction, "")
         self.assertAlmostEqual(session.latitude, LAT + 5000 * M, places=6)
 
+    def test_session_api_exposes_the_correction(self):
+        self._post(_payload("api", north_m=5000, fused_north_m=0, location_fix_age_ms=300))
+        reader = APIClient()
+        reader.force_authenticate(user=get_user_model().objects.create_user(username="op2", password="pw-123456"))
+        row = reader.get("/api/v1/scan-sessions/").json()["results"][0]
+        self.assertEqual(row["location_correction"], "fused")
+        self.assertIn("fused fix", row["location_correction_reason"])
+        self.assertAlmostEqual(row["raw_latitude"], LAT + 5000 * M, places=6)
+        self.assertEqual(row["location_fix_age_ms"], 300)
+
     def test_export_writes_original_coordinates(self):
         self._post(_payload("exp", north_m=5000, fused_north_m=0, location_fix_age_ms=400))
         reader = APIClient()

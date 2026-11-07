@@ -227,7 +227,9 @@ class ScanSessionSerializer(serializers.ModelSerializer):
         fields = [
             "id", "sensor", "sensor_name", "started_at", "completed_at",
             "latitude", "longitude", "location_accuracy_meters", "location_provider",
-            "fused_latitude", "fused_longitude", "fused_accuracy_meters",
+            "fused_latitude", "fused_longitude", "fused_accuracy_meters", "location_fix_age_ms",
+            "raw_latitude", "raw_longitude", "raw_location_accuracy_meters", "raw_location_provider",
+            "location_correction", "location_correction_reason",
             "created_at", "wifi_count", "cell_count", "ble_count", "satellite_count", "lan_count",
             "resolved_address", "identifiers_summary",
         ]
