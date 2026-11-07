@@ -68,7 +68,9 @@ exercised against a real browser session — see `MEMORY.md`.
   ],
   "ble_observations": [
     {"ble_mac": "11:22:33:44:55:66", "rssi": -70, "tx_power": -12,
-     "manufacturer_data": "4c00...", "service_uuids": []}
+     "manufacturer_data": "004c:1219...", "service_uuids": [],
+     "manufacturer_records": ["004c:1219...", "0006:0109..."],
+     "service_data": ["0000fd5a-0000-1000-8000-00805f9b34fb:01..."]}
   ],
   "satellite_observations": [
     {"constellation": "GPS", "svid": 14, "cn0_db_hz": 34.5,
@@ -84,6 +86,14 @@ exercised against a real browser session — see `MEMORY.md`.
 Every `*_observations` array is optional/independently empty. Idempotent on
 `client_scan_id` — replaying the same payload returns the existing session
 (200) instead of duplicating rows.
+
+In `ble_observations`, `manufacturer_records` (`"cccc:hex"`, company id in hex,
+data without the two company-id bytes) and `service_data` (`"uuid:hex"`) are
+the complete advertisement, both optional (max 32 entries of 4096 chars).
+APKs from before 2026-11 send only `manufacturer_data`, the first record in
+the same format; it's used for signature matching only when
+`manufacturer_records` is empty. Every BLE observation is labeled at ingest
+with `signature_matches` (`[{id, rule}]`) and `signature_catalog_version`.
 
 `ftm_observations` are Wi-Fi RTT/FTM **distance** measurements, not RSSI
 readings — a separate table from `wifi_observations` because they're a
@@ -114,6 +124,8 @@ all. Values are `OPEN`, `WEP`, `WPA`, `WPA2`, `WPA3`, `WPA2_WPA3`, `OWE`
 - `GET /channel-congestion/?band=2.4GHz|5GHz|6GHz&since=` — defaults to a rolling last-24h window if `since` is omitted (a single scan session under-represents "what channels are in use around here")
 - `GET /cell-observations/?mcc=&mnc=&since=`
 - `GET /ble-observations/?device_type=&since=&identifier=` — `identifier` matches either `ble_mac` or `stable_identifier`, for one device's sighting history; also includes each sighting's `latitude`/`longitude` (from its scan session)
+- `GET /ble-devices/?signature=<fleet id>&signature_class=<KIND>` — each device carries `signature_ids` and `signatures` (`[{id, name, kind, rules}]`, where `rules` are the rule kinds that hit, e.g. `OUI` = address prefix only); the detail view adds each signature's `notes`/`attention_note`. Labels are pattern matches from the vendored Fieldwatch catalog (`backend/scans/ble_signatures.py`, update via `backend/scans/signatures/README.md`), informational only. An id no longer in the catalog is served as `{id, name: id, kind: "OTHER"}` until `manage.py relabel_ble_signatures` runs
+- `GET /ble-signatures/` — `{catalog_version, results: [{id, name, kind}]}`, the BLE-capable catalog fleets
 - `GET /satellite-observations/`
 - `GET /lan-observations/?since=`
 - `GET /heatmap/?source=wifi|cellular|ble&bounds=<sw_lat>,<sw_lng>,<ne_lat>,<ne_lng>&since=` — grid-bucketed points; **capped envelope**, see below

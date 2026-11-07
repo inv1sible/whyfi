@@ -4,6 +4,7 @@ The catalog is Fieldwatch's stock signature export, vendored unmodified in
 scans/signatures/. See backend/scans/signatures/README.md.
 """
 
+import io
 import json
 from pathlib import Path
 
@@ -13,7 +14,9 @@ from rest_framework.test import APIClient
 
 from sensors.models import Sensor
 
-from .ble_signatures import BleAdvert, load_catalog, match_ble, parse_advert, parse_catalog
+from django.core.management import call_command
+
+from .ble_signatures import BleAdvert, load_catalog, match_ble, parse_advert, parse_catalog, relabel_all
 
 from .models import BLEDevice, BLEObservation, ScanSession
 
@@ -324,3 +327,132 @@ class IngestSignatureTests(TestCase):
         rows = reader.get("/api/v1/ble-devices/7A:11:22:33:44:5B/ble-observations/").json()
         self.assertEqual(rows[0]["signature_matches"], [{"id": "fleet-flipper", "rule": "NAME_CONTAINS"}])
         self.assertEqual(rows[0]["signature_catalog_version"], 98)
+
+
+class RelabelAndApiTests(TestCase):
+    def setUp(self):
+        self.session = ScanSession.objects.create(
+            sensor=Sensor.objects.create(name="Field Phone"), client_scan_id="relabel-1",
+            started_at="2026-11-07T10:00:00Z", completed_at="2026-11-07T10:00:06Z",
+        )
+        self.flipper = self._raw("7A:00:00:00:00:01", name="Flipper Zero")
+        self.airtag = self._raw("5C:00:00:00:00:02", legacy="004c:12190000")
+        self.plain = self._raw("7A:00:00:00:00:03", name="Kitchen scale")
+        self.reader = APIClient()
+        self.reader.force_authenticate(user=get_user_model().objects.create_user(username="op", password="pw-123456"))
+
+    def _raw(self, mac, name="", legacy=""):
+        """A row created without ingest, so it carries no labels yet."""
+        device = BLEDevice.objects.create(device_key=mac, device_name=name)
+        BLEObservation.objects.create(
+            scan_session=self.session, ble_device=device, ble_mac=mac, rssi=-60,
+            device_name=name, manufacturer_data_raw=legacy, observed_at="2026-11-07T10:00:01Z",
+        )
+        return device
+
+    def _state(self):
+        return (
+            sorted(BLEObservation.objects.values_list("ble_mac", "signature_matches", "signature_catalog_version")),
+            sorted(BLEDevice.objects.values_list("device_key", "signature_ids", "last_seen_at")),
+        )
+
+    def test_relabel_labels_unlabeled_rows(self):
+        self.assertEqual(BLEObservation.objects.exclude(signature_matches=[]).count(), 0)
+        result = relabel_all()
+        self.assertEqual(result, {"observations": 3, "devices": 3, "catalog_version": 98})
+        self.flipper.refresh_from_db()
+        self.airtag.refresh_from_db()
+        self.plain.refresh_from_db()
+        self.assertEqual(self.flipper.signature_ids, ["fleet-flipper"])
+        self.assertEqual(self.airtag.signature_ids, ["fleet-airtag"])
+        self.assertEqual(self.plain.signature_ids, [])
+        self.assertEqual(set(BLEObservation.objects.values_list("signature_catalog_version", flat=True)), {98})
+
+    def test_relabel_command_prints_counts(self):
+        out = io.StringIO()
+        call_command("relabel_ble_signatures", stdout=out)
+        self.assertIn("'observations': 3", out.getvalue())
+        self.assertIn("'catalog_version': 98", out.getvalue())
+
+    def test_relabel_drops_removed_fleet(self):
+        relabel_all()
+        stock = load_catalog()
+        newer = parse_catalog({
+            "format": "fieldwatch-signatures", "formatVersion": 1, "catalogVersion": 99,
+            "fleets": [_fleet(f.id, [_rule(r.kind, r.text, r.company_id, r.data_prefix_hex, r.radio) for r in f.rules],
+                              kind=f.kind, match_any=f.match_any)
+                       for f in stock.fleets if f.id != "fleet-flipper"],
+        })
+        relabel_all(newer)
+        self.flipper.refresh_from_db()
+        self.airtag.refresh_from_db()
+        self.assertEqual(self.flipper.signature_ids, [])
+        self.assertEqual(self.airtag.signature_ids, ["fleet-airtag"])
+        self.assertEqual(BLEObservation.objects.get(ble_mac="7A:00:00:00:00:01").signature_matches, [])
+        self.assertEqual(set(BLEObservation.objects.values_list("signature_catalog_version", flat=True)), {99})
+
+    def test_relabel_is_idempotent(self):
+        relabel_all(batch_size=2)
+        first = self._state()
+        relabel_all(batch_size=2)
+        self.assertEqual(self._state(), first)
+
+    def test_relabel_does_not_touch_last_seen(self):
+        before = dict(BLEDevice.objects.values_list("device_key", "last_seen_at"))
+        relabel_all()
+        self.assertEqual(dict(BLEDevice.objects.values_list("device_key", "last_seen_at")), before)
+
+    def test_device_without_observations_is_cleared(self):
+        BLEDevice.objects.create(device_key="orphan", signature_ids=["fleet-flipper"])
+        relabel_all()
+        self.assertEqual(BLEDevice.objects.get(device_key="orphan").signature_ids, [])
+
+    def test_unknown_signature_id_is_served_without_crash(self):
+        BLEDevice.objects.filter(pk=self.plain.pk).update(signature_ids=["fleet-gone"])
+        BLEObservation.objects.filter(ble_device=self.plain).update(
+            signature_matches=[{"id": "fleet-gone", "rule": "NAME_GLOB"}],
+        )
+        listed = self.reader.get("/api/v1/ble-devices/")
+        self.assertEqual(listed.status_code, 200)
+        detail = self.reader.get(f"/api/v1/ble-devices/{self.plain.device_key}/")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["signatures"], [{
+            "id": "fleet-gone", "name": "fleet-gone", "kind": "OTHER", "rules": ["NAME_GLOB"],
+            "notes": "", "attention_note": "",
+        }])
+
+    def test_device_serializer_signatures(self):
+        relabel_all()
+        listed = {d["device_key"]: d for d in self.reader.get("/api/v1/ble-devices/").json()["results"]}
+        self.assertEqual(listed[self.flipper.device_key]["signatures"], [
+            {"id": "fleet-flipper", "name": "Flipper Zero", "kind": "HACKING", "rules": ["NAME_CONTAINS"]},
+        ])
+        self.assertEqual(listed[self.plain.device_key]["signatures"], [])
+        self.assertNotIn("notes", listed[self.flipper.device_key]["signatures"][0])
+        detail = self.reader.get(f"/api/v1/ble-devices/{self.flipper.device_key}/").json()
+        flipper = load_catalog().get("fleet-flipper")
+        self.assertEqual(detail["signatures"][0]["notes"], flipper.notes)
+        self.assertEqual(detail["signatures"][0]["attention_note"], flipper.attention_note)
+
+    def test_filter_by_signature_and_class(self):
+        relabel_all()
+        keys = lambda query: {  # noqa: E731
+            d["device_key"] for d in self.reader.get(f"/api/v1/ble-devices/?{query}").json()["results"]
+        }
+        self.assertEqual(keys("signature_class=HACKING"), {self.flipper.device_key})
+        self.assertEqual(keys("signature_class=FINDER"), {self.airtag.device_key})
+        self.assertEqual(keys("signature=fleet-airtag"), {self.airtag.device_key})
+        self.assertEqual(keys("signature=fleet-nope"), set())
+        self.assertEqual(keys("signature_class=NOPE"), set())
+
+    def test_signature_list_is_ble_only_and_authenticated(self):
+        response = self.reader.get("/api/v1/ble-signatures/")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["catalog_version"], 98)
+        self.assertEqual(len(body["results"]), 173)
+        ids = {r["id"] for r in body["results"]}
+        self.assertIn("fleet-flipper", ids)
+        self.assertNotIn("fleet-meraki", ids)
+        self.assertEqual(set(body["results"][0]), {"id", "name", "kind"})
+        self.assertEqual(APIClient().get("/api/v1/ble-signatures/").status_code, 403)

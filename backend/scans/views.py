@@ -15,6 +15,7 @@ from rest_framework.response import Response
 from sensors.authentication import SensorTokenAuthentication
 from sensors.models import Sensor
 
+from .ble_signatures import is_ble_capable, load_catalog
 from .calibration import fit_path_loss
 from .floorplan import (
     derive_scale_and_bearing,
@@ -66,6 +67,7 @@ from .models import (
 from .serializers import (
     AccessPointSerializer,
     CalibratedRangeModelSerializer,
+    BLEDeviceDetailSerializer,
     BLEDeviceSerializer,
     BLEObservationSerializer,
     CellObservationSerializer,
@@ -1543,16 +1545,46 @@ class BLEObservationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         return Response(capped_response(results, truncated, COVERAGE_OBSERVATION_CAP))
 
 
+class BLESignatureViewSet(viewsets.ViewSet):
+    """The BLE-capable fleets of the vendored signature catalog, for the
+    PWA's class filter and labels. Wi-Fi-only fleets are left out because
+    only BLE is labeled (scans/ble_signatures.py)."""
+
+    def list(self, request):
+        catalog = load_catalog()
+        return Response({
+            "catalog_version": catalog.version,
+            "results": [
+                {"id": fleet.id, "name": fleet.name, "kind": fleet.kind}
+                for fleet in catalog.fleets
+                if is_ble_capable(fleet)
+            ],
+        })
+
+
 class BLEDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
     serializer_class = BLEDeviceSerializer
     lookup_field = "device_key"
     lookup_value_regex = "[^/]+"
+
+    def get_serializer_class(self):
+        return BLEDeviceDetailSerializer if self.action == "retrieve" else BLEDeviceSerializer
 
     def get_queryset(self):
         qs = BLEDevice.objects.all().order_by("-last_seen_at")
         device_type = self.request.query_params.get("device_type")
         if device_type:
             qs = qs.filter(device_type_guess=device_type)
+        signature = self.request.query_params.get("signature")
+        if signature:
+            qs = qs.filter(signature_ids__contains=[signature])
+        signature_class = self.request.query_params.get("signature_class")
+        if signature_class:
+            fleet_ids = [fleet.id for fleet in load_catalog().fleets if fleet.kind == signature_class]
+            match = Q()
+            for fleet_id in fleet_ids:
+                match |= Q(signature_ids__contains=[fleet_id])
+            qs = qs.filter(match) if fleet_ids else qs.none()
         qs = apply_active_window(qs, self.request)
         session_limit = parse_session_limit(self.request)
         if session_limit:

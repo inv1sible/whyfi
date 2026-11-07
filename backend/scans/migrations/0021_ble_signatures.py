@@ -3,6 +3,16 @@
 from django.db import migrations, models
 
 
+def backfill_signatures(apps, schema_editor):
+    # Same code path as `manage.py relabel_ble_signatures`, on historical models.
+    from scans.ble_signatures import relabel_all
+
+    relabel_all(
+        observation_model=apps.get_model("scans", "BLEObservation"),
+        device_model=apps.get_model("scans", "BLEDevice"),
+    )
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -40,4 +50,5 @@ class Migration(migrations.Migration):
             name='manufacturer_data_raw',
             field=models.TextField(blank=True),
         ),
+        migrations.RunPython(backfill_signatures, migrations.RunPython.noop),
     ]

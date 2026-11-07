@@ -303,6 +303,9 @@ class BLEObservationSerializer(serializers.ModelSerializer):
 
 
 class BLEDeviceSerializer(serializers.ModelSerializer):
+    # Catalog signatures this device pattern-matched in any observation
+    # (scans/ble_signatures.py). Informational only, no alert state.
+    signatures = serializers.SerializerMethodField()
     latest_rssi = serializers.SerializerMethodField()
     latest_device_name = serializers.SerializerMethodField()
     latest_is_connectable = serializers.SerializerMethodField()
@@ -314,8 +317,36 @@ class BLEDeviceSerializer(serializers.ModelSerializer):
         fields = [
             "device_key", "device_name", "device_type_guess", "first_seen_at", "last_seen_at",
             "latest_rssi", "latest_device_name", "latest_is_connectable", "latest_primary_phy",
-            "latest_has_location",
+            "latest_has_location", "signature_ids", "signatures",
         ]
+
+    # Detail view adds each signature's catalog notes.
+    include_signature_notes = False
+
+    def get_signatures(self, obj):
+        if not obj.signature_ids:
+            return []
+        rules: dict[str, set[str]] = {}
+        for matches in obj.observations.exclude(signature_matches=[]).values_list("signature_matches", flat=True):
+            for match in matches:
+                rules.setdefault(match["id"], set()).add(match["rule"])
+        catalog = load_catalog()
+        out = []
+        for fleet_id in obj.signature_ids:
+            fleet = catalog.get(fleet_id)
+            # An id from an older catalog (fleet since removed) is served
+            # as-is until relabel_ble_signatures drops it.
+            entry = {
+                "id": fleet_id,
+                "name": fleet.name if fleet else fleet_id,
+                "kind": fleet.kind if fleet else "OTHER",
+                "rules": sorted(rules.get(fleet_id, ())),
+            }
+            if self.include_signature_notes:
+                entry["notes"] = fleet.notes if fleet else ""
+                entry["attention_note"] = fleet.attention_note if fleet else ""
+            out.append(entry)
+        return out
 
     def _latest(self, obj):
         if not hasattr(obj, "_latest_observation_cache"):
@@ -341,6 +372,10 @@ class BLEDeviceSerializer(serializers.ModelSerializer):
     def get_latest_has_location(self, obj):
         latest = self._latest(obj)
         return bool(latest and latest.scan_session.latitude is not None)
+
+
+class BLEDeviceDetailSerializer(BLEDeviceSerializer):
+    include_signature_notes = True
 
 
 class SatelliteObservationSerializer(serializers.ModelSerializer):

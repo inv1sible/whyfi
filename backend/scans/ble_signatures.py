@@ -463,3 +463,69 @@ def label_ble_observation(obs, catalog: Catalog) -> None:
 def merge_signature_ids(existing, matches) -> list[str]:
     """Sorted union of a device's stored ids and one observation's matches."""
     return sorted(set(existing or ()) | {m["id"] for m in matches})
+
+
+def is_ble_capable(fleet: Fleet) -> bool:
+    """Whether any rule could ever hit a BLE advert (Wi-Fi-only fleets can't)."""
+    return any(rule.radio != "WIFI" and rule.kind not in _WIFI_ONLY_KINDS for rule in fleet.rules)
+
+
+def relabel_all(
+    catalog: Catalog | None = None,
+    batch_size: int = 2000,
+    *,
+    observation_model=None,
+    device_model=None,
+) -> dict:
+    """Recomputes every BLEObservation's labels and every BLEDevice's
+    signature_ids from the stored raw advert. Idempotent; ids of fleets no
+    longer in the catalog disappear. bulk_update never fires auto_now, so
+    last_seen_at keeps meaning "last sighting".
+
+    The model arguments let the migration backfill pass its historical models.
+    """
+    if observation_model is None or device_model is None:
+        from .models import BLEDevice, BLEObservation
+
+        observation_model = observation_model or BLEObservation
+        device_model = device_model or BLEDevice
+    catalog = catalog or load_catalog()
+
+    fields = [
+        "id", "ble_device_id", "ble_mac", "device_name", "service_uuids", "manufacturer_records",
+        "service_data", "manufacturer_data_raw", "signature_matches", "signature_catalog_version",
+    ]
+    device_ids: dict[str, set[str]] = {}
+    observations = 0
+    pending = []
+    for obs in observation_model.objects.only(*fields).order_by("pk").iterator(chunk_size=batch_size):
+        observations += 1
+        before = (obs.signature_matches, obs.signature_catalog_version)
+        label_ble_observation(obs, catalog)
+        if obs.ble_device_id is not None:
+            device_ids.setdefault(obs.ble_device_id, set()).update(m["id"] for m in obs.signature_matches)
+        if (obs.signature_matches, obs.signature_catalog_version) != before:
+            pending.append(obs)
+        if len(pending) >= batch_size:
+            observation_model.objects.bulk_update(pending, ["signature_matches", "signature_catalog_version"])
+            pending = []
+    if pending:
+        observation_model.objects.bulk_update(pending, ["signature_matches", "signature_catalog_version"])
+
+    devices = 0
+    pending = []
+    for device in device_model.objects.only("device_key", "signature_ids").order_by("pk").iterator(
+        chunk_size=batch_size
+    ):
+        devices += 1
+        ids = sorted(device_ids.get(device.pk, ()))
+        if device.signature_ids != ids:
+            device.signature_ids = ids
+            pending.append(device)
+        if len(pending) >= batch_size:
+            device_model.objects.bulk_update(pending, ["signature_ids"])
+            pending = []
+    if pending:
+        device_model.objects.bulk_update(pending, ["signature_ids"])
+
+    return {"observations": observations, "devices": devices, "catalog_version": catalog.version}
