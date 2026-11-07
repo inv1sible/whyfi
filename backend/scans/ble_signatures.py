@@ -437,3 +437,29 @@ def match_ble(advert: BleAdvert, catalog: Catalog | None = None) -> list[dict]:
             del hits["fleet-airtag"]
 
     return [{"id": fid, "rule": kind} for fid, kind in hits.items()]
+
+
+# --------------------------------------------------------------------------
+# Storage helpers
+# --------------------------------------------------------------------------
+
+def advert_for_observation(obs) -> BleAdvert:
+    return parse_advert(
+        obs.ble_mac,
+        obs.device_name,
+        obs.service_uuids or [],
+        obs.manufacturer_records or [],
+        obs.service_data or [],
+        legacy_manufacturer_data=obs.manufacturer_data_raw or "",
+    )
+
+
+def label_ble_observation(obs, catalog: Catalog) -> None:
+    """Sets obs.signature_matches and obs.signature_catalog_version. Doesn't save."""
+    obs.signature_matches = match_ble(advert_for_observation(obs), catalog)
+    obs.signature_catalog_version = catalog.version
+
+
+def merge_signature_ids(existing, matches) -> list[str]:
+    """Sorted union of a device's stored ids and one observation's matches."""
+    return sorted(set(existing or ()) | {m["id"] for m in matches})

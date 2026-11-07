@@ -7,9 +7,15 @@ scans/signatures/. See backend/scans/signatures/README.md.
 import json
 from pathlib import Path
 
-from django.test import SimpleTestCase
+from django.contrib.auth import get_user_model
+from django.test import SimpleTestCase, TestCase
+from rest_framework.test import APIClient
+
+from sensors.models import Sensor
 
 from .ble_signatures import BleAdvert, load_catalog, match_ble, parse_advert, parse_catalog
+
+from .models import BLEDevice, BLEObservation, ScanSession
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "ble_signature_cases.json"
 
@@ -206,3 +212,115 @@ class MatcherTests(SimpleTestCase):
         self.assertEqual(match_ble(_advert(service_uuids=["6e400001-b5a3-f393-e0a9-e50e24dcca9e"]), catalog), hit)
         self.assertEqual(match_ble(_advert(service_uuids=["6E400001B5A3F393E0A9E50E24DCCA9E"]), catalog), hit)
         self.assertEqual(match_ble(_advert(service_uuids=["0001"]), catalog), [])
+
+
+def _session(client_scan_id, ble_observations):
+    return {
+        "client_scan_id": client_scan_id,
+        "started_at": "2026-11-07T10:00:00Z",
+        "completed_at": "2026-11-07T10:00:06Z",
+        "latitude": 48.1351, "longitude": 11.582,
+        "ble_observations": ble_observations,
+    }
+
+
+class IngestSignatureTests(TestCase):
+    def setUp(self):
+        self.sensor = Sensor.objects.create(name="Field Phone")
+        self.ingest = APIClient()
+        self.ingest.credentials(HTTP_AUTHORIZATION=f"Token {self.sensor.token}")
+
+    def _post(self, client_scan_id, *observations):
+        response = self.ingest.post(
+            "/api/v1/scan-sessions/", _session(client_scan_id, list(observations)), format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        return response
+
+    def test_new_payload_is_labeled(self):
+        self._post("sig-1", {
+            "ble_mac": "7A:11:22:33:44:55", "rssi": -60, "device_name": "Flipper Zero",
+            "manufacturer_records": [], "service_data": [],
+        })
+        obs = BLEObservation.objects.get()
+        self.assertEqual([m["id"] for m in obs.signature_matches], ["fleet-flipper"])
+        self.assertEqual(obs.signature_matches[0]["rule"], "NAME_CONTAINS")
+        self.assertEqual(obs.signature_catalog_version, 98)
+        self.assertEqual(BLEDevice.objects.get(device_key="7A:11:22:33:44:55").signature_ids, ["fleet-flipper"])
+
+    def test_raw_advert_lists_are_stored(self):
+        self._post("sig-raw", {
+            "ble_mac": "7A:11:22:33:44:56", "rssi": -60,
+            "manufacturer_records": ["004c:1005", "ffff:0109"],
+            "service_data": ["0000fd5a-0000-1000-8000-00805f9b34fb:01"],
+        })
+        obs = BLEObservation.objects.get()
+        self.assertEqual(obs.manufacturer_records, ["004c:1005", "ffff:0109"])
+        self.assertEqual(obs.service_data, ["0000fd5a-0000-1000-8000-00805f9b34fb:01"])
+        self.assertEqual([m["id"] for m in obs.signature_matches], ["fleet-apple-device", "fleet-smarttag"])
+
+    def test_legacy_payload_is_labeled(self):
+        # Old APKs send only the first manufacturer record, and no new fields.
+        self._post("sig-legacy", {
+            "ble_mac": "5C:11:22:33:44:55", "rssi": -70, "manufacturer_data": "004c:12190000",
+            "service_uuids": [],
+        })
+        obs = BLEObservation.objects.get()
+        self.assertEqual([m["id"] for m in obs.signature_matches], ["fleet-airtag"])
+        self.assertEqual(obs.manufacturer_records, [])
+        self.assertEqual(BLEDevice.objects.get().signature_ids, ["fleet-airtag"])
+
+    def test_long_manufacturer_record_does_not_reject_session(self):
+        self._post("sig-long", {
+            "ble_mac": "7A:11:22:33:44:57", "rssi": -60,
+            "manufacturer_records": ["08aa:0600" + "ab" * 298],
+            "manufacturer_data": "08aa:0600" + "ab" * 250,
+        })
+        obs = BLEObservation.objects.get()
+        self.assertEqual(len(obs.manufacturer_records[0]), 605)
+        self.assertEqual(len(obs.manufacturer_data_raw), 509)
+        self.assertEqual([m["id"] for m in obs.signature_matches], ["fleet-osmo"])
+
+    def test_device_signature_ids_accumulate(self):
+        self._post("sig-a", {"ble_mac": "7A:11:22:33:44:58", "rssi": -60, "device_name": "Flipper Zero"})
+        self._post("sig-b", {"ble_mac": "7A:11:22:33:44:58", "rssi": -61, "device_name": ""})
+        self.assertEqual(BLEDevice.objects.get(device_key="7A:11:22:33:44:58").signature_ids, ["fleet-flipper"])
+        self.assertEqual(BLEObservation.objects.filter(signature_matches=[]).count(), 1)
+
+    def test_device_signature_ids_are_a_sorted_union(self):
+        self._post("sig-c", {"ble_mac": "7A:11:22:33:44:59", "rssi": -60, "device_name": "Tile"})
+        self._post("sig-d", {"ble_mac": "7A:11:22:33:44:59", "rssi": -60, "device_name": "Flipper"})
+        self.assertEqual(
+            BLEDevice.objects.get(device_key="7A:11:22:33:44:59").signature_ids, ["fleet-flipper", "fleet-tile"],
+        )
+
+    def test_export_import_preserves_signature_inputs(self):
+        self._post("sig-io", {
+            "ble_mac": "7A:11:22:33:44:5A", "rssi": -60,
+            "manufacturer_records": ["0075:0102"],
+            "service_data": ["0000fd5a-0000-1000-8000-00805f9b34fb:01"],
+        })
+        reader = APIClient()
+        reader.force_authenticate(user=get_user_model().objects.create_user(username="op", password="pw-123456"))
+        exported = reader.get("/api/v1/scan-sessions/export/").json()
+        ble = exported["sessions"][0]["ble_observations"][0]
+        self.assertEqual(ble["manufacturer_records"], ["0075:0102"])
+        self.assertEqual(ble["service_data"], ["0000fd5a-0000-1000-8000-00805f9b34fb:01"])
+
+        ScanSession.objects.all().delete()
+        BLEDevice.objects.all().delete()
+        restored = reader.post("/api/v1/scan-sessions/import_sessions/", exported, format="json")
+        self.assertEqual(restored.json()["created"], 1, restored.content)
+
+        obs = BLEObservation.objects.get()
+        self.assertEqual(obs.manufacturer_records, ["0075:0102"])
+        self.assertEqual([m["id"] for m in obs.signature_matches], ["fleet-smarttag"])
+        self.assertEqual(BLEDevice.objects.get().signature_ids, ["fleet-smarttag"])
+
+    def test_read_serializer_exposes_matches(self):
+        self._post("sig-read", {"ble_mac": "7A:11:22:33:44:5B", "rssi": -60, "device_name": "Flipper"})
+        reader = APIClient()
+        reader.force_authenticate(user=get_user_model().objects.create_user(username="op2", password="pw-123456"))
+        rows = reader.get("/api/v1/ble-devices/7A:11:22:33:44:5B/ble-observations/").json()
+        self.assertEqual(rows[0]["signature_matches"], [{"id": "fleet-flipper", "rule": "NAME_CONTAINS"}])
+        self.assertEqual(rows[0]["signature_catalog_version"], 98)

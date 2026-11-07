@@ -261,8 +261,20 @@ class BLEObservation(models.Model):
     stable_identifier = models.CharField(max_length=64, blank=True)
     rssi = models.IntegerField()
     tx_power = models.IntegerField(null=True, blank=True)
-    manufacturer_data_raw = models.CharField(max_length=255, blank=True)
+    # The single "cccc:hex" record old APKs send. Text, not CharField(255):
+    # a long extended-advertising record must not reject the whole session.
+    manufacturer_data_raw = models.TextField(blank=True)
     service_uuids = models.JSONField(default=list, blank=True)
+    # The complete advert as sent by newer APKs: every manufacturer record
+    # ("cccc:hex", company id in hex) and every service data entry
+    # ("uuid:hex"). Raw inputs kept so history can be relabeled.
+    manufacturer_records = models.JSONField(default=list, blank=True)
+    service_data = models.JSONField(default=list, blank=True)
+    # Derived from the fields above by scans/ble_signatures.py: the catalog
+    # signatures this advert pattern-matches, [{"id": fleet id, "rule": kind}].
+    # Informational, like device_type_guess. No alert state (see MEMORY.md).
+    signature_matches = models.JSONField(default=list, blank=True)
+    signature_catalog_version = models.IntegerField(null=True, blank=True)
     device_type_guess = models.CharField(max_length=12, choices=DeviceType.choices, default=DeviceType.UNKNOWN)
     device_name = models.CharField(max_length=64, blank=True)
     is_connectable = models.BooleanField(default=False)
@@ -295,6 +307,9 @@ class BLEDevice(models.Model):
     device_type_guess = models.CharField(
         max_length=12, choices=BLEObservation.DeviceType.choices, default=BLEObservation.DeviceType.UNKNOWN
     )
+    # Sorted union of signature ids over all of this device's observations
+    # (BLEObservation.signature_matches). Recomputed by relabel_ble_signatures.
+    signature_ids = models.JSONField(default=list, blank=True)
     first_seen_at = models.DateTimeField(auto_now_add=True)
     last_seen_at = models.DateTimeField(auto_now=True)
 

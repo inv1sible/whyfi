@@ -1,6 +1,7 @@
 from django.db import transaction
 from rest_framework import serializers
 
+from .ble_signatures import label_ble_observation, load_catalog, merge_signature_ids
 from .geocoding import GEOCODE_PRECISION
 from .models import (
     AccessPoint,
@@ -475,8 +476,17 @@ class BLEObservationInputSerializer(serializers.Serializer):
     stable_identifier = serializers.CharField(max_length=64, allow_blank=True, default="")
     rssi = serializers.IntegerField()
     tx_power = serializers.IntegerField(required=False, allow_null=True)
-    manufacturer_data = serializers.CharField(max_length=255, allow_blank=True, default="")
+    # Legacy single record ("cccc:hex"), still the only one old APKs send.
+    manufacturer_data = serializers.CharField(max_length=1024, allow_blank=True, default="")
     service_uuids = serializers.ListField(child=serializers.CharField(), default=list)
+    # The complete advert, sent by newer APKs. Optional, so old payloads
+    # still ingest (and still get labeled from manufacturer_data).
+    manufacturer_records = serializers.ListField(
+        child=serializers.CharField(max_length=4096), max_length=32, default=list
+    )
+    service_data = serializers.ListField(
+        child=serializers.CharField(max_length=4096), max_length=32, default=list
+    )
     device_type_guess = serializers.ChoiceField(
         choices=BLEObservation.DeviceType.choices, default=BLEObservation.DeviceType.UNKNOWN
     )
@@ -679,7 +689,27 @@ class ScanSessionIngestSerializer(serializers.Serializer):
                 observed_at=item.get("observed_at", default_observed_at),
             )
 
+        catalog = load_catalog() if validated_data.get("ble_observations") else None
         for item in validated_data.get("ble_observations", []):
+            obs = BLEObservation(
+                scan_session=session,
+                ble_mac=item.get("ble_mac", ""),
+                stable_identifier=item.get("stable_identifier", ""),
+                rssi=item["rssi"],
+                tx_power=item.get("tx_power"),
+                manufacturer_data_raw=item.get("manufacturer_data", ""),
+                service_uuids=item.get("service_uuids", []),
+                manufacturer_records=item.get("manufacturer_records", []),
+                service_data=item.get("service_data", []),
+                device_type_guess=item.get("device_type_guess", BLEObservation.DeviceType.UNKNOWN),
+                device_name=item.get("device_name", ""),
+                is_connectable=item.get("is_connectable", False),
+                primary_phy=item.get("primary_phy", ""),
+                observed_at=item.get("observed_at", default_observed_at),
+            )
+            # Backend-authoritative signature labels (scans/ble_signatures.py).
+            label_ble_observation(obs, catalog)
+
             device_key = item.get("ble_mac") or item.get("stable_identifier")
             ble_device = None
             if device_key:
@@ -688,6 +718,7 @@ class ScanSessionIngestSerializer(serializers.Serializer):
                     defaults={
                         "device_name": item.get("device_name", ""),
                         "device_type_guess": item.get("device_type_guess", BLEObservation.DeviceType.UNKNOWN),
+                        "signature_ids": merge_signature_ids([], obs.signature_matches),
                     },
                 )
                 if not device_created:
@@ -696,23 +727,11 @@ class ScanSessionIngestSerializer(serializers.Serializer):
                     # reasoning as AccessPoint/CellTower/LANDevice above.
                     ble_device.device_name = item.get("device_name", "") or ble_device.device_name
                     ble_device.device_type_guess = item.get("device_type_guess", ble_device.device_type_guess)
+                    ble_device.signature_ids = merge_signature_ids(ble_device.signature_ids, obs.signature_matches)
                     ble_device.save()
 
-            BLEObservation.objects.create(
-                scan_session=session,
-                ble_device=ble_device,
-                ble_mac=item.get("ble_mac", ""),
-                stable_identifier=item.get("stable_identifier", ""),
-                rssi=item["rssi"],
-                tx_power=item.get("tx_power"),
-                manufacturer_data_raw=item.get("manufacturer_data", ""),
-                service_uuids=item.get("service_uuids", []),
-                device_type_guess=item.get("device_type_guess", BLEObservation.DeviceType.UNKNOWN),
-                device_name=item.get("device_name", ""),
-                is_connectable=item.get("is_connectable", False),
-                primary_phy=item.get("primary_phy", ""),
-                observed_at=item.get("observed_at", default_observed_at),
-            )
+            obs.ble_device = ble_device
+            obs.save()
 
         for item in validated_data.get("satellite_observations", []):
             SatelliteObservation.objects.create(

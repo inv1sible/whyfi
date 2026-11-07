@@ -315,7 +315,8 @@ def export_session_payload(session):
             {
                 "ble_mac": o.ble_mac, "stable_identifier": o.stable_identifier, "rssi": o.rssi,
                 "tx_power": o.tx_power, "manufacturer_data": o.manufacturer_data_raw,
-                "service_uuids": o.service_uuids, "device_type_guess": o.device_type_guess,
+                "service_uuids": o.service_uuids, "manufacturer_records": o.manufacturer_records,
+                "service_data": o.service_data, "device_type_guess": o.device_type_guess,
                 "device_name": o.device_name, "is_connectable": o.is_connectable,
                 "primary_phy": o.primary_phy, "observed_at": o.observed_at.isoformat(),
             }
