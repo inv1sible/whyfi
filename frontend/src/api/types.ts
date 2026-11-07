@@ -233,6 +233,10 @@ export interface BLEObservation {
   tx_power: number | null;
   manufacturer_data_raw: string;
   service_uuids: string[];
+  manufacturer_records: string[];
+  service_data: string[];
+  signature_matches: { id: string; rule: string }[];
+  signature_catalog_version: number | null;
   device_type_guess: string;
   device_name: string;
   is_connectable: boolean;
@@ -243,10 +247,30 @@ export interface BLEObservation {
   location_accuracy_meters: number | null;
 }
 
+// A catalog signature a BLE device pattern-matched (backend/scans/ble_signatures.py).
+// `rules` are the rule kinds that hit; ["OUI"] alone means only the address
+// prefix matched, which a random address can do by chance.
+export interface BleSignatureRef {
+  id: string;
+  name: string;
+  kind: string;
+  rules: string[];
+  // Detail view only.
+  notes?: string;
+  attention_note?: string;
+}
+
+export interface BleSignatureCatalog {
+  catalog_version: number;
+  results: { id: string; name: string; kind: string }[];
+}
+
 export interface BLEDevice {
   device_key: string;
   device_name: string;
   device_type_guess: string;
+  signature_ids: string[];
+  signatures: BleSignatureRef[];
   first_seen_at: string;
   last_seen_at: string;
   latest_rssi: number | null;
@@ -413,6 +437,8 @@ export interface RadioCoverage {
   // BLE-only — lets the frontend treat HEADPHONES/WEARABLE as inherently
   // mobile regardless of measured sighting spread (see classifyCoverage).
   device_type_guess?: string;
+  // BLE-only — catalog signature names over these readings, latest first.
+  signature_names?: string[];
   // scan_session_id/accuracy_meters identify the one (almost always
   // exactly one, since buckets are rounded to ~1m) reading behind this
   // point — lets the frontend's "show device location pins" toggle mark

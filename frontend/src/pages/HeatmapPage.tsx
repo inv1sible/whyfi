@@ -34,7 +34,11 @@ const SOURCE_SHORT: Record<HeatmapSource, string> = {
   ble: "BLE",
 };
 
-function describeType(source: HeatmapSource, deviceTypeGuess?: string): string {
+function describeType(source: HeatmapSource, deviceTypeGuess?: string, signatureNames?: string[]): string {
+  // A catalog signature match beats the on-device legacy guess.
+  if (source === "ble" && signatureNames && signatureNames.length > 0) {
+    return `BLE — ${signatureNames[0]}`;
+  }
   if (source === "ble" && deviceTypeGuess) {
     return `BLE — ${BLE_LABELS[deviceTypeGuess] ?? deviceTypeGuess}`;
   }
@@ -208,6 +212,7 @@ export function HeatmapPage() {
         detailPath: device.detail_path,
         source,
         deviceTypeGuess: device.device_type_guess,
+        signatureNames: device.signature_names,
         lat: p.lat,
         lng: p.lng,
         weight: p.weight,
@@ -513,7 +518,7 @@ export function HeatmapPage() {
                 callout: calloutByPath.get(r.detailPath) ?? null,
                 device: r.label,
                 detailPath: r.detailPath,
-                type: describeType(r.source, r.deviceTypeGuess),
+                type: describeType(r.source, r.deviceTypeGuess, r.signatureNames),
                 signal: Math.round(r.weight),
                 latitude: r.lat,
                 longitude: r.lng,

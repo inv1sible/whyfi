@@ -1663,3 +1663,31 @@ button:disabled {
     z-index: 1;
   }
 }
+
+/* BLE signature pattern matches (components/SignatureChips.tsx) */
+.signature-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.badge-signature {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+}
+
+.badge-signature-class {
+  color: var(--text-dim);
+}
+
+.signature-notes {
+  margin: 0.25rem 0 0.75rem;
+}
+
+.signature-notes dt {
+  font-weight: 600;
+}
+
+.signature-notes dd {
+  margin: 0.15rem 0 0.6rem;
+}

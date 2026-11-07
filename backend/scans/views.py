@@ -1493,6 +1493,7 @@ class BLEObservationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
             qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
 
         observations, truncated = capped_take(qs, COVERAGE_OBSERVATION_CAP)
+        catalog = load_catalog()
         by_device = {}
         for obs in observations:
             identifier = obs.ble_mac or obs.stable_identifier
@@ -1507,9 +1508,15 @@ class BLEObservationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
                     # First entry encountered per device is the latest
                     # (queryset is ordered -observed_at).
                     "device_type_guess": obs.device_type_guess,
+                    # Catalog signature names over these readings, latest
+                    # first (an id from an older catalog shows as itself).
+                    "signature_names": {},
                     "points": {},
                 },
             )
+            for match in obs.signature_matches or ():
+                fleet = catalog.get(match["id"])
+                entry["signature_names"].setdefault(fleet.name if fleet else match["id"], None)
             key = (round(obs.scan_session.latitude, 5), round(obs.scan_session.longitude, 5))
             entry["points"].setdefault(key, []).append(
                 {
@@ -1526,6 +1533,7 @@ class BLEObservationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
                 "label": v["label"],
                 "detail_path": v["detail_path"],
                 "device_type_guess": v["device_type_guess"],
+                "signature_names": list(v["signature_names"]),
                 "points": [
                     {
                         "lat": lat,

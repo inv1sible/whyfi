@@ -328,6 +328,17 @@ class IngestSignatureTests(TestCase):
         self.assertEqual(rows[0]["signature_matches"], [{"id": "fleet-flipper", "rule": "NAME_CONTAINS"}])
         self.assertEqual(rows[0]["signature_catalog_version"], 98)
 
+    def test_coverage_reports_signature_names(self):
+        # The heatmap's Type column prefers a signature name over the legacy badge.
+        self._post("sig-cov-1", {"ble_mac": "7A:11:22:33:44:5C", "rssi": -60, "device_name": "Flipper"})
+        self._post("sig-cov-2", {"ble_mac": "7A:11:22:33:44:5C", "rssi": -62, "device_name": ""})
+        self._post("sig-cov-3", {"ble_mac": "7A:11:22:33:44:5D", "rssi": -62, "device_name": "Kitchen scale"})
+        reader = APIClient()
+        reader.force_authenticate(user=get_user_model().objects.create_user(username="op3", password="pw-123456"))
+        rows = {r["key"]: r for r in reader.get("/api/v1/ble-observations/coverage/").json()["results"]}
+        self.assertEqual(rows["7A:11:22:33:44:5C"]["signature_names"], ["Flipper Zero"])
+        self.assertEqual(rows["7A:11:22:33:44:5D"]["signature_names"], [])
+
 
 class RelabelAndApiTests(TestCase):
     def setUp(self):

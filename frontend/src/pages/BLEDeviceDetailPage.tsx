@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { CompassArrow } from "../components/CompassArrow";
-import { DeviceTypeBadge } from "../components/DeviceTypeBadge";
+import { SignatureChips } from "../components/SignatureChips";
 import { MapDisplayModeControls } from "../components/MapDisplayModeControls";
 import { PrintReportButton } from "../components/PrintReportButton";
 import { RadioMap } from "../components/RadioMap";
@@ -221,7 +221,7 @@ export function BLEDeviceDetailPage() {
         <dl className="detail-list">
           <dt>Type</dt>
           <dd>
-            <DeviceTypeBadge deviceType={device.data.device_type_guess} />
+            <SignatureChips signatures={device.data.signatures} deviceType={device.data.device_type_guess} />
           </dd>
           <dt>First seen</dt>
           <dd>{new Date(device.data.first_seen_at).toLocaleString()}</dd>
@@ -243,6 +243,28 @@ export function BLEDeviceDetailPage() {
             </>
           )}
         </dl>
+      )}
+
+      {device.data && device.data.signatures.length > 0 && (
+        <>
+          <h2>Pattern match</h2>
+          {/* Informational only, like the type badge: no alert state or
+              "following you" logic hangs off this (see MEMORY.md). */}
+          <p className="page-hint">A pattern match on the advertisement, not proof of what the device is.</p>
+          <dl className="signature-notes">
+            {device.data.signatures.map((signature) => (
+              <div key={signature.id}>
+                <dt>
+                  <SignatureChips signatures={[signature]} />
+                </dt>
+                <dd>
+                  {signature.notes || "No notes in the signature catalog."}
+                  {signature.attention_note && <p className="warning-text">{signature.attention_note}</p>}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </>
       )}
 
       {/* Print-hidden: this is a live bearing from whoever is *reading* the

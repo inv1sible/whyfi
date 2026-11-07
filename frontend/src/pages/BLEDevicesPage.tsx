@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, areaQuery, searchQueryPart } from "../api/client";
-import { DeviceTypeBadge } from "../components/DeviceTypeBadge";
 import { Pager } from "../components/Pager";
+import { SignatureChips, signatureClassLabel } from "../components/SignatureChips";
 import { SortableTh } from "../components/SortableTh";
 import { TableControls } from "../components/TableControls";
 import { useFilter } from "../context/FilterContext";
@@ -17,9 +17,17 @@ export function BLEDevicesPage() {
   const filter = useFilter();
   const debouncedSearch = useDebouncedValue(filter.searchQuery);
   const [page, setPage] = useState(1);
+  const [signatureClass, setSignatureClass] = useState("");
+
+  // The catalog only changes on deploy, so this barely needs refreshing.
+  const catalog = usePolling(() => api.bleSignatures(), 10 * 60 * 1000, []);
+  const signatureClasses = [...new Set((catalog.data?.results ?? []).map((fleet) => fleet.kind))].sort((a, b) =>
+    signatureClassLabel(a).localeCompare(signatureClassLabel(b)),
+  );
 
   const rangeDeps = [
     debouncedSearch,
+    signatureClass,
     filter.since,
     filter.until,
     filter.sessionLimit,
@@ -39,7 +47,8 @@ export function BLEDevicesPage() {
   const { data, error, loading } = usePolling(
     () =>
       api.bleDevices(
-        `?limit=${PAGE_SIZE}&page=${page}${searchQueryPart(debouncedSearch)}${activeWindowQuery(filter)}${areaQuery(filter.area)}`,
+        `?limit=${PAGE_SIZE}&page=${page}${searchQueryPart(debouncedSearch)}${activeWindowQuery(filter)}${areaQuery(filter.area)}` +
+          (signatureClass ? `&signature_class=${encodeURIComponent(signatureClass)}` : ""),
       ),
     15000,
     [page, ...rangeDeps],
@@ -55,9 +64,10 @@ export function BLEDevicesPage() {
       <h1>BLE devices</h1>
       <p className="page-hint">
         Bluetooth Low Energy devices seen nearby, grouped by MAC address (like WiFi networks are grouped by BSSID) —
-        one row per physical device, not one row per sighting. Device type is a best-effort guess shown for
-        information only — there's no tracking, alerting, or "following you" logic here. Click a device for its
-        sighting history and direction.
+        one row per physical device, not one row per sighting. The type chips are pattern matches against a
+        signature catalog (name, address prefix, service UUIDs, manufacturer data), shown for information only — a
+        match isn't proof of what the device is, and there's no tracking, alerting, or "following you" logic here.
+        Click a device for its sighting history and direction.
       </p>
 
       {loading && !data && <p>Loading…</p>}
@@ -66,11 +76,22 @@ export function BLEDevicesPage() {
       {data && (
         <>
           <TableControls />
+          <label className="print-hide">
+            Signature class{" "}
+            <select value={signatureClass} onChange={(e) => setSignatureClass(e.target.value)}>
+              <option value="">All devices</option>
+              {signatureClasses.map((kind) => (
+                <option key={kind} value={kind}>
+                  {signatureClassLabel(kind)}
+                </option>
+              ))}
+            </select>
+          </label>
 
           {data.count === 0 && (
             <p className="empty-state">
-              {debouncedSearch.trim()
-                ? "No BLE devices match your search."
+              {debouncedSearch.trim() || signatureClass
+                ? "No BLE devices match your search or signature class."
                 : "No BLE devices observed yet. Run a scan from the Android app."}
             </p>
           )}
@@ -96,7 +117,7 @@ export function BLEDevicesPage() {
                         {device.latest_device_name && <div className="identifier-subtext">({device.latest_device_name})</div>}
                       </td>
                       <td className="hide-mobile">
-                        <DeviceTypeBadge deviceType={device.device_type_guess} />
+                        <SignatureChips signatures={device.signatures} deviceType={device.device_type_guess} />
                       </td>
                       <td className="hide-mobile">{device.latest_is_connectable ? "Yes" : "No"}</td>
                       <td className="hide-mobile">{device.latest_primary_phy || "—"}</td>
