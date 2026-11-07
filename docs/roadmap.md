@@ -6,6 +6,11 @@
   history, channel congestion).
 - Cellular serving/neighbor-cell info (TelephonyManager) — phone's own radio
   only, no SDR, no spectrum scanning.
+- Wi-Fi access points labeled against the same catalog (162 Wi-Fi-capable
+  fleets: router/ISP vendors, mesh systems, DJI, Tesla, drone Remote ID
+  beacons, …) from the BSSID prefix (including the vendor behind a virtual
+  BSSID), the SSID and the OUIs of the beacon's vendor elements, which the
+  app sends on Android 11+ (`backend/scans/wifi_signatures.py`).
 - BLE device discovery — passive observation log labeled against Fieldwatch's
   signature catalog (255 fleets, 173 BLE-capable, e.g. "Flipper Zero",
   "DJI", "Axon", "Apple AirTags", grouped into classes such as DRONE,
@@ -189,8 +194,9 @@ implementation.
 - Self-hosted offline map tiles for fully air-gapped deployments.
 - On-device (Android live screen) BLE signature labels, reusing
   `backend/scans/fixtures/ble_signature_cases.json` as the conformance
-  fixture. Wi-Fi signature labeling (OUI / vendor-IE rules from the same
-  catalog), payload `decode` fields and peer-clustered fleets.
+  fixture. Payload `decode` fields (Remote ID / TPMS; Wi-Fi Remote ID would
+  need vendor IE bodies, not just OUIs), labels for monitor-mission PCAPs,
+  and peer-clustered fleets.
 
 ## Explicitly not planned
 

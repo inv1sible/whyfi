@@ -122,6 +122,13 @@ stale, and don't duplicate what's already obvious from code/tests.
   device UUID spelled `0xFEED` gets no 16-bit alias (Fieldwatch's `hexOnly`
   keeps the `x`), and Apple Continuity / Find My filtering keys on the first
   payload byte only.
+  Wi-Fi uses the same catalog (`wifi_signatures.py`). Its observations
+  store no SSID, so both ingest and relabel label from `AccessPoint.ssid`
+  (the AP's latest known name), keeping the two consistent. The app sends
+  only vendor IE *OUIs* (`vendor_ie_ouis`), not IE bodies: a scan carries
+  hundreds of APs. Ingest and relabel lock the device / AP row because the
+  `signature_ids` union is a read-modify-write (a review found relabel
+  could drop a concurrent sighting's ids).
 
 - **UWB precision ranging only works with compatible trackers.** Apple's
   AirTag U1 ranging protocol is proprietary and not accessible to
