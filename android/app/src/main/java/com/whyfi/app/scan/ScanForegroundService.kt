@@ -94,6 +94,8 @@ data class ScanUiState(
     val isScanning: Boolean = false,
     val isContinuous: Boolean = false,
     val currentPhase: ScanPhase? = null,
+    /** Radios still running in the current pass (they run together). */
+    val activeRadios: Set<ScanPhase> = emptySet(),
     val wifiCount: Int? = null,
     val cellularCount: Int? = null,
     val bleCount: Int? = null,
@@ -886,7 +888,7 @@ class ScanForegroundService : Service() {
     private suspend fun runOnePass(options: ScanOptions) {
         _uiState.update {
             it.copy(
-                isScanning = true, currentPhase = null,
+                isScanning = true, currentPhase = null, activeRadios = emptySet(),
                 wifiCount = null, cellularCount = null, bleCount = null, satelliteCount = null,
             )
         }
@@ -924,6 +926,9 @@ class ScanForegroundService : Service() {
                     counts.copy(survey = surveyTally.snapshot())
                 }
             },
+            onRadioActive = { radio, active ->
+                _uiState.update { it.copy(activeRadios = if (active) it.activeRadios + radio else it.activeRadios - radio) }
+            },
         )
         // Speed for the walking/driving split, taken from a position the scan
         // already needed — never by waking the GPS just to ask.
@@ -936,6 +941,7 @@ class ScanForegroundService : Service() {
             it.copy(
                 isScanning = false,
                 currentPhase = null,
+                activeRadios = emptySet(),
                 completedScanCount = it.completedScanCount + 1,
                 latestPass = pass,
                 previousPass = it.latestPass,
@@ -979,6 +985,7 @@ class ScanForegroundService : Service() {
         }
 
     private fun phaseNotificationLabel(phase: ScanPhase): String = when (phase) {
+        ScanPhase.RADIOS -> "Scanning WiFi, cellular, Bluetooth and GNSS…"
         ScanPhase.WIFI -> "Scanning WiFi…"
         ScanPhase.CELLULAR -> "Reading cellular info…"
         ScanPhase.BLE -> "Scanning Bluetooth devices…"

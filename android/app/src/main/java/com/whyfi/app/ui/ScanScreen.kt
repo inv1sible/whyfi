@@ -56,6 +56,7 @@ private fun formatInterval(seconds: Int?): String = when {
 }
 
 private fun phaseLabel(phase: ScanPhase?): String = when (phase) {
+    ScanPhase.RADIOS -> "Scanning all radios at once…"
     ScanPhase.WIFI -> "Scanning WiFi…"
     ScanPhase.CELLULAR -> "Reading cellular info…"
     ScanPhase.BLE -> "Scanning Bluetooth devices…"
@@ -162,22 +163,22 @@ fun ScanScreen(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             RadioStatChip(
-                "📶", "WiFi", uiState.wifiCount, scanning && uiState.currentPhase == ScanPhase.WIFI, Color(0xFF2DD4BF),
+                "📶", "WiFi", uiState.wifiCount, scanning && ScanPhase.WIFI in uiState.activeRadios, Color(0xFF2DD4BF),
                 modifier = Modifier.weight(1f),
                 onClick = if (openable) ({ onOpenDetail(RadioKind.WIFI) }) else null,
             )
             RadioStatChip(
-                "📡", "Cellular", uiState.cellularCount, scanning && uiState.currentPhase == ScanPhase.CELLULAR, Color(0xFF60A5FA),
+                "📡", "Cellular", uiState.cellularCount, scanning && ScanPhase.CELLULAR in uiState.activeRadios, Color(0xFF60A5FA),
                 modifier = Modifier.weight(1f),
                 onClick = if (openable) ({ onOpenDetail(RadioKind.CELLULAR) }) else null,
             )
             RadioStatChip(
-                "🔵", "BLE", uiState.bleCount, scanning && uiState.currentPhase == ScanPhase.BLE, Color(0xFFA78BFA),
+                "🔵", "BLE", uiState.bleCount, scanning && ScanPhase.BLE in uiState.activeRadios, Color(0xFFA78BFA),
                 modifier = Modifier.weight(1f),
                 onClick = if (openable) ({ onOpenDetail(RadioKind.BLE) }) else null,
             )
             RadioStatChip(
-                "🛰️", "GPS", uiState.satelliteCount, scanning && uiState.currentPhase == ScanPhase.GNSS, Color(0xFFFBBF24),
+                "🛰️", "GPS", uiState.satelliteCount, scanning && ScanPhase.GNSS in uiState.activeRadios, Color(0xFFFBBF24),
                 modifier = Modifier.weight(1f),
                 onClick = if (openable) ({ onOpenDetail(RadioKind.SATELLITE) }) else null,
             )

@@ -29,13 +29,23 @@ import com.whyfi.app.gnss.GnssStatusManager
 import com.whyfi.app.lan.LanScanner
 import java.text.SimpleDateFormat
 import kotlin.math.abs
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import java.util.UUID
 
-enum class ScanPhase { WIFI, CELLULAR, BLE, GNSS, UPLOADING, DONE }
+/** RADIOS: the four radios are running together (see RadioRunner); which of
+ * them is still busy is reported per radio through onRadioActive. */
+enum class ScanPhase { RADIOS, WIFI, CELLULAR, BLE, GNSS, UPLOADING, DONE }
+
+private data class PassObservations(
+    val wifi: List<WifiObservationDto>,
+    val cell: List<CellObservationDto>,
+    val ble: List<BleObservationDto>,
+    val satellite: List<SatelliteObservationDto>,
+)
 
 data class ScanOptions(
     val includeWifi: Boolean = true,
@@ -83,12 +93,15 @@ class ScanCoordinator(private val context: Context) {
         // count, so the caller can update per-device survey state (unique
         // counts, strongest signal, etc.), not just a number on screen.
         onPartialResult: (PartialScanResult) -> Unit = {},
+        // A radio started (true) or finished (false). Radios run at the same
+        // time, so the UI tracks a set rather than one current phase.
+        onRadioActive: (ScanPhase, Boolean) -> Unit = { _, _ -> },
     ): ScanSessionUploadRequest {
         val startedAt = isoNow()
         val passStartBootMs = SystemClock.elapsedRealtime()
         liveLocation.acquire()
         try {
-            return runScanPass(options, startedAt, passStartBootMs, onPhaseChange, onPartialResult)
+            return runScanPass(options, startedAt, passStartBootMs, onPhaseChange, onPartialResult, onRadioActive)
         } finally {
             liveLocation.release()
         }
@@ -100,35 +113,32 @@ class ScanCoordinator(private val context: Context) {
         passStartBootMs: Long,
         onPhaseChange: (ScanPhase) -> Unit,
         onPartialResult: (PartialScanResult) -> Unit,
+        onRadioActive: (ScanPhase, Boolean) -> Unit,
     ): ScanSessionUploadRequest {
-        val wifiObservations = if (options.includeWifi) {
-            onPhaseChange(ScanPhase.WIFI)
-            runPhaseCatching("WiFi") { wifiScanManager.scan() }.also { onPartialResult(PartialScanResult.Wifi(it)) }
-        } else {
-            emptyList()
+        // All radios at once (see RadioRunner); the pass lasts as long as the
+        // slowest one instead of the sum of all four.
+        onPhaseChange(ScanPhase.RADIOS)
+        val runner = RadioRunner(onRadioActive, onPartialResult) { radio, error ->
+            Log.e("ScanCoordinator", "$radio phase failed, continuing scan without it", error)
         }
-
-        val cellObservations = if (options.includeCellular) {
-            onPhaseChange(ScanPhase.CELLULAR)
-            runPhaseCatching("Cellular") { cellularManager.readCellObservations() }
-                .also { onPartialResult(PartialScanResult.Cellular(it)) }
-        } else {
-            emptyList()
-        }
-
-        val bleObservations = if (options.includeBle) {
-            onPhaseChange(ScanPhase.BLE)
-            runPhaseCatching("BLE") { bleDeviceScanner.scan() }.also { onPartialResult(PartialScanResult.Ble(it)) }
-        } else {
-            emptyList()
-        }
-
-        val satelliteObservations = if (options.includeGnss) {
-            onPhaseChange(ScanPhase.GNSS)
-            runPhaseCatching("GNSS") { gnssStatusManager.captureSnapshot() }
-                .also { onPartialResult(PartialScanResult.Satellite(it)) }
-        } else {
-            emptyList()
+        val (wifiObservations, cellObservations, bleObservations, satelliteObservations) = coroutineScope {
+            with(runner) {
+                val wifi = radio(options.includeWifi, ScanPhase.WIFI, block = { wifiScanManager.scan() }) {
+                    PartialScanResult.Wifi(it)
+                }
+                val cell = radio(options.includeCellular, ScanPhase.CELLULAR, block = { cellularManager.readCellObservations() }) {
+                    PartialScanResult.Cellular(it)
+                }
+                val ble = radio(
+                    options.includeBle, ScanPhase.BLE,
+                    startDelayMs = if (options.includeWifi) RadioRunner.BLE_STAGGER_MS else 0,
+                    block = { bleDeviceScanner.scan() },
+                ) { PartialScanResult.Ble(it) }
+                val gnss = radio(options.includeGnss, ScanPhase.GNSS, block = { gnssStatusManager.captureSnapshot() }) {
+                    PartialScanResult.Satellite(it)
+                }
+                PassObservations(wifi.await(), cell.await(), ble.await(), gnss.await())
+            }
         }
 
         // Resolved at the end, against the pass midpoint: the radios were
@@ -295,19 +305,6 @@ class ScanCoordinator(private val context: Context) {
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         return runCatching { locationManager.getLastKnownLocation(LocationManager.FUSED_PROVIDER) }.getOrNull()
     }
-
-    /** One radio misbehaving (a permission edge case, hardware the device
-     * doesn't have, an OEM firmware quirk) must not take the other three
-     * down with it — this ran with no isolation at all before, so an
-     * uncaught exception from any single phase crashed the whole scan pass
-     * (and, since nothing installs a CoroutineExceptionHandler either, the
-     * whole app). Degrades to "nothing from this radio this pass" rather
-     * than losing everything already collected. */
-    private suspend fun <T> runPhaseCatching(radioName: String, block: suspend () -> List<T>): List<T> =
-        runCatching { block() }.getOrElse { error ->
-            Log.e("ScanCoordinator", "$radioName phase failed, continuing scan without it", error)
-            emptyList()
-        }
 
     private fun isoNow(): String {
         val format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
