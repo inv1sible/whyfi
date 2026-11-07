@@ -23,6 +23,7 @@ The map and estimator code keeps reading `latitude`/`longitude` unchanged.
 
 from __future__ import annotations
 
+import heapq
 import math
 
 FUSED_DISAGREE_MIN_M = 100.0
@@ -46,6 +47,7 @@ HOP_PENALTY = 200.0
 GPS_WEIGHT = 10.0
 FUSED_PENALTY = 0.01
 LOOKBACK = 200
+FAR_CANDIDATES = 32
 
 CORRECTED_FUSED = "fused"
 CORRECTED_CLEARED = "cleared"
@@ -137,6 +139,10 @@ def ingest_correction(fields: dict, previous) -> dict:
     when there's nothing to judge by: the cleanup can decide later)."""
     lat, lng = fields.get("latitude"), fields.get("longitude")
     fused = (fields.get("fused_latitude"), fields.get("fused_longitude"), fields.get("fused_accuracy_meters"))
+    # A GPS original is a measurement; the previous stored scan may itself be
+    # relocated Wi-Fi. Never swap GPS for fused here (the cleanup weighs it).
+    if fields.get("location_provider") == "gps":
+        return {}
     if previous is None or not disagrees_with_fused(lat, lng, fields.get("location_accuracy_meters"), *fused):
         return {}
     t = _seconds(fields)
@@ -161,6 +167,25 @@ def original_position(session) -> dict:
     }
 
 
+class _RangeMax:
+    """Sparse table: max of values[lo:hi] in O(1) after O(n log n) setup."""
+
+    def __init__(self, values):
+        self.table = [list(values)]
+        k = 1
+        while 2 * k <= len(values):
+            prev = self.table[-1]
+            self.table.append([max(prev[i], prev[i + k]) for i in range(len(values) - 2 * k + 1)])
+            k *= 2
+
+    def query(self, lo: int, hi: int) -> float:
+        if hi <= lo:
+            return 0.0
+        level = (hi - lo).bit_length() - 1
+        row = self.table[level]
+        return max(row[lo], row[hi - (1 << level)])
+
+
 def _choose(sessions) -> dict:
     """session pk -> target fields for one sensor's sessions in time order,
     always computed from the originals, so re-running is stable.
@@ -172,43 +197,44 @@ def _choose(sessions) -> dict:
     Scans left out lose their position.
 
     Hops between kept scans get flight allowance only for the stretches the
-    phone recorded nothing (see hop_plausible), so dropping scans can't
-    manufacture a flight."""
-    nodes = []  # (index into points, option, (lat, lng, t), accuracy)
+    phone recorded no scan at all, with or without a position (see
+    hop_plausible), so dropping scans can't manufacture a flight.
+    Predecessors are the last LOOKBACK scans plus the FAR_CANDIDATES
+    best-scoring earlier ones, so a fake run longer than the window can
+    still be skipped as a whole."""
+    times = [_seconds({"started_at": s.started_at, "completed_at": s.completed_at}) for s in sessions]
+    recording_gaps = _RangeMax([b - a for a, b in zip(times, times[1:])] or [0.0])
+
+    nodes = []  # (point index, option, (lat, lng, t), accuracy, weight, session index)
     points = []
-    for s in sessions:
+    for k, s in enumerate(sessions):
         orig = original_position(s)
         if orig["latitude"] is None or orig["longitude"] is None:
             continue
-        t = _seconds({"started_at": s.started_at, "completed_at": s.completed_at})
         idx = len(points)
         points.append((s, orig))
-        nodes.append((idx, "orig", (orig["latitude"], orig["longitude"], t), orig["location_accuracy_meters"],
-                      GPS_WEIGHT if orig["location_provider"] == "gps" else 1.0))
+        nodes.append((idx, "orig", (orig["latitude"], orig["longitude"], times[k]), orig["location_accuracy_meters"],
+                      GPS_WEIGHT if orig["location_provider"] == "gps" else 1.0, k))
         if disagrees_with_fused(orig["latitude"], orig["longitude"], orig["location_accuracy_meters"],
                                 s.fused_latitude, s.fused_longitude, s.fused_accuracy_meters):
-            nodes.append((idx, "fused", (s.fused_latitude, s.fused_longitude, t), s.fused_accuracy_meters,
-                          1.0 - FUSED_PENALTY))
+            nodes.append((idx, "fused", (s.fused_latitude, s.fused_longitude, times[k]), s.fused_accuracy_meters,
+                          1.0 - FUSED_PENALTY, k))
 
-    # gaps[k]: time between geotagged scans k and k+1 as recorded.
-    times = [_seconds({"started_at": s.started_at, "completed_at": s.completed_at}) for s, _ in points]
-    gaps = [b - a for a, b in zip(times, times[1:])]
     score = [0.0] * len(nodes)
     back = [-1] * len(nodes)
-    first_node_of = {}
-    for n, node in enumerate(nodes):
-        first_node_of.setdefault(node[0], n)
-    for n, (idx, option, point, _, gain) in enumerate(nodes):
+    far: list = []  # (score, -node) of the best nodes that left the window
+    released = 0
+    for n, (idx, option, point, _, gain, k) in enumerate(nodes):
+        while released < n and nodes[released][0] < idx - LOOKBACK:
+            heapq.heappush(far, (score[released], -released))
+            if len(far) > FAR_CANDIDATES:
+                heapq.heappop(far)
+            released += 1
+        candidates = [-m for _, m in far] + [m for m in range(released, n) if nodes[m][0] < idx]
         best, best_from = gain, -1
-        start = first_node_of.get(max(0, idx - LOOKBACK), 0)
-        low, longest_gap = idx, 0.0
-        for m in range(n - 1, start - 1, -1):
-            if nodes[m][0] >= idx:
-                continue
-            while low > nodes[m][0]:
-                low -= 1
-                longest_gap = max(longest_gap, gaps[low])
-            plausible = hop_plausible(nodes[m][2], point, flight_s=longest_gap)
+        for m in candidates:
+            flight = recording_gaps.query(nodes[m][5], k)
+            plausible = hop_plausible(nodes[m][2], point, flight_s=flight)
             candidate = score[m] + gain - (0.0 if plausible else HOP_PENALTY)
             if candidate > best or (candidate == best and best_from != -1 and m < best_from):
                 best, best_from = candidate, m
@@ -216,7 +242,7 @@ def _choose(sessions) -> dict:
 
     chosen = {}
     if nodes:
-        n = max(range(len(nodes)), key=lambda k: (score[k], -k))
+        n = max(range(len(nodes)), key=lambda q: (score[q], -q))
         while n != -1:
             chosen[nodes[n][0]] = nodes[n]
             n = back[n]
@@ -252,7 +278,9 @@ def clean_session_locations(dry_run: bool = False, revert: bool = False, session
     changed = []
     counts = {CORRECTED_FUSED: 0, CORRECTED_CLEARED: 0}
     for sessions in by_sensor.values():
-        if revert:
+        # Sessions whose sensor was deleted (sensor=None, data kept) come from
+        # different phones and aren't one track: left as the phones sent them.
+        if revert or sessions[0].sensor_id is None:
             targets = {s.pk: {**original_position(s), **_UNCORRECTED} for s in sessions}
         else:
             targets = _choose(sessions)

@@ -18,7 +18,7 @@ from sensors.models import Sensor
 from .ble_signatures import is_ble_capable, load_catalog
 from .wifi_signatures import is_wifi_capable
 from .calibration import fit_path_loss
-from .location_quality import original_position
+from .location_quality import clean_session_locations, original_position
 from .floorplan import (
     derive_scale_and_bearing,
     image_to_world,
@@ -1243,6 +1243,13 @@ class ScanSessionViewSet(
             return Response({"detail": "Expected a JSON object with a 'sessions' array."}, status=400)
 
         created, skipped, failed = 0, 0, []
+        # Oldest first: ingest judges a position against the sensor's
+        # previous scan (scans/location_quality.py), and export is newest
+        # first. Malformed timestamps sort last and fail validation below.
+        def started(entry):
+            return str(entry.get("started_at") or "~") if isinstance(entry, dict) else "~"
+
+        sessions = sorted(sessions, key=started)
         for entry in sessions:
             client_scan_id = entry.get("client_scan_id")
             if client_scan_id and ScanSession.objects.filter(client_scan_id=client_scan_id).exists():
@@ -1256,6 +1263,11 @@ class ScanSessionViewSet(
                 continue
             serializer.save()
             created += 1
+
+        # Re-run the position cleanup so imported history reaches the same
+        # corrected state it had when exported (idempotent, originals kept).
+        if created:
+            clean_session_locations()
 
         return Response({
             "created": created,

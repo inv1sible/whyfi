@@ -81,6 +81,19 @@ class IngestLocationTests(TestCase):
         self.assertEqual(session.location_correction, "")
         self.assertAlmostEqual(session.latitude, LAT + 50 * M, places=6)
 
+    def test_gps_original_is_never_swapped_at_ingest(self):
+        # Reviewer scenario: the previous stored scan is a fake (relocated
+        # Wi-Fi) and the new GPS fix's fused fix agrees with the fake.
+        self._post(_payload("fake-prev", north_m=2_000_000))
+        session = self._post(_payload("gps-now", north_m=0, fused_north_m=2_000_000, at=T0 + timedelta(minutes=1),
+                                      location_provider="gps", location_accuracy_meters=4.0))
+        self.assertEqual(session.location_correction, "")
+        self.assertEqual(session.location_provider, "gps")
+
+    def test_fractional_fix_age_does_not_reject_the_session(self):
+        session = self._post(_payload("frac", location_fix_age_ms=12.5))
+        self.assertEqual(session.location_fix_age_ms, 12)
+
     def test_disagreement_without_a_previous_scan_is_left_for_the_cleanup(self):
         session = self._post(_payload("first", north_m=5000, fused_north_m=0))
         self.assertEqual(session.location_correction, "")
@@ -106,6 +119,20 @@ class IngestLocationTests(TestCase):
         self.assertIn("fused fix", row["location_correction_reason"])
         self.assertAlmostEqual(row["raw_latitude"], LAT + 9000 * M, places=6)
         self.assertEqual(row["location_fix_age_ms"], 300)
+
+    def test_import_replays_oldest_first_and_reaches_the_same_state(self):
+        # Export is newest-first; replaying that order left the ingest check
+        # with no previous scan, so corrections didn't survive a round trip.
+        for i in range(6):
+            self._post(_payload(f"rt{i}", north_m=2_000_000 if i == 3 else i * 30, at=T0 + timedelta(minutes=i)))
+        clean_session_locations()
+        before = sorted(ScanSession.objects.values_list("client_scan_id", "latitude", "location_correction"))
+        reader = APIClient()
+        reader.force_authenticate(user=get_user_model().objects.create_user(username="op-rt", password="pw-123456"))
+        exported = reader.get("/api/v1/scan-sessions/export/").json()
+        ScanSession.objects.all().delete()
+        reader.post("/api/v1/scan-sessions/import_sessions/", exported, format="json")
+        self.assertEqual(sorted(ScanSession.objects.values_list("client_scan_id", "latitude", "location_correction")), before)
 
     def test_export_writes_original_coordinates(self):
         self._post(_payload("exp-prev", north_m=0))
@@ -231,6 +258,44 @@ class CleanupTests(TestCase):
         report = clean_session_locations()
         self.assertEqual(report["cleared"], 80)
         self.assertFalse(ScanSession.objects.filter(client_scan_id__startswith="iowa").exclude(latitude=None).exists())
+
+    def test_fake_run_longer_than_the_lookback_window(self):
+        # Reviewer scenario: 20 GPS, 250 fake network scans, 20 GPS.
+        def scan(name, minute, north_m, provider):
+            self._session(name, minute, north_m)
+            ScanSession.objects.filter(client_scan_id=name).update(location_provider=provider)
+        for i in range(20):
+            scan(f"g_before{i}", i, i * 5, "gps")
+        for i in range(250):
+            scan(f"fake{i}", 20 + i, 2_000_000, "network")
+        for i in range(20):
+            scan(f"g_after{i}", 270 + i, i * 5, "gps")
+        report = clean_session_locations()
+        self.assertEqual(report["cleared"], 250)
+        self.assertFalse(ScanSession.objects.filter(location_provider="gps", latitude=None).exists())
+
+    def test_sessions_without_a_sensor_are_left_alone(self):
+        # Sensor deleted with its data kept: sessions from different phones
+        # end up with sensor=None and must not be judged as one track.
+        for i, north in enumerate([0, 52_000, 10, 52_010]):
+            self._session(f"orphan{i}", 0 if i < 2 else 1, north)
+        ScanSession.objects.filter(client_scan_id__startswith="orphan").update(sensor=None)
+        self.assertEqual(clean_session_locations()["changed"], 0)
+
+    def test_scans_without_a_position_are_not_flight_time(self):
+        # Reviewer scenario: GPS in Vegas, 3 h of scans without a position,
+        # then network scans in Iowa. The phone was scanning, not flying.
+        def scan(name, minute, north_m, provider="network"):
+            self._session(name, minute, north_m)
+            ScanSession.objects.filter(client_scan_id=name).update(location_provider=provider)
+        for i in range(5):
+            scan(f"gps{i}", i, i * 5, "gps")
+        for i in range(36):
+            scan(f"nopos{i}", 5 + i * 5, 0)
+            ScanSession.objects.filter(client_scan_id=f"nopos{i}").update(latitude=None, longitude=None)
+        for i in range(3):
+            scan(f"iowa{i}", 185 + i, 2_000_000)
+        self.assertEqual(clean_session_locations()["cleared"], 3)
 
     def test_end_points_and_other_sensors_are_judged_separately(self):
         for i in range(5):

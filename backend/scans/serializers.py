@@ -618,11 +618,12 @@ class ScanSessionIngestSerializer(serializers.Serializer):
     fused_accuracy_meters = serializers.FloatField(required=False, allow_null=True)
     # Optional (APKs from 2026-11 on). Clamped rather than validated: a bad
     # value must not reject the whole scan session.
-    location_fix_age_ms = serializers.IntegerField(required=False, allow_null=True,
-                                                   min_value=-(2**63), max_value=2**63 - 1)
+    location_fix_age_ms = serializers.FloatField(required=False, allow_null=True)
 
     def validate_location_fix_age_ms(self, value):
-        return None if value is None else max(0, min(value, 2**31 - 1))
+        if value is None or value != value:  # None or NaN
+            return None
+        return int(max(0.0, min(value, 2**31 - 1)))
     wifi_observations = WiFiObservationInputSerializer(many=True, required=False, default=list)
     ftm_observations = FTMRangingObservationInputSerializer(many=True, required=False, default=list)
     cell_observations = CellObservationInputSerializer(many=True, required=False, default=list)
