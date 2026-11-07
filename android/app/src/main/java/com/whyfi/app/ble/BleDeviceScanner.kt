@@ -72,21 +72,27 @@ class BleDeviceScanner(private val context: Context) {
     @SuppressLint("MissingPermission")
     private fun toDto(result: ScanResult): BleObservationDto {
         val record = result.scanRecord
-        val manufacturerHex = record?.manufacturerSpecificData?.let { sparse ->
-            if (sparse.size() == 0) "" else {
-                val companyId = sparse.keyAt(0)
-                val bytes = sparse.valueAt(0)
-                "%04x:%s".format(companyId, bytes.joinToString("") { byte -> "%02x".format(byte) })
-            }
-        } ?: ""
+        // Every manufacturer record and every service data entry, not just the
+        // first record: the backend's signature catalog matches on all of them.
+        val manufacturerRecords = BleAdvertFormat.manufacturerRecords(
+            record?.manufacturerSpecificData?.let { sparse ->
+                (0 until sparse.size()).map { i -> sparse.keyAt(i) to (sparse.valueAt(i) ?: ByteArray(0)) }
+            } ?: emptyList(),
+        )
+        val serviceData = BleAdvertFormat.serviceData(
+            record?.serviceData?.map { (uuid, bytes) -> uuid.uuid.toString() to (bytes ?: ByteArray(0)) }
+                ?: emptyList(),
+        )
 
         return BleObservationDto(
             bleMac = result.device.address ?: "",
             stableIdentifier = result.device.address ?: "",
             rssi = result.rssi,
             txPower = result.txPower.takeIf { it != ScanResult.TX_POWER_NOT_PRESENT },
-            manufacturerData = manufacturerHex,
+            manufacturerData = BleAdvertFormat.legacyManufacturerData(manufacturerRecords),
             serviceUuids = record?.serviceUuids?.map { it.uuid.toString() } ?: emptyList(),
+            manufacturerRecords = manufacturerRecords,
+            serviceData = serviceData,
             deviceTypeGuess = BleSignatureMatcher.guessDeviceType(result),
             // deviceName comes from the advertisement payload itself, not a
             // GATT read — no BLUETOOTH_CONNECT needed for this one.

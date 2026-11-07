@@ -204,6 +204,8 @@ object LatestScanFetcher {
             txPower = txPower,
             manufacturerData = manufacturerDataRaw,
             serviceUuids = serviceUuids,
+            manufacturerRecords = manufacturerRecords,
+            serviceData = serviceData,
             deviceTypeGuess = deviceTypeGuess,
             deviceName = deviceName,
             isConnectable = isConnectable,

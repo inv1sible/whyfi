@@ -80,12 +80,16 @@ data class BleObservationDto(
     @SerializedName("stable_identifier") val stableIdentifier: String,
     @SerializedName("rssi") val rssi: Int,
     @SerializedName("tx_power") val txPower: Int?,
+    // Legacy: first manufacturer record only, blank if over 255 chars.
     @SerializedName("manufacturer_data") val manufacturerData: String,
     @SerializedName("service_uuids") val serviceUuids: List<String> = emptyList(),
     @SerializedName("device_type_guess") val deviceTypeGuess: String,
     @SerializedName("device_name") val deviceName: String = "",
     @SerializedName("is_connectable") val isConnectable: Boolean = false,
     @SerializedName("primary_phy") val primaryPhy: String = "",
+    // The complete advert, in BleAdvertFormat's wire format.
+    @SerializedName("manufacturer_records") val manufacturerRecords: List<String> = emptyList(),
+    @SerializedName("service_data") val serviceData: List<String> = emptyList(),
 )
 
 data class SatelliteObservationDto(
@@ -377,6 +381,8 @@ data class BleObservationResponseDto(
     @SerializedName("tx_power") val txPower: Int? = null,
     @SerializedName("manufacturer_data_raw") val manufacturerDataRaw: String = "",
     @SerializedName("service_uuids") val serviceUuids: List<String> = emptyList(),
+    @SerializedName("manufacturer_records") val manufacturerRecords: List<String> = emptyList(),
+    @SerializedName("service_data") val serviceData: List<String> = emptyList(),
     @SerializedName("device_type_guess") val deviceTypeGuess: String = "UNKNOWN",
     @SerializedName("device_name") val deviceName: String = "",
     @SerializedName("is_connectable") val isConnectable: Boolean = false,
