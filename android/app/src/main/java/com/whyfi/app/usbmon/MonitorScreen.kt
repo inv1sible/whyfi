@@ -45,28 +45,54 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Local receive session; completed missions can be uploaded explicitly. */
+/** Local receive session; completed missions can be uploaded explicitly.
+ * [setup] is the adapter workspace's settings (USB test, noise filter),
+ * shown in the Setup tab and, while Monitor is locked, on its own. */
 @Composable
-fun MonitorScreen(service: ScanForegroundService?, settingsRepository: SettingsRepository, unlocked: Boolean) {
+fun MonitorScreen(
+    service: ScanForegroundService?,
+    settingsRepository: SettingsRepository,
+    unlocked: Boolean,
+    setup: @Composable () -> Unit,
+) {
     if (!unlocked) {
-        Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Monitor", style = MaterialTheme.typography.headlineSmall)
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Monitor is locked until this phone has received frames during the USB monitor test.")
-            Text("Connect the supported adapter through OTG, then run USB monitor test in Settings. A successful test enables this tab.",
+            Text("Connect the supported adapter through OTG and run the USB monitor test below. A successful test unlocks capture.",
                 style = MaterialTheme.typography.bodySmall)
+            setup()
         }
-    } else MonitorWorkspace(service, settingsRepository)
+    } else MonitorWorkspace(service, settingsRepository, setup)
 }
 
+/** What a capture is filtered to. The six device categories are grouped
+ * under one Devices section (chips) rather than six top-level tabs. */
 private enum class MonitorTab(val label: String) {
-    MISSIONS("Missions"), NEARBY("Nearby"), MAPPING("Location"), ACCESS_POINTS("APs"), UNASSOCIATED("Unassociated"),
-    IOT("IoT"), CAMERAS("Cameras"), PHONES_LAPTOPS("Phones / laptops"), CLIENTS("Other clients"),
+    MISSIONS("Missions"), NEARBY("Live"), MAPPING("Map"), ACCESS_POINTS("APs"), UNASSOCIATED("Unassociated"),
+    IOT("IoT"), CAMERAS("Cameras"), PHONES_LAPTOPS("Phones / laptops"), CLIENTS("Other clients"), SETUP("Setup"),
+}
+
+private val DEVICE_CATEGORIES = listOf(
+    MonitorTab.ACCESS_POINTS, MonitorTab.UNASSOCIATED, MonitorTab.IOT,
+    MonitorTab.CAMERAS, MonitorTab.PHONES_LAPTOPS, MonitorTab.CLIENTS,
+)
+
+/** The adapter workspace's top-level tabs. */
+private enum class MonitorSection(val label: String) { LIVE("Live"), MAP("Map"), DEVICES("Devices"), MISSIONS("Missions"), SETUP("Setup") }
+
+private fun sectionOf(tab: MonitorTab): MonitorSection = when (tab) {
+    MonitorTab.NEARBY -> MonitorSection.LIVE
+    MonitorTab.MAPPING -> MonitorSection.MAP
+    MonitorTab.MISSIONS -> MonitorSection.MISSIONS
+    MonitorTab.SETUP -> MonitorSection.SETUP
+    else -> MonitorSection.DEVICES
 }
 
 private enum class NearbySort { RSSI, LAST_SEEN }
 
 @Composable
-private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository: SettingsRepository) {
+private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository: SettingsRepository, setup: @Composable () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // Warm up location independently of capture and of which Monitor tab is visible.
@@ -124,6 +150,8 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     var recordPcap by remember { mutableStateOf(settingsRepository.monitorRecordPcap) }
     var error by remember { mutableStateOf<String?>(null) }
     var selectedName by rememberSaveable { mutableStateOf(MonitorTab.NEARBY.name) }
+    // Devices reopens on the category last looked at.
+    var lastCategoryName by rememberSaveable { mutableStateOf(MonitorTab.ACCESS_POINTS.name) }
     var selectedMissionLogPath by remember { mutableStateOf<String?>(null) }
     var replayMission by remember { mutableStateOf<MonitorReplayMission?>(null) }
     var replayFraction by remember { mutableFloatStateOf(1f) }
@@ -233,7 +261,6 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     }
     val replaying = selectedMissionLogPath != null
     val selected = MonitorTab.entries.firstOrNull { it.name == selectedName } ?: MonitorTab.NEARBY
-    val tabs = MonitorTab.entries.toList()
     val nearbyDevices = displayDevices.filter {
         (focusedKind == null || it.second.kind == focusedKind) || (showHiddenAps && MonitorApVisibility.isHidden(it.first, resolvedHiddenAps))
     }
@@ -370,19 +397,36 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
     }
 
     Column(Modifier.fillMaxSize()) {
-        ScrollableTabRow(tabs.indexOf(selected).coerceAtLeast(0), edgePadding = 0.dp) {
-            tabs.forEach { tab ->
-                val count = when (tab) {
-                    MonitorTab.NEARBY, MonitorTab.MAPPING -> 0
-                    MonitorTab.MISSIONS -> missions.size
-                    else -> monitorRows(tab, categoryDevices).size
+        val section = sectionOf(selected)
+        val selectTab: (MonitorTab) -> Unit = { tab ->
+            if (tab != MonitorTab.MAPPING) showLocationDetails = false
+            if (tab == MonitorTab.MISSIONS || tab == MonitorTab.NEARBY || tab == MonitorTab.SETUP) replayPlaying = false
+            if (tab in DEVICE_CATEGORIES) lastCategoryName = tab.name
+            selectedName = tab.name
+        }
+        TabRow(section.ordinal) {
+            MonitorSection.entries.forEach { entry ->
+                Tab(entry == section, {
+                    selectTab(when (entry) {
+                        MonitorSection.LIVE -> MonitorTab.NEARBY
+                        MonitorSection.MAP -> MonitorTab.MAPPING
+                        MonitorSection.MISSIONS -> MonitorTab.MISSIONS
+                        MonitorSection.SETUP -> MonitorTab.SETUP
+                        MonitorSection.DEVICES -> MonitorTab.entries.firstOrNull { it.name == lastCategoryName } ?: MonitorTab.ACCESS_POINTS
+                    })
+                }, text = {
+                    Text(if (entry == MonitorSection.MISSIONS) "${entry.label} (${missions.size})" else entry.label,
+                        maxLines = 1, style = MaterialTheme.typography.labelMedium)
+                })
+            }
+        }
+        if (section == MonitorSection.DEVICES) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                DEVICE_CATEGORIES.forEach { tab ->
+                    FilterChip(tab == selected, { selectTab(tab) },
+                        label = { Text("${tab.label} (${monitorRows(tab, categoryDevices).size})") })
                 }
-                Tab(tab == selected, {
-                    if (tab != MonitorTab.MAPPING) showLocationDetails = false
-                    if (tab == MonitorTab.MISSIONS || tab == MonitorTab.NEARBY) replayPlaying = false
-                    selectedName = tab.name
-                },
-                    text = { Text(if (tab == MonitorTab.MAPPING || tab == MonitorTab.NEARBY) tab.label else "${tab.label} ($count)") })
             }
         }
         if (selected == MonitorTab.NEARBY) {
@@ -411,7 +455,10 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 }) { Text(if (nearbySort == NearbySort.RSSI) "RSSI ↓" else "Latest ↓") }
             }
         }
-        if (selected == MonitorTab.NEARBY) {
+        if (selected == MonitorTab.SETUP) {
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) { setup() }
+        } else if (selected == MonitorTab.NEARBY) {
             // Lazy: a long mission holds thousands of devices, and drawing a
             // card for each at once ran the app out of memory (crash report
             // 2026-10-27, OOM while accessibility walked the whole tree).
@@ -510,7 +557,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                     locationRecenter++
                 })
         }
-        if (selected != MonitorTab.MISSIONS) {
+        if (selected != MonitorTab.MISSIONS && selected != MonitorTab.SETUP) {
             if (replaying && selected != MonitorTab.NEARBY && timeline.second > timeline.first) {
                 Slider(replayFraction, onValueChange = { replayPlaying = false; replayFraction = it },
                     onValueChangeFinished = { settledFraction = replayFraction },
@@ -602,7 +649,7 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                         label = { Text("${target.label} (${target.readings})") })
                 }
             }
-        } else if (selected != MonitorTab.MISSIONS && selected != MonitorTab.MAPPING) {
+        } else if (selected != MonitorTab.MISSIONS && selected != MonitorTab.MAPPING && selected != MonitorTab.SETUP) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 FilterChip(matchesFirst, { focusedKind = null; matchesFirst = !matchesFirst; recordAction("matches_first", matchesFirst.toString()) },
@@ -715,7 +762,7 @@ private fun monitorRows(
         MonitorTab.CAMERAS -> guess.kind == SniffedDevices.Kind.CAMERA
         MonitorTab.PHONES_LAPTOPS -> guess.kind == SniffedDevices.Kind.PHONE_LAPTOP
         MonitorTab.CLIENTS -> device.isClient && guess.kind == SniffedDevices.Kind.CLIENT
-        MonitorTab.NEARBY, MonitorTab.MAPPING, MonitorTab.MISSIONS -> false
+        MonitorTab.NEARBY, MonitorTab.MAPPING, MonitorTab.MISSIONS, MonitorTab.SETUP -> false
     } }.sortedWith(
         compareByDescending<Pair<SniffedDevices.Device, SniffedDevices.Guess>> { it.first.lastMs }
             .thenByDescending { it.first.bestRssi ?: -1000 },

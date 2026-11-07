@@ -89,6 +89,12 @@ class SettingsRepository(context: Context) {
         get() = prefs.getBoolean(KEY_MONITOR_TEST_PASSED, false)
         set(value) = prefs.edit { putBoolean(KEY_MONITOR_TEST_PASSED, value) }
 
+    /** Which workspace the app opens in: "phone" (the phone's own radios)
+     * or "adapter" (the external USB monitor adapter). See ui/Workspace.kt. */
+    var workspace: String
+        get() = prefs.getString(KEY_WORKSPACE, "phone") ?: "phone"
+        set(value) = prefs.edit { putString(KEY_WORKSPACE, value) }
+
     var advancedModeEnabled: Boolean
         get() = monitorTestPassed
         set(value) {
@@ -191,6 +197,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_POSITION_ESTIMATOR = "position_estimator"
         private const val KEY_REMOTE_CONTROL = "remote_control_enabled"
         private const val KEY_MONITOR_TEST_PASSED = "monitor_test_passed"
+        private const val KEY_WORKSPACE = "workspace"
         private const val KEY_MONITOR_CHANNELS = "monitor_channels"
         private const val KEY_MONITOR_FAVORITES = "monitor_favorite_macs"
         private const val KEY_OUTBOX_QUOTA_MB = "outbox_quota_mb"

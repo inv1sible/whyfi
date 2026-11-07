@@ -892,3 +892,22 @@ authenticator for the scan-session list/retrieve/detail actions in
 the PWA; both are tried in order). The queryset is scoped to the
 sensor's own sessions when a sensor token is used, so a device only sees
 its own scans.
+
+## Two workspaces: phone radios vs USB adapter (2026-11-07)
+
+The app has a workspace switch at the top (`ui/Workspace.kt`): **Phone
+radios** (Dashboard, Scan, LAN, Settings; teal) and **USB adapter**
+(Live, Map, Devices, Missions, Setup; amber, with a status strip: REC time,
+channels, devices, PCAP size). They are different jobs (periodic passes
+uploaded as sessions vs a live channel-tuned capture saved as missions), so
+they don't share a tab bar. The six device categories are chips under
+Devices instead of six tabs. Adapter-only settings (USB monitor test, noise
+filter) moved from Settings to Setup (`usbmon/AdapterSettings.kt`).
+
+The switch is deliberately available **without an adapter plugged in**
+(maintainer request: develop, test and demo the adapter UI without
+hardware). Monitor still locks capture until the USB test passed; the
+locked screen shows Setup so the test is reachable there. The choice is
+saved (`SettingsRepository.workspace`). A plugged-in USB device shows a
+banner in the phone workspace offering to switch (deviceList is polled
+every 2 s; attach broadcasts aren't reliable for runtime receivers).

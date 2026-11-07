@@ -37,8 +37,6 @@ import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.ThemePreference
 import com.whyfi.app.diagnostics.CrashLogReader
 import com.whyfi.app.diagnostics.CrashReportSender
-import com.whyfi.app.usbmon.UsbMonitorTestDialog
-import com.whyfi.app.usbmon.MonitorNoiseFilter
 import com.whyfi.app.permissions.PermissionHelper
 import com.whyfi.app.scan.ScanForegroundService
 import com.journeyapps.barcodescanner.ScanContract
@@ -57,7 +55,6 @@ fun SettingsScreen(
     themePreference: ThemePreference,
     onThemePreferenceChange: (ThemePreference) -> Unit,
     service: ScanForegroundService?,
-    onAdvancedModeChange: (Boolean) -> Unit,
 ) {
     // Pre-filled from the build (WHYFI_PUBLIC_URL, set when this APK was
     // built) if nothing's been saved yet — still just a starting point,
@@ -72,15 +69,12 @@ fun SettingsScreen(
     var stationaryInterval by remember { mutableStateOf(settingsRepository.stationaryIntervalSeconds.toString()) }
     var walkingInterval by remember { mutableStateOf(settingsRepository.walkingIntervalSeconds.toString()) }
     var drivingInterval by remember { mutableStateOf(settingsRepository.drivingIntervalSeconds.toString()) }
-    var noisePatterns by remember { mutableStateOf(settingsRepository.monitorNoisePatterns) }
-    var noiseMessage by remember { mutableStateOf<String?>(null) }
     val outboxUsage = rememberOutboxUsage(quotaMb.toIntOrNull() ?: settingsRepository.outboxQuotaMb)
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var remoteControlOn by remember { mutableStateOf(settingsRepository.remoteControlEnabled) }
-    var monitorTestPassed by remember { mutableStateOf(settingsRepository.monitorTestPassed) }
     val permissionsGranted = PermissionHelper.hasAllRequiredPermissions(context)
 
     Column(
@@ -93,6 +87,8 @@ fun SettingsScreen(
             Text("Installed app: ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
                 style = MaterialTheme.typography.bodyMedium)
         }
+        Text("USB adapter settings (monitor test, noise filter) are under Setup in the USB adapter workspace.",
+            style = MaterialTheme.typography.bodySmall)
 
         // -- Appearance --
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -103,28 +99,6 @@ fun SettingsScreen(
                     ThemeOption("Light", ThemePreference.LIGHT, themePreference, onThemePreferenceChange)
                     ThemeOption("Dark", ThemePreference.DARK, themePreference, onThemePreferenceChange)
                 }
-            }
-        }
-
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Monitor noise filter", style = MaterialTheme.typography.titleLarge)
-                Text("Nearby's Hide noise button matches these case-insensitive patterns against device names, SSIDs, vendors, MACs and activity. One pattern per line. Favorites always remain visible. Raw captures and reports are unchanged.",
-                    style = MaterialTheme.typography.bodySmall)
-                val validation = MonitorNoiseFilter.compile(noisePatterns)
-                OutlinedTextField(value = noisePatterns, onValueChange = {
-                    noisePatterns = it
-                    noiseMessage = null
-                }, label = { Text("Noise patterns (e.g. unknown device)") },
-                    minLines = 2, maxLines = 6, isError = validation.error != null,
-                    modifier = Modifier.fillMaxWidth())
-                validation.error?.let { Text(it, color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall) }
-                Button(onClick = {
-                    settingsRepository.monitorNoisePatterns = noisePatterns
-                    noiseMessage = "Noise patterns saved."
-                }, enabled = validation.error == null) { Text("Save noise patterns") }
-                noiseMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
         }
 
@@ -444,28 +418,6 @@ fun SettingsScreen(
                     crashLogMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 }
 
-                // SPIKE: USB monitor-mode feasibility test (usbmon/).
-                Text("Monitor unlock", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    if (monitorTestPassed) "USB monitor test passed. The Monitor tab is enabled."
-                    else "The Monitor tab is visible but locked. Run a USB monitor test that receives frames to enable it.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                var showUsbMonitorTest by remember { mutableStateOf(false) }
-                OutlinedButton(onClick = { showUsbMonitorTest = true }) {
-                    Text("USB monitor test (experimental)")
-                }
-                if (showUsbMonitorTest) {
-                    UsbMonitorTestDialog(
-                        backendUrl, token, onDismiss = { showUsbMonitorTest = false },
-                        onSuccessfulTest = {
-                            settingsRepository.monitorTestPassed = true
-                            settingsRepository.advancedModeEnabled = true
-                            monitorTestPassed = true
-                            onAdvancedModeChange(true)
-                        },
-                    )
-                }
             }
         }
     }

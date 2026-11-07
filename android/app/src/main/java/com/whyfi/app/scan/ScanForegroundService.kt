@@ -29,6 +29,7 @@ import com.whyfi.app.motion.MotionState
 import com.whyfi.app.permissions.PermissionHelper
 import com.whyfi.app.ui.MainActivity
 import com.whyfi.app.usbmon.OuiTable
+import com.whyfi.app.usbmon.AdapterStatus
 import com.whyfi.app.usbmon.MonitorMission
 import com.whyfi.app.usbmon.MonitorGeoSample
 import com.whyfi.app.usbmon.MonitorReceiverFix
@@ -77,6 +78,10 @@ data class MonitorUiState(
     /** Frame totals reported by the adapter for each channel heard so far. */
     val channelFrames: Map<Int, Long> = emptyMap(),
     val devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>> = emptyList(),
+    /** Channels this capture listens on, and when it started
+     * (`elapsedRealtime`), for the adapter workspace's status strip. */
+    val channels: List<Int> = emptyList(),
+    val startedAtElapsedMs: Long = 0,
 )
 
 /** Counts each new radio reading from a pinned transmitter exactly once. */
@@ -637,8 +642,10 @@ class ScanForegroundService : Service() {
             MonitorMission.append(mission, "ap_hidden", "$it:true")
         }
         _monitorState.value = MonitorUiState(running = true, status = "Starting…", device = device,
-            pcapPath = mission.pcap?.absolutePath.takeIf { recordPcap }, missionLogPath = mission.log.absolutePath)
-        updateNotification("Monitoring WiFi on ${channels.size} channels…")
+            pcapPath = mission.pcap?.absolutePath.takeIf { recordPcap }, missionLogPath = mission.log.absolutePath,
+            channels = channels.toList(), startedAtElapsedMs = SystemClock.elapsedRealtime())
+        updateNotification(AdapterStatus.notification(channels.toList(), 0))
+        var lastNotificationMs = SystemClock.elapsedRealtime()
         serviceScope.launch {
             val initialFixes = LocationSnapshot.lastKnownCandidates(applicationContext).filter { fix ->
                 SystemClock.elapsedRealtime() - fix.elapsedRealtimeNanos / 1_000_000 <= MonitorLocationPolicy.MAX_FIX_AGE_MS
@@ -825,6 +832,13 @@ class ScanForegroundService : Service() {
                             else -> "${currentFix.fix.provider} location · ±${currentFix.effectiveAccuracyM.toInt()} m"
                         },
                         status = if (it.status == "Stopping…") it.status else "Receiving…")
+                }
+                // Says "capture", not "scan": this is the adapter, not a pass
+                // of the phone's own radios. Throttled; Android rate-limits
+                // notification updates anyway.
+                if (SystemClock.elapsedRealtime() - lastNotificationMs >= MONITOR_NOTIFICATION_INTERVAL_MS) {
+                    lastNotificationMs = SystemClock.elapsedRealtime()
+                    updateNotification(AdapterStatus.notification(channels.toList(), raw.size))
                 }
             }
             val poller = launch {
@@ -1050,6 +1064,7 @@ class ScanForegroundService : Service() {
         /** Slice length for [interruptibleDelay] — the worst-case latency
          * between a remote stop arriving and the loop noticing. */
         private const val GRACEFUL_STOP_CHECK_MS = 500L
+        private const val MONITOR_NOTIFICATION_INTERVAL_MS = 10_000L
 
         /** Ensures the service is independently started (not just bound) so
          * it survives its UI client unbinding — call before/alongside

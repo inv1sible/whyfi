@@ -35,6 +35,10 @@ import com.whyfi.app.mission.MissionController
 import com.whyfi.app.mission.MissionScreen
 import com.whyfi.app.scan.RadioKind
 import com.whyfi.app.usbmon.MonitorScreen
+import com.whyfi.app.usbmon.AdapterSettings
+import com.whyfi.app.scan.MonitorUiState
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.collectAsState
 import com.whyfi.app.ui.theme.WhyfiTheme
 import kotlinx.coroutines.launch
 
@@ -184,7 +188,6 @@ private fun maskToken(token: String): String =
 private const val DASHBOARD_ICON = "📊"
 private const val SCAN_ICON = "🔍"
 private const val LAN_ICON = "🌐"
-private const val MONITOR_ICON = "📡"
 private const val SETTINGS_ICON = "⚙️"
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -200,9 +203,18 @@ private fun WhyfiApp(
     // out of a results table back to the Scan tab.
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var advancedMode by remember { mutableStateOf(settingsRepository.advancedModeEnabled) }
-    // Keep the layout stable: Monitor is always discoverable, and its own
-    // screen explains how the USB test unlocks receive controls.
-    val tabCount = 5
+    // See Workspace.kt: phone radios and the USB adapter are separate
+    // workspaces, switchable at any time (adapter or not).
+    var workspace by rememberSaveable { mutableStateOf(Workspace.from(settingsRepository.workspace)) }
+    val switchWorkspace: (Workspace) -> Unit = {
+        workspace = it
+        settingsRepository.workspace = it.key
+    }
+    val attachedUsb = rememberAttachedUsbDevices()
+    // Dismissed for the device(s) plugged in now; a new attach shows it again.
+    var bannerDismissedFor by rememberSaveable { mutableStateOf("") }
+    val usbKey = attachedUsb.joinToString { it.deviceName }
+    val tabCount = 4
     var detailRadio by rememberSaveable { mutableStateOf<String?>(null) }
     var showMission by rememberSaveable { mutableStateOf(false) }
 
@@ -259,13 +271,39 @@ private fun WhyfiApp(
         return
     }
 
+    if (workspace == Workspace.ADAPTER) {
+        val emptyMonitor = remember { kotlinx.coroutines.flow.MutableStateFlow(MonitorUiState()) }
+        val monitorState by (service?.monitorState ?: emptyMonitor).collectAsState()
+        MaterialTheme(colorScheme = adapterColorScheme(MaterialTheme.colorScheme)) {
+            Surface(Modifier.fillMaxSize()) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    WorkspaceSwitch(workspace, switchWorkspace)
+                    AdapterStatusStrip(monitorState, attachedUsb)
+                    MonitorScreen(
+                        service = service,
+                        settingsRepository = settingsRepository,
+                        unlocked = advancedMode,
+                        setup = { AdapterSettings(settingsRepository, onAdvancedModeChange = { advancedMode = it }) },
+                    )
+                }
+            }
+        }
+        return
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
+        WorkspaceSwitch(workspace, switchWorkspace)
+        if (attachedUsb.isNotEmpty() && bannerDismissedFor != usbKey) {
+            AdapterAttachedBanner(
+                onSwitch = { switchWorkspace(Workspace.ADAPTER) },
+                onDismiss = { bannerDismissedFor = usbKey },
+            )
+        }
         TabRow(selectedTabIndex = selectedTab.coerceAtMost(tabCount - 1)) {
             WhyfiTab(DASHBOARD_ICON, "Dashboard", 0, selectedTab) { goToTab(0) }
             WhyfiTab(SCAN_ICON, "Scan", 1, selectedTab) { goToTab(1) }
             WhyfiTab(LAN_ICON, "LAN", 2, selectedTab) { goToTab(2) }
-            WhyfiTab(MONITOR_ICON, "Monitor", 3, selectedTab, enabled = advancedMode) { goToTab(3) }
-            WhyfiTab(SETTINGS_ICON, "Settings", 4, selectedTab) { goToTab(4) }
+            WhyfiTab(SETTINGS_ICON, "Settings", 3, selectedTab) { goToTab(3) }
         }
 
         val openMission: () -> Unit = { showMission = true }
@@ -280,17 +318,11 @@ private fun WhyfiApp(
                     onOpenMission = openMission, missionController = missionController,
                 )
                 2 -> LanScreen(service = service, uiState = uiState)
-                3 -> MonitorScreen(
-                    service = service,
-                    settingsRepository = settingsRepository,
-                    unlocked = advancedMode,
-                )
-                4 -> SettingsScreen(
+                3 -> SettingsScreen(
                     settingsRepository = settingsRepository,
                     themePreference = themePreference,
                     onThemePreferenceChange = onThemePreferenceChange,
                     service = service,
-                    onAdvancedModeChange = { advancedMode = it },
                 )
             }
         }
