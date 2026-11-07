@@ -173,6 +173,7 @@ object LatestScanFetcher {
             is80211mcResponder = is80211mcResponder,
             operatorFriendlyName = operatorFriendlyName,
             venueName = venueName,
+            vendorIeOuis = vendorIeOuis,
         )
     }
 

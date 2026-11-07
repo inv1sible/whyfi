@@ -18,7 +18,26 @@ object ScanResultMapper {
         is80211mcResponder = result.is80211mcResponder,
         operatorFriendlyName = passpointField(result) { it.operatorFriendlyName },
         venueName = passpointField(result) { it.venueName },
+        vendorIeOuis = WifiIeFormat.vendorOuis(informationElements(result)),
     )
+
+    // ScanResult.getInformationElements() is API 30 (R), like the Passpoint
+    // fields below. Vendor IE OUIs feed the backend's signature matcher
+    // (backend/scans/wifi_signatures.py). Guarded like Fieldwatch's
+    // WifiRadio.vendorIeOuisOf: a vendor ROM throwing here must not cost the
+    // whole scan result.
+    private fun informationElements(result: ScanResult): List<Pair<Int, ByteArray>> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return emptyList()
+        val elements = runCatching { result.informationElements }.getOrNull() ?: return emptyList()
+        return elements.mapNotNull { element ->
+            runCatching {
+                val buffer = element.bytes.duplicate()
+                val bytes = ByteArray(buffer.remaining())
+                buffer.get(bytes)
+                element.id to bytes
+            }.getOrNull()
+        }
+    }
 
     // operatorFriendlyName/venueName are Passpoint/Hotspot 2.0 fields added
     // in API 30 (R), same generation as wifiStandard below — referencing

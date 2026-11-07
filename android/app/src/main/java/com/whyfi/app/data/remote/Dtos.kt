@@ -39,6 +39,8 @@ data class WifiObservationDto(
     @SerializedName("is_80211mc_responder") val is80211mcResponder: Boolean = false,
     @SerializedName("operator_friendly_name") val operatorFriendlyName: String = "",
     @SerializedName("venue_name") val venueName: String = "",
+    // Vendor-specific IE OUIs, see WifiIeFormat. Empty below Android 11.
+    @SerializedName("vendor_ie_ouis") val vendorIeOuis: List<String> = emptyList(),
 )
 
 /** One Wi-Fi RTT/FTM ranging result against a single BSSID — see
@@ -338,6 +340,7 @@ data class WifiObservationResponseDto(
     @SerializedName("is_80211mc_responder") val is80211mcResponder: Boolean = false,
     @SerializedName("operator_friendly_name") val operatorFriendlyName: String = "",
     @SerializedName("venue_name") val venueName: String = "",
+    @SerializedName("vendor_ie_ouis") val vendorIeOuis: List<String> = emptyList(),
     @SerializedName("latitude") val latitude: Double? = null,
     @SerializedName("longitude") val longitude: Double? = null,
     @SerializedName("location_accuracy_meters") val locationAccuracyMeters: Double? = null,
