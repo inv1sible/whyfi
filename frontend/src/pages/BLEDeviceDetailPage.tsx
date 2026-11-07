@@ -259,7 +259,8 @@ export function BLEDeviceDetailPage() {
                 </dt>
                 <dd>
                   {signature.notes || "No notes in the signature catalog."}
-                  {signature.attention_note && <p className="warning-text">{signature.attention_note}</p>}
+                  {/* Plain text, not .warning-text: a catalog caution, not an alert. */}
+                  {signature.attention_note && <p className="signature-attention">{signature.attention_note}</p>}
                 </dd>
               </div>
             ))}

@@ -76,7 +76,7 @@ export function BLEDevicesPage() {
       {data && (
         <>
           <TableControls />
-          <label className="print-hide">
+          <label className="print-hide signature-class-filter">
             Signature class{" "}
             <select value={signatureClass} onChange={(e) => setSignatureClass(e.target.value)}>
               <option value="">All devices</option>

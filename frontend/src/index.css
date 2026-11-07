@@ -1691,3 +1691,13 @@ button:disabled {
 .signature-notes dd {
   margin: 0.15rem 0 0.6rem;
 }
+
+.signature-attention {
+  margin: 0.35rem 0 0;
+  color: var(--text-dim);
+}
+
+.signature-class-filter {
+  display: inline-block;
+  margin: 0.25rem 0 0.75rem;
+}
