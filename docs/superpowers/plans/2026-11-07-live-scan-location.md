@@ -14,7 +14,7 @@
 - **Pure selector** (`scan/FixSelector.kt`, no Android types, unit-tested):
   - Accept a fix only if coordinates are valid and finite, accuracy ≤ 75 m and age ≤ 30 s.
   - Jump gate (`hopPlausible`): reject a fix that moves more than 40 m from the last accepted fix at more than 42 m/s (over ≥ 0.8 s; the limit rises to 1.5 × measured speed + 5 m/s when either fix reports a speed, capped at 100 m/s, so an Autobahn or a train doesn't freeze the track).
-  - Only a **GPS** fix may override the gate (when markedly more precise, accuracy ≤ 0.75 × the anchor's) or re-anchor (three consecutive agreeing rejected GPS fixes). Network and fused fixes come from Wi-Fi/cell databases that relocated access points fool: the live DB has Las Vegas scans with minutes of identical network *and* fused fixes in Tokyo, Iowa, New York and Germany, claiming 7–42 m accuracy. An anchor nothing was accepted after for 2 minutes expires.
+  - Only a **GPS** fix may override the gate (when markedly more precise, accuracy ≤ 0.75 × the anchor's) or re-anchor (three consecutive agreeing rejected GPS fixes). Network and fused fixes come from Wi-Fi/cell databases that relocated access points fool: the live DB has Las Vegas scans with minutes of identical network *and* fused fixes in Tokyo, Iowa, New York and Germany, claiming 7–42 m accuracy. An anchor nothing was accepted after for 30 minutes expires (the anchor is kept apart from the trimmed fix history). Only an accepted GPS fix resets the GPS reject streak, and a GPS re-anchor drops accepted fixes that contradict it. A pass waits for a first fix only in the first minute after location starts.
   - Pass position: among accepted fixes, the one with the lowest `MonitorLocationPolicy.effectiveAccuracy(accuracy, |fix time − reference|, speed)`, reference = pass midpoint, within 30 s of it.
   - Times use `elapsedRealtimeNanos` (immune to wall-clock changes).
 - **Pass timing:** location is resolved at the **end** of a pass, against its midpoint (GPS has had the pass to warm up; the radios were heard across the pass).
@@ -26,11 +26,11 @@
 
   Final design, per sensor in time order: each scan keeps its original, takes its fused fix, or loses its position, chosen by a dynamic-programming pass. The pass maximises the weight of kept positions (GPS 10, network 1, fused stand-in 0.99) minus 200 per implausible hop.
 
-  A hop is plausible when it is under 40 m, or under 100 m/s, plus airliner speed (270 m/s) during the stretches over 30 minutes when the phone recorded **no scans at all**. Flight time comes from the recording, so dropping scans can't manufacture a flight.
+  A hop is plausible when it is under 40 m, or under 100 m/s, plus airliner speed (270 m/s) during the stretches over 30 minutes when the phone recorded **no scans at all** (scans without a position count as recording). Flight time comes from the recording, so dropping scans can't manufacture a flight. Predecessors are the last 200 geotagged scans plus the 32 best-scoring earlier ones, so a longer fake run can still be skipped. Sessions whose sensor was deleted are left alone. Import replays oldest first and re-runs the cleanup.
 
   Originals move to `raw_latitude` / `raw_longitude` / `raw_location_accuracy_meters` / `raw_location_provider`; `location_correction` = `"fused"` / `"cleared"` plus `location_correction_reason`; `--revert` restores the originals.
 
-  At ingest, a position that disagrees with its own fused fix is judged against the sensor's previous scan: kept if plausible from it, swapped for the fused fix if only that is plausible, otherwise kept for the cleanup to judge. All 34 existing coordinate reads stay unchanged.
+  At ingest, a position that disagrees with its own fused fix is judged against the sensor's previous scan: kept if plausible from it, swapped for the fused fix if only that is plausible, otherwise kept for the cleanup to judge. A GPS original is never swapped at ingest. All 34 existing coordinate reads stay unchanged.
 - **Export** writes the original (raw) coordinates, so an import re-runs the same checks.
 - Remove the dead `LocationSourcePreference` and correct the Settings text.
 - Out of scope: GNSS interference detection, raw GNSS measurements, Kalman smoothing, and Monitor's location (it has its own policy).
