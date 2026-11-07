@@ -3,6 +3,16 @@
 from django.db import migrations, models
 
 
+def backfill_signatures(apps, schema_editor):
+    # Same code path as `manage.py relabel_signatures`, on historical models.
+    from scans.wifi_signatures import relabel_all_wifi
+
+    relabel_all_wifi(
+        observation_model=apps.get_model("scans", "WiFiObservation"),
+        access_point_model=apps.get_model("scans", "AccessPoint"),
+    )
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -30,4 +40,5 @@ class Migration(migrations.Migration):
             name='vendor_ie_ouis',
             field=models.JSONField(blank=True, default=list),
         ),
+        migrations.RunPython(backfill_signatures, migrations.RunPython.noop),
     ]

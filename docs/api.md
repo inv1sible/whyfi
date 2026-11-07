@@ -95,6 +95,11 @@ the same format; it's used for signature matching only when
 `manufacturer_records` is empty. Every BLE observation is labeled at ingest
 with `signature_matches` (`[{id, rule}]`) and `signature_catalog_version`.
 
+`wifi_observations[].vendor_ie_ouis` (optional, `["AA:BB:CC", …]`, truncated to
+32) are the OUIs of the beacon's vendor-specific information elements
+(element 221, Android 11+). Wi-Fi observations are labeled at ingest from the
+BSSID, the access point's known SSID and these OUIs (`signature_matches`).
+
 `ftm_observations` are Wi-Fi RTT/FTM **distance** measurements, not RSSI
 readings — a separate table from `wifi_observations` because they're a
 different kind of raw measurement (a metric distance plus its quality), and
@@ -126,6 +131,7 @@ all. Values are `OPEN`, `WEP`, `WPA`, `WPA2`, `WPA3`, `WPA2_WPA3`, `OWE`
 - `GET /ble-observations/?device_type=&since=&identifier=` — `identifier` matches either `ble_mac` or `stable_identifier`, for one device's sighting history; also includes each sighting's `latitude`/`longitude` (from its scan session)
 - `GET /ble-devices/?signature=<fleet id>&signature_class=<KIND>` — each device carries `signature_ids` and `signatures` (`[{id, name, kind, rules}]`, where `rules` are the rule kinds that hit, e.g. `OUI` = address prefix only); the detail view adds each signature's `notes`/`attention_note`. Labels are pattern matches from the vendored Fieldwatch catalog (`backend/scans/ble_signatures.py`, update via `backend/scans/signatures/README.md`), informational only. An id no longer in the catalog is served as `{id, name: id, kind: "OTHER"}` until `manage.py relabel_ble_signatures` runs
 - `GET /ble-signatures/` — `{catalog_version, results: [{id, name, kind}]}`, the BLE-capable catalog fleets
+- `GET /access-points/?signature=<fleet id>&signature_class=<KIND>` — same `signature_ids`/`signatures` as BLE devices (`backend/scans/wifi_signatures.py`), plus `vias` per signature: `bssid`, `bssid_universal` (the vendor OUI behind a virtual BSSID) or `vendor_ie`. `GET /wifi-signatures/` lists the 162 Wi-Fi-capable fleets. Wi-Fi coverage rows carry `signature_names`. `manage.py relabel_signatures` relabels both radios
 - `GET /satellite-observations/`
 - `GET /lan-observations/?since=`
 - `GET /heatmap/?source=wifi|cellular|ble&bounds=<sw_lat>,<sw_lng>,<ne_lat>,<ne_lng>&since=` — grid-bucketed points; **capped envelope**, see below

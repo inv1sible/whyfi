@@ -251,3 +251,70 @@ def is_wifi_capable(fleet: Fleet) -> bool:
         elif _compile_other(rule) is not None:
             return True
     return False
+
+
+def relabel_all_wifi(
+    catalog: Catalog | None = None,
+    batch_size: int = 2000,
+    *,
+    observation_model=None,
+    access_point_model=None,
+) -> dict:
+    """Recomputes every WiFiObservation's labels (from its BSSID, its AP's
+    current SSID and its vendor IEs) and every AccessPoint's signature_ids.
+    Idempotent, never fires auto_now, and memoized: one AP's sightings
+    mostly share their inputs. AP ids are recomputed per batch under a row
+    lock (ingest locks the same rows), the fix from the BLE review. No
+    `.only()`, so the 0022 backfill keeps working on historical models."""
+    from django.db import transaction
+
+    if observation_model is None or access_point_model is None:
+        from .models import AccessPoint, WiFiObservation
+
+        observation_model = observation_model or WiFiObservation
+        access_point_model = access_point_model or AccessPoint
+    catalog = catalog or load_catalog()
+
+    memo: dict = {}
+    observations = 0
+    pending = []
+    fields = ["signature_matches", "signature_catalog_version"]
+    for obs in observation_model.objects.select_related("access_point").order_by("pk").iterator(
+        chunk_size=batch_size
+    ):
+        observations += 1
+        ies = obs.vendor_ie_ouis or []
+        key = (obs.access_point_id, obs.access_point.ssid, tuple(i for i in ies if isinstance(i, str)))
+        matches = memo.get(key)
+        if matches is None:
+            matches = memo[key] = match_wifi(parse_wifi(obs.access_point_id, obs.access_point.ssid, ies), catalog)
+        if (obs.signature_matches, obs.signature_catalog_version) != (matches, catalog.version):
+            obs.signature_matches = matches
+            obs.signature_catalog_version = catalog.version
+            pending.append(obs)
+        if len(pending) >= batch_size:
+            observation_model.objects.bulk_update(pending, fields)
+            pending = []
+    if pending:
+        observation_model.objects.bulk_update(pending, fields)
+
+    keys = list(access_point_model.objects.order_by("pk").values_list("pk", flat=True))
+    for start in range(0, len(keys), batch_size):
+        batch = keys[start:start + batch_size]
+        with transaction.atomic():
+            aps = list(access_point_model.objects.select_for_update().filter(pk__in=batch).order_by("pk"))
+            ids: dict = {}
+            for ap_id, matches in observation_model.objects.filter(access_point_id__in=batch).values_list(
+                "access_point_id", "signature_matches"
+            ):
+                ids.setdefault(ap_id, set()).update(m["id"] for m in matches or ())
+            changed = []
+            for ap in aps:
+                fresh = sorted(ids.get(ap.pk, ()))
+                if ap.signature_ids != fresh:
+                    ap.signature_ids = fresh
+                    changed.append(ap)
+            if changed:
+                access_point_model.objects.bulk_update(changed, ["signature_ids"])
+
+    return {"observations": observations, "access_points": len(keys), "catalog_version": catalog.version}

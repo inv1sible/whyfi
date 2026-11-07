@@ -100,7 +100,43 @@ def security_type_from_capabilities(capabilities: str) -> str:
 
 # --- Read serializers ---
 
+def signature_refs(obj, include_notes=False, include_vias=False):
+    """`signatures` for a BLEDevice or AccessPoint: one entry per stored
+    signature id with its catalog name/class and the rule kinds that hit
+    across the device's observations. Informational only."""
+    if not obj.signature_ids:
+        return []
+    rules: dict[str, set[str]] = {}
+    vias: dict[str, set[str]] = {}
+    for matches in obj.observations.exclude(signature_matches=[]).values_list("signature_matches", flat=True):
+        for match in matches:
+            rules.setdefault(match["id"], set()).add(match["rule"])
+            if match.get("via"):
+                vias.setdefault(match["id"], set()).add(match["via"])
+    catalog = load_catalog()
+    out = []
+    for fleet_id in obj.signature_ids:
+        fleet = catalog.get(fleet_id)
+        # An id from an older catalog (fleet since removed) is served as-is
+        # until relabel_signatures drops it.
+        entry = {
+            "id": fleet_id,
+            "name": fleet.name if fleet else fleet_id,
+            "kind": fleet.kind if fleet else "OTHER",
+            "rules": sorted(rules.get(fleet_id, ())),
+        }
+        if include_vias:
+            entry["vias"] = sorted(vias.get(fleet_id, ()))
+        if include_notes:
+            entry["notes"] = fleet.notes if fleet else ""
+            entry["attention_note"] = fleet.attention_note if fleet else ""
+        out.append(entry)
+    return out
+
+
 class AccessPointSerializer(serializers.ModelSerializer):
+    # Catalog signatures (scans/wifi_signatures.py); informational only.
+    signatures = serializers.SerializerMethodField()
     latest_rssi = serializers.SerializerMethodField()
     latest_band = serializers.SerializerMethodField()
     latest_channel = serializers.SerializerMethodField()
@@ -112,7 +148,13 @@ class AccessPointSerializer(serializers.ModelSerializer):
         fields = [
             "bssid", "ssid", "vendor_oui", "first_seen_at", "last_seen_at",
             "latest_rssi", "latest_band", "latest_channel", "latest_security_type", "latest_has_location",
+            "signature_ids", "signatures",
         ]
+
+    include_signature_notes = False
+
+    def get_signatures(self, obj):
+        return signature_refs(obj, include_notes=self.include_signature_notes, include_vias=True)
 
     def _latest(self, obj):
         if not hasattr(obj, "_latest_observation_cache"):
@@ -138,6 +180,10 @@ class AccessPointSerializer(serializers.ModelSerializer):
     def get_latest_has_location(self, obj):
         latest = self._latest(obj)
         return bool(latest and latest.scan_session.latitude is not None)
+
+
+class AccessPointDetailSerializer(AccessPointSerializer):
+    include_signature_notes = True
 
 
 class WiFiObservationSerializer(serializers.ModelSerializer):
@@ -326,29 +372,7 @@ class BLEDeviceSerializer(serializers.ModelSerializer):
     include_signature_notes = False
 
     def get_signatures(self, obj):
-        if not obj.signature_ids:
-            return []
-        rules: dict[str, set[str]] = {}
-        for matches in obj.observations.exclude(signature_matches=[]).values_list("signature_matches", flat=True):
-            for match in matches:
-                rules.setdefault(match["id"], set()).add(match["rule"])
-        catalog = load_catalog()
-        out = []
-        for fleet_id in obj.signature_ids:
-            fleet = catalog.get(fleet_id)
-            # An id from an older catalog (fleet since removed) is served
-            # as-is until relabel_ble_signatures drops it.
-            entry = {
-                "id": fleet_id,
-                "name": fleet.name if fleet else fleet_id,
-                "kind": fleet.kind if fleet else "OTHER",
-                "rules": sorted(rules.get(fleet_id, ())),
-            }
-            if self.include_signature_notes:
-                entry["notes"] = fleet.notes if fleet else ""
-                entry["attention_note"] = fleet.attention_note if fleet else ""
-            out.append(entry)
-        return out
+        return signature_refs(obj, include_notes=self.include_signature_notes)
 
     def _latest(self, obj):
         if not hasattr(obj, "_latest_observation_cache"):

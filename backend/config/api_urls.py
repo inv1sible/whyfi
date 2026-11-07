@@ -9,6 +9,7 @@ from scans.views import (
     BLEDeviceViewSet,
     BLEObservationViewSet,
     BLESignatureViewSet,
+    WifiSignatureViewSet,
     CellObservationViewSet,
     CellTowerViewSet,
     FloorPlanViewSet,
@@ -39,6 +40,7 @@ router.register("cell-towers", CellTowerViewSet, basename="cell-tower")
 router.register("ble-observations", BLEObservationViewSet, basename="ble-observation")
 router.register("ble-devices", BLEDeviceViewSet, basename="ble-device")
 router.register("ble-signatures", BLESignatureViewSet, basename="ble-signature")
+router.register("wifi-signatures", WifiSignatureViewSet, basename="wifi-signature")
 router.register("satellite-observations", SatelliteObservationViewSet, basename="satellite-observation")
 router.register("lan-observations", LANObservationViewSet, basename="lan-observation")
 router.register("lan-devices", LANDeviceViewSet, basename="lan-device")

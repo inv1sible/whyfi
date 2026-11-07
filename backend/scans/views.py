@@ -16,6 +16,7 @@ from sensors.authentication import SensorTokenAuthentication
 from sensors.models import Sensor
 
 from .ble_signatures import is_ble_capable, load_catalog
+from .wifi_signatures import is_wifi_capable
 from .calibration import fit_path_loss
 from .floorplan import (
     derive_scale_and_bearing,
@@ -65,6 +66,7 @@ from .models import (
     WiFiObservation,
 )
 from .serializers import (
+    AccessPointDetailSerializer,
     AccessPointSerializer,
     CalibratedRangeModelSerializer,
     BLEDeviceDetailSerializer,
@@ -705,13 +707,33 @@ def capped_response(results, truncated, cap):
     return {"results": results, "truncated": truncated, "observation_limit": cap}
 
 
+def filter_by_signature(qs, request):
+    """`?signature=<fleet id>` / `?signature_class=<KIND>` on a model with a
+    `signature_ids` list (BLEDevice, AccessPoint)."""
+    signature = request.query_params.get("signature")
+    if signature:
+        qs = qs.filter(signature_ids__contains=[signature])
+    signature_class = request.query_params.get("signature_class")
+    if signature_class:
+        fleet_ids = [fleet.id for fleet in load_catalog().fleets if fleet.kind == signature_class]
+        match = Q()
+        for fleet_id in fleet_ids:
+            match |= Q(signature_ids__contains=[fleet_id])
+        qs = qs.filter(match) if fleet_ids else qs.none()
+    return qs
+
+
 class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
     serializer_class = AccessPointSerializer
     lookup_field = "bssid"
     lookup_value_regex = "[^/]+"
 
+    def get_serializer_class(self):
+        return AccessPointDetailSerializer if self.action == "retrieve" else AccessPointSerializer
+
     def get_queryset(self):
         qs = AccessPoint.objects.all().order_by("-last_seen_at")
+        qs = filter_by_signature(qs, self.request)
         ssid = self.request.query_params.get("ssid")
         if ssid:
             qs = qs.filter(ssid__icontains=ssid)
@@ -878,6 +900,13 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
                     "bssid": obs.access_point.bssid,
                     "ssid": obs.access_point.ssid,
                     "detail_path": f"/networks/{quote(obs.access_point_id, safe='')}",
+                    # The AP's catalog signature names (an id from an older
+                    # catalog shows as itself).
+                    "signature_names": [
+                        (fleet.name if fleet else fleet_id)
+                        for fleet_id in obs.access_point.signature_ids or ()
+                        for fleet in [load_catalog().get(fleet_id)]
+                    ],
                     "points": {},
                 },
             )
@@ -896,6 +925,7 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
                 "bssid": v["bssid"],
                 "ssid": v["ssid"],
                 "detail_path": v["detail_path"],
+                "signature_names": v["signature_names"],
                 "points": [
                     {
                         "lat": lat,
@@ -1554,6 +1584,21 @@ class BLEObservationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         return Response(capped_response(results, truncated, COVERAGE_OBSERVATION_CAP))
 
 
+class WifiSignatureViewSet(viewsets.ViewSet):
+    """The Wi-Fi-capable fleets of the vendored catalog (scans/wifi_signatures.py)."""
+
+    def list(self, request):
+        catalog = load_catalog()
+        return Response({
+            "catalog_version": catalog.version,
+            "results": [
+                {"id": fleet.id, "name": fleet.name, "kind": fleet.kind}
+                for fleet in catalog.fleets
+                if is_wifi_capable(fleet)
+            ],
+        })
+
+
 class BLESignatureViewSet(viewsets.ViewSet):
     """The BLE-capable fleets of the vendored signature catalog, for the
     PWA's class filter and labels. Wi-Fi-only fleets are left out because
@@ -1584,16 +1629,7 @@ class BLEDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         device_type = self.request.query_params.get("device_type")
         if device_type:
             qs = qs.filter(device_type_guess=device_type)
-        signature = self.request.query_params.get("signature")
-        if signature:
-            qs = qs.filter(signature_ids__contains=[signature])
-        signature_class = self.request.query_params.get("signature_class")
-        if signature_class:
-            fleet_ids = [fleet.id for fleet in load_catalog().fleets if fleet.kind == signature_class]
-            match = Q()
-            for fleet_id in fleet_ids:
-                match |= Q(signature_ids__contains=[fleet_id])
-            qs = qs.filter(match) if fleet_ids else qs.none()
+        qs = filter_by_signature(qs, self.request)
         qs = apply_active_window(qs, self.request)
         session_limit = parse_session_limit(self.request)
         if session_limit:

@@ -10,10 +10,10 @@ replacement and a diff against upstream stays empty.
 - `catalogVersion`: 98, 255 fleets (173 can match BLE)
 - License: MIT, Copyright (c) 2026 Off Grid Pete LLC. See the root `NOTICE`.
 
-The matcher is `backend/scans/ble_signatures.py`, a port of Fieldwatch's
-`app/src/main/java/app/fieldwatch/domain/SignatureEngine.kt`. Only BLE is
-labeled. Wi-Fi rules (BSSID OUI, vendor IE, hidden SSID) are parsed but never
-applied, and clustered fleets (`minPeers` / `clusterByOui` / `sequentialMac`)
+The matchers are `backend/scans/ble_signatures.py` (BLE) and
+`backend/scans/wifi_signatures.py` (Wi-Fi: BSSID / universal OUI, SSID,
+vendor IE OUIs), ports of Fieldwatch's
+`app/src/main/java/app/fieldwatch/domain/SignatureEngine.kt`. Clustered fleets (`minPeers` / `clusterByOui` / `sequentialMac`)
 and `decode` blocks are not ported. Labels are pattern matches, not
 identifications, and carry no alert state (see `MEMORY.md`).
 
@@ -27,6 +27,7 @@ identifications, and carry no alert state (see `MEMORY.md`).
    real matches. Update them if upstream changed those fleets on purpose.
 3. Deploy (`docker compose build backend && docker compose up -d backend`).
 4. Relabel stored history:
-   `docker compose exec backend python manage.py relabel_ble_signatures`.
-   This recomputes every `BLEObservation.signature_matches` and every
-   `BLEDevice.signature_ids`, drops ids of removed fleets, and is idempotent.
+   `docker compose exec backend python manage.py relabel_signatures`.
+   This recomputes every BLE and Wi-Fi observation's `signature_matches` and
+   every `BLEDevice` / `AccessPoint`'s `signature_ids`, drops ids of removed
+   fleets, and is idempotent. (`relabel_ble_signatures` does BLE only.)

@@ -1,7 +1,10 @@
 """Wi-Fi signature labels. See docs/superpowers/plans/2026-11-07-wifi-signature-labels.md."""
 
+import io
 import json
 from pathlib import Path
+
+from django.core.management import call_command
 
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
@@ -9,10 +12,10 @@ from rest_framework.test import APIClient
 
 from sensors.models import Sensor
 
-from .ble_signatures import parse_catalog
+from .ble_signatures import load_catalog, parse_catalog
 from .test_ble_signatures import _catalog_dict, _fleet, _rule
 from .models import AccessPoint, ScanSession, WiFiObservation
-from .wifi_signatures import match_wifi, parse_wifi, universal_oui
+from .wifi_signatures import match_wifi, parse_wifi, relabel_all_wifi, universal_oui
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "wifi_signature_cases.json"
 
@@ -197,3 +200,104 @@ class IngestWifiSignatureTests(TestCase):
         rows = self.reader.get("/api/v1/access-points/24:16:1B:00:00:02/wifi-observations/").json()
         self.assertEqual(rows[0]["signature_matches"], [{"id": "fleet-cisco", "rule": "OUI", "via": "bssid"}])
         self.assertEqual(rows[0]["vendor_ie_ouis"], [])
+
+
+class RelabelWifiAndApiTests(TestCase):
+    def setUp(self):
+        self.session = ScanSession.objects.create(
+            sensor=Sensor.objects.create(name="Field Phone"), client_scan_id="wr-1",
+            started_at="2026-11-07T10:00:00Z", completed_at="2026-11-07T10:00:06Z",
+            latitude=48.1351, longitude=11.582,
+        )
+        self.cisco = self._raw("24:16:1B:00:00:01", "Corp")
+        self.drone = self._raw("9E:AA:BB:00:00:01", "drone-1", ["FA:0B:BC"])
+        self.plain = self._raw("9E:AA:BB:00:00:02", "Home")
+        self.reader = APIClient()
+        self.reader.force_authenticate(user=get_user_model().objects.create_user(username="op", password="pw-123456"))
+
+    def _raw(self, bssid, ssid, ies=()):
+        """Created without ingest, so it carries no labels yet."""
+        ap = AccessPoint.objects.create(bssid=bssid, ssid=ssid)
+        WiFiObservation.objects.create(
+            scan_session=self.session, access_point=ap, rssi=-60, frequency_mhz=2437, channel=6, band="2.4GHz",
+            vendor_ie_ouis=list(ies), observed_at="2026-11-07T10:00:01Z",
+        )
+        return ap
+
+    def _state(self):
+        return (
+            sorted(WiFiObservation.objects.values_list("access_point_id", "signature_matches", "signature_catalog_version")),
+            sorted(AccessPoint.objects.values_list("bssid", "signature_ids", "last_seen_at")),
+        )
+
+    def test_relabel_wifi_labels_unlabeled_rows(self):
+        self.assertEqual(relabel_all_wifi(), {"observations": 3, "access_points": 3, "catalog_version": 98})
+        ids = dict(AccessPoint.objects.values_list("bssid", "signature_ids"))
+        self.assertEqual(ids, {
+            "24:16:1B:00:00:01": ["fleet-cisco"], "9E:AA:BB:00:00:01": ["fleet-remote-id"], "9E:AA:BB:00:00:02": [],
+        })
+
+    def test_relabel_wifi_drops_removed_fleet(self):
+        relabel_all_wifi()
+        stock = load_catalog()
+        newer = parse_catalog({
+            "format": "fieldwatch-signatures", "formatVersion": 1, "catalogVersion": 99,
+            "fleets": [_fleet(f.id, [_rule(r.kind, r.text, r.company_id, r.data_prefix_hex, r.radio) for r in f.rules],
+                              kind=f.kind, match_any=f.match_any)
+                       for f in stock.fleets if f.id != "fleet-cisco"],
+        })
+        relabel_all_wifi(newer)
+        self.cisco.refresh_from_db()
+        self.assertEqual(self.cisco.signature_ids, [])
+        self.assertEqual(set(WiFiObservation.objects.values_list("signature_catalog_version", flat=True)), {99})
+
+    def test_relabel_wifi_is_idempotent_and_keeps_last_seen(self):
+        before = dict(AccessPoint.objects.values_list("bssid", "last_seen_at"))
+        relabel_all_wifi(batch_size=2)
+        first = self._state()
+        relabel_all_wifi(batch_size=2)
+        self.assertEqual(self._state(), first)
+        self.assertEqual(dict(AccessPoint.objects.values_list("bssid", "last_seen_at")), before)
+
+    def test_relabel_signatures_command_runs_both(self):
+        out = io.StringIO()
+        call_command("relabel_signatures", stdout=out)
+        self.assertIn("ble:", out.getvalue())
+        self.assertIn("wifi: {'observations': 3, 'access_points': 3, 'catalog_version': 98}", out.getvalue())
+
+    def test_access_point_signatures_and_filters(self):
+        relabel_all_wifi()
+        listed = {a["bssid"]: a for a in self.reader.get("/api/v1/access-points/").json()["results"]}
+        self.assertEqual(listed[self.drone.bssid]["signatures"], [
+            {"id": "fleet-remote-id", "name": load_catalog().get("fleet-remote-id").name, "kind": "DRONE",
+             "rules": ["VENDOR_IE_OUI"], "vias": ["vendor_ie"]},
+        ])
+        self.assertEqual(listed[self.plain.bssid]["signatures"], [])
+        detail = self.reader.get(f"/api/v1/access-points/{self.cisco.bssid}/").json()
+        self.assertEqual(detail["signatures"][0]["vias"], ["bssid"])
+        self.assertIn("notes", detail["signatures"][0])
+        keys = lambda q: {a["bssid"] for a in self.reader.get(f"/api/v1/access-points/?{q}").json()["results"]}  # noqa: E731
+        self.assertEqual(keys("signature_class=DRONE"), {self.drone.bssid})
+        self.assertEqual(keys("signature=fleet-cisco"), {self.cisco.bssid})
+        self.assertEqual(keys("signature_class=NOPE"), set())
+
+    def test_unknown_signature_id_is_served(self):
+        AccessPoint.objects.filter(pk=self.plain.pk).update(signature_ids=["fleet-gone"])
+        detail = self.reader.get(f"/api/v1/access-points/{self.plain.bssid}/")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["signatures"][0]["name"], "fleet-gone")
+
+    def test_wifi_signature_list(self):
+        body = self.reader.get("/api/v1/wifi-signatures/").json()
+        self.assertEqual(body["catalog_version"], 98)
+        ids = {r["id"] for r in body["results"]}
+        self.assertIn("fleet-cisco", ids)
+        self.assertIn("fleet-remote-id", ids)
+        self.assertNotIn("fleet-apple-audio", ids)
+        self.assertEqual(APIClient().get("/api/v1/wifi-signatures/").status_code, 403)
+
+    def test_coverage_reports_signature_names(self):
+        relabel_all_wifi()
+        rows = {r["bssid"]: r for r in self.reader.get("/api/v1/access-points/coverage/").json()["results"]}
+        self.assertEqual(rows[self.cisco.bssid]["signature_names"], [load_catalog().get("fleet-cisco").name])
+        self.assertEqual(rows[self.plain.bssid]["signature_names"], [])
