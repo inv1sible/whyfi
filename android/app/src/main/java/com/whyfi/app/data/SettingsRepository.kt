@@ -11,13 +11,6 @@ enum class ThemePreference {
     }
 }
 
-/** GPS is the original, unchanged behavior (pick the freshest of
- * GPS_PROVIDER/NETWORK_PROVIDER) — default, so existing behavior doesn't
- * silently change for anyone. FUSED requests Android's FUSED_PROVIDER
- * (API 31+) as the reported location instead. BOTH keeps the GPS/network
- * pick as the primary reading (identical to GPS mode) *and* additionally
- * captures a fused reading alongside it, for comparing sources. */
-
 /**
  * Which algorithm estimates a transmitter's position. Mirrors the PWA's
  * estimatorPreference.ts and the backend's scans/estimators.py — the wire

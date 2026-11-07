@@ -266,7 +266,9 @@ class ScanCoordinator(private val context: Context) {
     private suspend fun resolveLocation(referenceBootMs: Long, waitMs: Long = 0L): ResolvedLocation {
         var best = liveLocation.selector.best(referenceBootMs)
         val deadline = SystemClock.elapsedRealtime() + waitMs
-        while (best == null && liveLocation.isRunning() && SystemClock.elapsedRealtime() < deadline) {
+        while (best == null && liveLocation.warmingUp(SystemClock.elapsedRealtime()) &&
+            SystemClock.elapsedRealtime() < deadline
+        ) {
             delay(FIX_POLL_MS)
             best = liveLocation.selector.best(referenceBootMs)
         }

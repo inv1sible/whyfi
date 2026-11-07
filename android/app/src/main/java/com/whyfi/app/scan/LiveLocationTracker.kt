@@ -36,7 +36,9 @@ class LiveLocationTracker(private val context: Context) {
     @Synchronized
     fun acquire() {
         users++
-        if (users == 1) start()
+        // Every acquire retries a start that couldn't happen yet (location
+        // permission granted mid-session), not just the first.
+        if (listener == null) start()
     }
 
     @Synchronized
@@ -49,6 +51,14 @@ class LiveLocationTracker(private val context: Context) {
     @Synchronized
     fun isRunning(): Boolean = listener != null
 
+    /** True during the first minute after updates started: the only time
+     * it's worth making a pass wait for a first fix. Indoors with no fix at
+     * all, later passes shouldn't each pay for the wait. */
+    @Synchronized
+    fun warmingUp(nowBootMs: Long): Boolean = listener != null && nowBootMs - startedAtBootMs < WARM_UP_MS
+
+    private var startedAtBootMs = 0L
+
     /** The freshest platform fused fix, kept for the backend's fused comparison. */
     fun latestFused(): Location? = latestFused
 
@@ -58,7 +68,7 @@ class LiveLocationTracker(private val context: Context) {
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         // A just-cached fix (another app, or the last pass) counts if it
         // passes the same gates; the selector drops anything stale.
-        LocationSnapshot.lastKnownCandidates(context).forEach { offer(it) }
+        LocationSnapshot.lastKnownCandidates(context).sortedBy { it.elapsedRealtimeNanos }.forEach { offer(it) }
         val newListener = LocationListener { location -> offer(location) }
         val requests = buildList {
             add(LocationManager.GPS_PROVIDER to 1_000L)
@@ -70,7 +80,10 @@ class LiveLocationTracker(private val context: Context) {
                 locationManager.requestLocationUpdates(provider, intervalMs, 0f, newListener, Looper.getMainLooper())
             }.onFailure { Log.w(TAG, "No live updates from $provider", it) }.isSuccess
         }
-        if (registered > 0) listener = newListener
+        if (registered > 0) {
+            listener = newListener
+            startedAtBootMs = SystemClock.elapsedRealtime()
+        }
     }
 
     private fun stop() {
@@ -89,6 +102,7 @@ class LiveLocationTracker(private val context: Context) {
     companion object {
         private const val TAG = "LiveLocationTracker"
         private const val FUSED = "fused"
+        private const val WARM_UP_MS = 60_000L
     }
 }
 

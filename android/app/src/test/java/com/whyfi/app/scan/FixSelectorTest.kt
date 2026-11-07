@@ -180,11 +180,32 @@ class FixSelectorTest {
     }
 
     @Test
-    fun staleAnchorExpires() {
-        // Nothing accepted for two minutes: the next fix starts afresh
-        // instead of being judged against a position from long ago.
+    fun staleAnchorExpiresAfterHalfAnHour() {
+        // Nothing accepted for 30 minutes (a flight, a GPS-less phone): the
+        // next fix starts afresh instead of being judged against a position
+        // from long ago. Shorter outages keep rejecting relocated fixes.
         val selector = FixSelector()
         assertTrue(selector.offer(fix("network", 0.0, accuracyM = 30.0), at(0.0)))
-        assertTrue(selector.offer(fix("network", 121.0, northM = 9000.0, accuracyM = 30.0), at(121.0)))
+        // 900 km north (9,000 km would be past the pole, i.e. invalid).
+        assertFalse(selector.offer(fix("network", 124.0, northM = 900_000.0, accuracyM = 7.0), at(124.0)))
+        assertTrue(selector.offer(fix("network", 1801.0, northM = 900_000.0, accuracyM = 30.0), at(1801.0)))
+    }
+
+    @Test
+    fun gpsReanchorsAwayFromAFakeAnchorThatKeepsReporting() {
+        // Reviewer scenario: a relocated-Wi-Fi fix becomes the anchor and the
+        // fused/network providers keep reporting that same wrong place (so
+        // they keep being accepted). GPS must still re-anchor.
+        val selector = FixSelector()
+        assertTrue(selector.offer(fix("network", 0.0, northM = 2_000_000.0, accuracyM = 7.0), at(0.0)))
+        var t = 1.0
+        repeat(10) {
+            selector.offer(fix("gps", t, accuracyM = 8.0, speedMps = 0.0), at(t))
+            selector.offer(fix("fused", t + 0.5, northM = 2_000_000.0, accuracyM = 7.0), at(t + 0.5))
+            t += 1.0
+        }
+        assertEquals(baseLat, selector.best(at(t))!!.lat, 1e-6)
+        // And once GPS holds the anchor, the fake fused fixes stay out.
+        assertFalse(selector.offer(fix("fused", t, northM = 2_000_000.0, accuracyM = 7.0), at(t)))
     }
 }

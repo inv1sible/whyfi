@@ -32,7 +32,7 @@ data class LocationFix(
  *   so a coarse or stale first fix can't lock out good GPS far away;
  * - three consecutive rejected GPS fixes that agree with each other
  *   re-anchor, so one wrong precise fix can't freeze the track either;
- * - an anchor nothing was accepted after for 2 minutes expires;
+ * - an anchor nothing was accepted after for 30 minutes expires;
  * - the speed limit rises with a fix's own measured speed (see hopPlausible);
  * - fixes under 0.8 s apart are judged over 0.8 s instead of waved through
  *   (Fieldwatch treats them as always plausible, which lets a network fix
@@ -44,26 +44,41 @@ data class LocationFix(
  */
 class FixSelector {
     private val accepted = ArrayDeque<LocationFix>()
+
+    /** The newest accepted fix. Kept apart from [accepted], whose history is
+     * trimmed after two minutes: the anchor must outlive that, or the
+     * 30-minute expiry would quietly become two minutes. */
+    private var anchor: LocationFix? = null
     private val rejected = ArrayDeque<LocationFix>()
 
     /** Offers one fix. Returns whether it was accepted. */
     @Synchronized
     fun offer(fix: LocationFix, nowBootMs: Long): Boolean {
         if (!valid(fix) || abs(nowBootMs - fix.bootMs) > MAX_AGE_MS) return false
-        val anchor = accepted.maxByOrNull { it.bootMs }
+        val anchor = anchor
         // Only GPS may override the jump gate or re-anchor: it measures the
         // position itself, while network/fused fixes come from Wi-Fi and cell
         // databases that relocated access points fool (seen in real data:
         // minutes of identical fixes 2,000+ km off, claiming 7 m accuracy).
         val gps = fix.provider == GPS
-        val ok = anchor == null ||
+        val plausible = anchor == null ||
             fix.bootMs - anchor.bootMs > ANCHOR_EXPIRY_MS ||
             hopPlausible(anchor, fix) ||
-            (gps && morePrecise(fix, anchor)) ||
-            (gps && reanchors(fix))
+            (gps && morePrecise(fix, anchor))
+        val reanchored = !plausible && gps && reanchors(fix)
+        val ok = plausible || reanchored
         if (ok) {
+            if (reanchored) {
+                // GPS outvoted the anchor: drop accepted fixes that contradict
+                // it, so best() can't still pick the relocated position.
+                accepted.removeAll { !hopPlausible(it, fix) }
+            }
             accepted.addLast(fix)
-            rejected.clear()
+            if (anchor == null || fix.bootMs >= anchor.bootMs) this.anchor = fix
+            // Only a GPS acceptance resets the GPS reject streak: fake
+            // network/fused fixes being accepted must not stop GPS from
+            // re-anchoring away from them.
+            if (gps) rejected.clear()
             while (accepted.isNotEmpty() && nowBootMs - accepted.first().bootMs > HISTORY_MS) accepted.removeFirst()
         }
         return ok
@@ -89,6 +104,7 @@ class FixSelector {
     fun reset() {
         accepted.clear()
         rejected.clear()
+        anchor = null
     }
 
     private fun reanchors(fix: LocationFix): Boolean {
@@ -108,7 +124,10 @@ class FixSelector {
         const val MAX_TRUSTED_SPEED_MPS = 100.0
         const val PRECISE_FACTOR = 0.75
         const val REANCHOR_COUNT = 3
-        const val ANCHOR_EXPIRY_MS = 120_000L
+        /** Long enough that a relocated-Wi-Fi spell doesn't get in when GPS
+         * drops out indoors; short enough that a phone without GPS isn't
+         * stuck on its pre-flight position. */
+        const val ANCHOR_EXPIRY_MS = 30 * 60_000L
         const val GPS = "gps"
         private const val HISTORY_MS = 120_000L
 
