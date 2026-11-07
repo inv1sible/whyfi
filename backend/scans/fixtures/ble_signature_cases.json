@@ -1,0 +1,491 @@
+[
+  {
+    "name": "flipper by name",
+    "advert": {
+      "mac": "7A:11:22:33:44:55",
+      "name": "Flipper Zero",
+      "service_uuids": [],
+      "manufacturer_records": [],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-flipper"
+    ]
+  },
+  {
+    "name": "osmo wins over generic DJI on company 0x08AA",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [
+        "08aa:0600112233"
+      ],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-osmo"
+    ]
+  },
+  {
+    "name": "generic DJI on company 0x08AA alone",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [
+        "08aa:ff00112233"
+      ],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-dji"
+    ]
+  },
+  {
+    "name": "DJI Power name drops generic DJI",
+    "advert": {
+      "mac": "",
+      "name": "Power2000 Station",
+      "service_uuids": [],
+      "manufacturer_records": [
+        "08aa:ff00"
+      ],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-dji-power"
+    ]
+  },
+  {
+    "name": "polar strap with GoPro heart-rate UUID stays polar",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [
+        "0000fea5-0000-1000-8000-00805f9b34fb"
+      ],
+      "manufacturer_records": [
+        "006b:0102"
+      ],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-polar"
+    ]
+  },
+  {
+    "name": "gopro UUID alone is gopro",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [
+        "0000fea5-0000-1000-8000-00805f9b34fb"
+      ],
+      "manufacturer_records": [],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-gopro"
+    ]
+  },
+  {
+    "name": "airtag offline-finding payload",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [
+        "004c:12190000aabbccdd"
+      ],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-airtag"
+    ]
+  },
+  {
+    "name": "iphone continuity plus offline finding is not an airtag",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [
+        "004c:10051c1e",
+        "004c:12020003"
+      ],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-apple-device"
+    ]
+  },
+  {
+    "name": "apple audio continuity drops airtag",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [
+        "004c:12020003",
+        "004c:07190100"
+      ],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-apple-audio"
+    ]
+  },
+  {
+    "name": "airtag name survives apple-device hit",
+    "advert": {
+      "mac": "",
+      "name": "AirTag",
+      "service_uuids": [],
+      "manufacturer_records": [
+        "004c:10051c1e"
+      ],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-airtag",
+      "fleet-apple-device"
+    ]
+  },
+  {
+    "name": "FD44 survives apple-device hit",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [
+        "fd44"
+      ],
+      "manufacturer_records": [
+        "004c:10051c1e",
+        "004c:1202"
+      ],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-airtag",
+      "fleet-apple-device"
+    ]
+  },
+  {
+    "name": "tile by full SIG UUID",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [
+        "0000feed-0000-1000-8000-00805f9b34fb"
+      ],
+      "manufacturer_records": [],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-tile"
+    ]
+  },
+  {
+    "name": "tile by 16-bit UUID",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [
+        "FEED"
+      ],
+      "manufacturer_records": [],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-tile"
+    ]
+  },
+  {
+    "name": "0x-prefixed device UUID gets no 16-bit alias (Fieldwatch keeps the x)",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [
+        "0xFEED"
+      ],
+      "manufacturer_records": [],
+      "service_data": []
+    },
+    "expect": []
+  },
+  {
+    "name": "name contains is case-insensitive substring",
+    "advert": {
+      "mac": "",
+      "name": "Tattile cam",
+      "service_uuids": [],
+      "manufacturer_records": [],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-tattile",
+      "fleet-tile"
+    ]
+  },
+  {
+    "name": "smarttag by service data UUID only",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [],
+      "service_data": [
+        "0000fd5a-0000-1000-8000-00805f9b34fb:01"
+      ]
+    },
+    "expect": [
+      "fleet-smarttag"
+    ]
+  },
+  {
+    "name": "generic ibeacon",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [
+        "004c:0215aabbccddeeff00112233445566778899"
+      ],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-ibeacon"
+    ]
+  },
+  {
+    "name": "tesla phone key ibeacon is tesla, not ibeacon",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [
+        "004c:021574278bdab64445208f0c720eaf05993500010002c5"
+      ],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-tesla"
+    ]
+  },
+  {
+    "name": "beacon-class product keeps the ibeacon chip",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [
+        "004c:02155993a94c7d974df79abfe493bfd5d00000010002c5"
+      ],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-target-atrius",
+      "fleet-ibeacon"
+    ]
+  },
+  {
+    "name": "non-beacon product drops the ibeacon chip",
+    "advert": {
+      "mac": "",
+      "name": "Flipper",
+      "service_uuids": [],
+      "manufacturer_records": [
+        "004c:0215aabbccddeeff00112233445566778899"
+      ],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-flipper"
+    ]
+  },
+  {
+    "name": "rayneo name alone is not enough (matchAny false)",
+    "advert": {
+      "mac": "",
+      "name": "RayNeo X2",
+      "service_uuids": [],
+      "manufacturer_records": [],
+      "service_data": []
+    },
+    "expect": []
+  },
+  {
+    "name": "rayneo name plus company 3014",
+    "advert": {
+      "mac": "",
+      "name": "RayNeo X2",
+      "service_uuids": [],
+      "manufacturer_records": [
+        "0bc6:0102"
+      ],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-rayneo"
+    ]
+  },
+  {
+    "name": "rayneo company alone is not enough",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [
+        "0bc6:0102"
+      ],
+      "service_data": []
+    },
+    "expect": []
+  },
+  {
+    "name": "axon service data prefix as contains",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [],
+      "service_data": [
+        "0000180a-0000-1000-8000-00805f9b34fb:0001425743444556494345ff"
+      ]
+    },
+    "expect": [
+      "fleet-axon"
+    ]
+  },
+  {
+    "name": "axon service data prefix in reversed byte order",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [],
+      "service_data": [
+        "0000180a-0000-1000-8000-00805f9b34fb:0045434956454443574200"
+      ]
+    },
+    "expect": [
+      "fleet-axon"
+    ]
+  },
+  {
+    "name": "find hub service data starts with 0x40",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [],
+      "service_data": [
+        "0000feaa-0000-1000-8000-00805f9b34fb:40aabb"
+      ]
+    },
+    "expect": [
+      "fleet-find-hub"
+    ]
+  },
+  {
+    "name": "find hub prefix not at the start does not match",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [],
+      "service_data": [
+        "0000feaa-0000-1000-8000-00805f9b34fb:0040aabb"
+      ]
+    },
+    "expect": []
+  },
+  {
+    "name": "find hub UUID without service data does not match",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [
+        "0000feaa-0000-1000-8000-00805f9b34fb"
+      ],
+      "manufacturer_records": [],
+      "service_data": []
+    },
+    "expect": []
+  },
+  {
+    "name": "DULT service data UUID filter",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [],
+      "service_data": [
+        "0000fcb2-0000-1000-8000-00805f9b34fb:00"
+      ]
+    },
+    "expect": [
+      "fleet-dult"
+    ]
+  },
+  {
+    "name": "long MAC prefix",
+    "advert": {
+      "mac": "de:ad:be:ef:de:ad",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-pwnagotchi"
+    ]
+  },
+  {
+    "name": "long MAC prefix must match fully",
+    "advert": {
+      "mac": "DE:AD:BE:EF:00:01",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [],
+      "service_data": []
+    },
+    "expect": []
+  },
+  {
+    "name": "tesla name glob with ? wildcards",
+    "advert": {
+      "mac": "",
+      "name": "S1234567890abcdefC",
+      "service_uuids": [],
+      "manufacturer_records": [],
+      "service_data": []
+    },
+    "expect": [
+      "fleet-tesla"
+    ]
+  },
+  {
+    "name": "glob ? is exactly one character",
+    "advert": {
+      "mac": "",
+      "name": "S1234567890abcdeC",
+      "service_uuids": [],
+      "manufacturer_records": [],
+      "service_data": []
+    },
+    "expect": []
+  },
+  {
+    "name": "empty advert",
+    "advert": {
+      "mac": "",
+      "name": "",
+      "service_uuids": [],
+      "manufacturer_records": [],
+      "service_data": []
+    },
+    "expect": []
+  }
+]
