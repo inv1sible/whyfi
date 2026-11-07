@@ -22,6 +22,7 @@ import androidx.compose.material3.FilledTonalIconToggleButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,8 +57,8 @@ import kotlinx.coroutines.withContext
 
 /**
  * LAN sweep, reduced to one line: the field shows the WiFi network that
- * will be swept; the toggle on its left switches it to a custom range you
- * type. Results below; hosts with web ports open in the browser.
+ * will be swept; the pencil toggle on its left switches it to a custom
+ * range you type. Scan turns into Cancel while a sweep runs. Results below; hosts with web ports open in the browser.
  */
 @Composable
 fun LanScreen(service: ScanForegroundService?, uiState: ScanUiState) {
@@ -97,7 +98,7 @@ fun LanScreen(service: ScanForegroundService?, uiState: ScanUiState) {
                     modifier = Modifier.semantics {
                         contentDescription = if (custom) "Custom range. Tap to sweep the WiFi network." else "WiFi network. Tap to enter a custom range."
                     },
-                ) { Text(if (custom) "✏️" else "📶", fontSize = 18.sp) }
+                ) { Text("✏️", fontSize = 18.sp) }
                 OutlinedTextField(
                     value = if (custom) customText else wifiSubnet ?: "Not on WiFi",
                     onValueChange = { customText = it },
@@ -111,7 +112,11 @@ fun LanScreen(service: ScanForegroundService?, uiState: ScanUiState) {
                     textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
                     modifier = Modifier.weight(1f),
                 )
-                Button(onClick = { start() }, enabled = canScan) { Text(if (uiState.isLanScanning) "…" else "Scan") }
+                if (uiState.isLanScanning) {
+                    OutlinedButton(onClick = { service?.cancelLan() }) { Text("Cancel") }
+                } else {
+                    Button(onClick = { start() }, enabled = canScan) { Text("Scan") }
+                }
             }
         }
         // One short status line: what's wrong with the range, or what it covers.

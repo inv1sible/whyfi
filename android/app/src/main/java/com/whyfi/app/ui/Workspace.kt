@@ -27,6 +27,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
@@ -55,9 +58,9 @@ enum class Workspace(val key: String, val label: String, val icon: String) {
 }
 
 /**
- * One toggle switch left of a workspace's tab row: off = phone radios (📱),
- * on = USB adapter (🔌), the icon riding on the thumb. A single control
- * that flips, rather than two buttons side by side.
+ * One toggle switch left of a workspace's tab row, standing upright to save
+ * width: thumb up = phone radios (📱), thumb down = USB adapter (🔌), the
+ * icon riding on the thumb.
  */
 @Composable
 fun WorkspaceToggle(current: Workspace, onChange: (Workspace) -> Unit) {
@@ -65,12 +68,24 @@ fun WorkspaceToggle(current: Workspace, onChange: (Workspace) -> Unit) {
     Switch(
         checked = adapter,
         onCheckedChange = { onChange(if (it) Workspace.ADAPTER else Workspace.PHONE) },
-        thumbContent = { Text(current.icon, fontSize = 12.sp) },
+        // Counter-rotated so the emoji stays upright on the turned switch.
+        thumbContent = { Text(current.icon, fontSize = 12.sp, modifier = Modifier.rotate(-90f)) },
         modifier = Modifier
-            .padding(start = 8.dp, end = 4.dp)
+            .padding(horizontal = 4.dp)
+            .upright()
             .semantics { contentDescription = "Workspace: ${current.label}. Toggle to switch." },
     )
 }
+
+/** Lays the content out with width and height swapped and turns it 90°
+ * clockwise, so a horizontal control stands upright and only takes its
+ * height in width. Off/start ends up on top. */
+private fun Modifier.upright(): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(Constraints(maxWidth = constraints.maxHeight.coerceAtLeast(1), maxHeight = constraints.maxWidth.coerceAtLeast(1)))
+    layout(placeable.height, placeable.width) {
+        placeable.place((placeable.height - placeable.width) / 2, (placeable.width - placeable.height) / 2)
+    }
+}.rotate(90f)
 
 /** The toggle followed by a workspace's tab row, which takes the rest. */
 @Composable

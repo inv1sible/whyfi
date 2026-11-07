@@ -637,21 +637,43 @@ class ScanForegroundService : Service() {
             )
         }
         updateNotification("Scanning LAN…")
-        serviceScope.launch {
-            val result = scanCoordinator.runLanScan(
-                target = target,
-                onProgress = { checked, total -> _uiState.update { it.copy(lanChecked = checked, lanTotal = total) } },
-                onDeviceFound = { device -> _uiState.update { it.copy(lanDevices = it.lanDevices + device) } },
-            )
-            _uiState.update {
-                it.copy(
-                    isLanScanning = false, lanDeviceCount = result.lanObservations.size,
-                    lanLatitude = result.latitude, lanLongitude = result.longitude,
-                    lanAccuracyM = result.locationAccuracyMeters, lanFinishedAtMs = System.currentTimeMillis(),
+        lanJob = serviceScope.launch {
+            try {
+                val result = scanCoordinator.runLanScan(
+                    target = target,
+                    onProgress = { checked, total -> _uiState.update { it.copy(lanChecked = checked, lanTotal = total) } },
+                    onDeviceFound = { device -> _uiState.update { it.copy(lanDevices = it.lanDevices + device) } },
                 )
+                _uiState.update {
+                    it.copy(
+                        isLanScanning = false, lanDeviceCount = result.lanObservations.size,
+                        lanLatitude = result.latitude, lanLongitude = result.longitude,
+                        lanAccuracyM = result.locationAccuracyMeters, lanFinishedAtMs = System.currentTimeMillis(),
+                    )
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Cancelled from the LAN screen: keep what was found so far
+                // (it's still shown and can go into a report) but upload
+                // nothing — a partial sweep would read as an empty network.
+                _uiState.update {
+                    it.copy(isLanScanning = false, lanDeviceCount = it.lanDevices.size,
+                        lanFinishedAtMs = System.currentTimeMillis(),
+                        lanUnavailableReason = "Cancelled after ${it.lanChecked} of ${it.lanTotal} addresses.")
+                }
+                throw e
+            } finally {
+                lanJob = null
+                stopIfNothingKeepsUsAlive()
             }
-            stopIfNothingKeepsUsAlive()
         }
+    }
+
+    @Volatile
+    private var lanJob: kotlinx.coroutines.Job? = null
+
+    /** Stops a running LAN sweep; devices found so far stay on screen. */
+    fun cancelLan() {
+        lanJob?.cancel()
     }
 
     /** One bounded, user-started receive session. The service owns and closes
