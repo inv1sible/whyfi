@@ -28,10 +28,12 @@ data class LocationFix(
  * The gates are Fieldwatch's (`FieldwatchApp.acceptFix`, `Geo.hopPlausible`,
  * MIT): accuracy ≤ 75 m, age ≤ 30 s, and no hop of more than 40 m faster than
  * 42 m/s from the last accepted fix. Three deliberate changes:
- * - a hop that is markedly *more precise* than the anchor is accepted, so a
- *   coarse or stale first fix can't lock out good GPS far away;
- * - three consecutive rejected fixes that agree with each other re-anchor,
- *   so one wrong precise fix can't freeze the track either;
+ * - a GPS hop that is markedly *more precise* than the anchor is accepted,
+ *   so a coarse or stale first fix can't lock out good GPS far away;
+ * - three consecutive rejected GPS fixes that agree with each other
+ *   re-anchor, so one wrong precise fix can't freeze the track either;
+ * - an anchor nothing was accepted after for 2 minutes expires;
+ * - the speed limit rises with a fix's own measured speed (see hopPlausible);
  * - fixes under 0.8 s apart are judged over 0.8 s instead of waved through
  *   (Fieldwatch treats them as always plausible, which lets a network fix
  *   arriving right after a GPS fix teleport).
@@ -49,7 +51,16 @@ class FixSelector {
     fun offer(fix: LocationFix, nowBootMs: Long): Boolean {
         if (!valid(fix) || abs(nowBootMs - fix.bootMs) > MAX_AGE_MS) return false
         val anchor = accepted.maxByOrNull { it.bootMs }
-        val ok = anchor == null || hopPlausible(anchor, fix) || morePrecise(fix, anchor) || reanchors(fix)
+        // Only GPS may override the jump gate or re-anchor: it measures the
+        // position itself, while network/fused fixes come from Wi-Fi and cell
+        // databases that relocated access points fool (seen in real data:
+        // minutes of identical fixes 2,000+ km off, claiming 7 m accuracy).
+        val gps = fix.provider == GPS
+        val ok = anchor == null ||
+            fix.bootMs - anchor.bootMs > ANCHOR_EXPIRY_MS ||
+            hopPlausible(anchor, fix) ||
+            (gps && morePrecise(fix, anchor)) ||
+            (gps && reanchors(fix))
         if (ok) {
             accepted.addLast(fix)
             rejected.clear()
@@ -97,6 +108,8 @@ class FixSelector {
         const val MAX_TRUSTED_SPEED_MPS = 100.0
         const val PRECISE_FACTOR = 0.75
         const val REANCHOR_COUNT = 3
+        const val ANCHOR_EXPIRY_MS = 120_000L
+        const val GPS = "gps"
         private const val HISTORY_MS = 120_000L
 
         /** One-shot use of the same gates, e.g. on cached last-known fixes when

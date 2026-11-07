@@ -164,4 +164,27 @@ class FixSelectorTest {
         // A glitchy reported speed is capped at 100 m/s.
         assertFalse(selector.offer(fix("gps", 3.0, northM = 1500.0, speedMps = 900.0), at(3.0)))
     }
+
+    @Test
+    fun relocatedWifiFixIsRejectedEvenWhenItClaimsPrecision() {
+        // Seen in real data: indoors with no GPS, Wi-Fi location put the phone
+        // 2,000+ km away for minutes, claiming 7-12 m accuracy, repeated
+        // identically. Only GPS may override the jump gate or re-anchor.
+        val selector = FixSelector()
+        assertTrue(selector.offer(fix("network", 0.0, accuracyM = 16.0), at(0.0)))
+        for (i in 1..6) {
+            assertFalse(selector.offer(fix("fused", i * 2.0, northM = 2_000_000.0, accuracyM = 7.0), at(i * 2.0)))
+            if (i % 2 == 0) assertTrue(selector.offer(fix("network", i * 2.0, northM = 3.0, accuracyM = 16.0), at(i * 2.0)))
+        }
+        assertEquals(baseLat + 3.0 * m, selector.best(at(12.0))!!.lat, 1e-9)
+    }
+
+    @Test
+    fun staleAnchorExpires() {
+        // Nothing accepted for two minutes: the next fix starts afresh
+        // instead of being judged against a position from long ago.
+        val selector = FixSelector()
+        assertTrue(selector.offer(fix("network", 0.0, accuracyM = 30.0), at(0.0)))
+        assertTrue(selector.offer(fix("network", 121.0, northM = 9000.0, accuracyM = 30.0), at(121.0)))
+    }
 }
