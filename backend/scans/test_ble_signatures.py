@@ -284,6 +284,16 @@ class IngestSignatureTests(TestCase):
         self.assertEqual(len(obs.manufacturer_data_raw), 509)
         self.assertEqual([m["id"] for m in obs.signature_matches], ["fleet-osmo"])
 
+    def test_too_many_records_are_truncated_not_rejected(self):
+        self._post("sig-many", {
+            "ble_mac": "7A:11:22:33:44:5E", "rssi": -60,
+            "manufacturer_records": [f"{i:04x}:00" for i in range(0xF000, 0xF040)],
+            "service_data": [f"0000{i:04x}-0000-1000-8000-00805f9b34fb:00" for i in range(0xE000, 0xE040)],
+        })
+        obs = BLEObservation.objects.get()
+        self.assertEqual(len(obs.manufacturer_records), 32)
+        self.assertEqual(len(obs.service_data), 32)
+
     def test_device_signature_ids_accumulate(self):
         self._post("sig-a", {"ble_mac": "7A:11:22:33:44:58", "rssi": -60, "device_name": "Flipper Zero"})
         self._post("sig-b", {"ble_mac": "7A:11:22:33:44:58", "rssi": -61, "device_name": ""})

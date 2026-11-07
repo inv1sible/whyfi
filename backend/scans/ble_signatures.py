@@ -482,8 +482,16 @@ def relabel_all(
     longer in the catalog disappear. bulk_update never fires auto_now, so
     last_seen_at keeps meaning "last sighting".
 
+    Device ids are recomputed per batch under a row lock, from that batch's
+    observations as they are *then*, so a sighting ingested while this runs
+    (ingest locks the same row) isn't dropped. Deliberately no `.only()`:
+    the 0021 migration runs this on historical models, and a field list here
+    would break that migration once it names a later field.
+
     The model arguments let the migration backfill pass its historical models.
     """
+    from django.db import transaction
+
     if observation_model is None or device_model is None:
         from .models import BLEDevice, BLEObservation
 
@@ -491,19 +499,12 @@ def relabel_all(
         device_model = device_model or BLEDevice
     catalog = catalog or load_catalog()
 
-    fields = [
-        "id", "ble_device_id", "ble_mac", "device_name", "service_uuids", "manufacturer_records",
-        "service_data", "manufacturer_data_raw", "signature_matches", "signature_catalog_version",
-    ]
-    device_ids: dict[str, set[str]] = {}
     observations = 0
     pending = []
-    for obs in observation_model.objects.only(*fields).order_by("pk").iterator(chunk_size=batch_size):
+    for obs in observation_model.objects.order_by("pk").iterator(chunk_size=batch_size):
         observations += 1
         before = (obs.signature_matches, obs.signature_catalog_version)
         label_ble_observation(obs, catalog)
-        if obs.ble_device_id is not None:
-            device_ids.setdefault(obs.ble_device_id, set()).update(m["id"] for m in obs.signature_matches)
         if (obs.signature_matches, obs.signature_catalog_version) != before:
             pending.append(obs)
         if len(pending) >= batch_size:
@@ -512,20 +513,23 @@ def relabel_all(
     if pending:
         observation_model.objects.bulk_update(pending, ["signature_matches", "signature_catalog_version"])
 
-    devices = 0
-    pending = []
-    for device in device_model.objects.only("device_key", "signature_ids").order_by("pk").iterator(
-        chunk_size=batch_size
-    ):
-        devices += 1
-        ids = sorted(device_ids.get(device.pk, ()))
-        if device.signature_ids != ids:
-            device.signature_ids = ids
-            pending.append(device)
-        if len(pending) >= batch_size:
-            device_model.objects.bulk_update(pending, ["signature_ids"])
-            pending = []
-    if pending:
-        device_model.objects.bulk_update(pending, ["signature_ids"])
+    keys = list(device_model.objects.order_by("pk").values_list("pk", flat=True))
+    for start in range(0, len(keys), batch_size):
+        batch = keys[start:start + batch_size]
+        with transaction.atomic():
+            devices = list(device_model.objects.select_for_update().filter(pk__in=batch).order_by("pk"))
+            ids: dict = {}
+            for device_id, matches in observation_model.objects.filter(ble_device_id__in=batch).values_list(
+                "ble_device_id", "signature_matches"
+            ):
+                ids.setdefault(device_id, set()).update(m["id"] for m in matches or ())
+            changed = []
+            for device in devices:
+                fresh = sorted(ids.get(device.pk, ()))
+                if device.signature_ids != fresh:
+                    device.signature_ids = fresh
+                    changed.append(device)
+            if changed:
+                device_model.objects.bulk_update(changed, ["signature_ids"])
 
-    return {"observations": observations, "devices": devices, "catalog_version": catalog.version}
+    return {"observations": observations, "devices": len(keys), "catalog_version": catalog.version}

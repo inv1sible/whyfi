@@ -515,13 +515,19 @@ class BLEObservationInputSerializer(serializers.Serializer):
     manufacturer_data = serializers.CharField(max_length=1024, allow_blank=True, default="")
     service_uuids = serializers.ListField(child=serializers.CharField(), default=list)
     # The complete advert, sent by newer APKs. Optional, so old payloads
-    # still ingest (and still get labeled from manufacturer_data).
-    manufacturer_records = serializers.ListField(
-        child=serializers.CharField(max_length=4096), max_length=32, default=list
-    )
-    service_data = serializers.ListField(
-        child=serializers.CharField(max_length=4096), max_length=32, default=list
-    )
+    # still ingest (and still get labeled from manufacturer_data). Over-long
+    # lists are truncated, not rejected: a 400 here would drop the whole
+    # scan session (AD structures cap out well under 4096 hex chars).
+    manufacturer_records = serializers.ListField(child=serializers.CharField(max_length=4096), default=list)
+    service_data = serializers.ListField(child=serializers.CharField(max_length=4096), default=list)
+
+    MAX_ADVERT_ENTRIES = 32
+
+    def validate_manufacturer_records(self, value):
+        return value[: self.MAX_ADVERT_ENTRIES]
+
+    def validate_service_data(self, value):
+        return value[: self.MAX_ADVERT_ENTRIES]
     device_type_guess = serializers.ChoiceField(
         choices=BLEObservation.DeviceType.choices, default=BLEObservation.DeviceType.UNKNOWN
     )
@@ -757,6 +763,10 @@ class ScanSessionIngestSerializer(serializers.Serializer):
                     },
                 )
                 if not device_created:
+                    # Row lock so concurrent ingests (and relabel_all, which
+                    # locks the same rows) can't drop each other's
+                    # signature_ids from the read-modify-write below.
+                    ble_device = BLEDevice.objects.select_for_update().get(pk=ble_device.pk)
                     # Always save (not just on change) so last_seen_at
                     # (auto_now) actually reflects this sighting — same
                     # reasoning as AccessPoint/CellTower/LANDevice above.
