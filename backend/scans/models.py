@@ -75,6 +75,9 @@ class AccessPoint(models.Model):
     bssid = models.CharField(max_length=17, primary_key=True)
     ssid = models.CharField(max_length=64, blank=True)
     vendor_oui = models.CharField(max_length=8, blank=True)
+    # Sorted union of catalog signature ids over this AP's observations
+    # (WiFiObservation.signature_matches). Recomputed by relabel_signatures.
+    signature_ids = models.JSONField(default=list, blank=True)
     first_seen_at = models.DateTimeField(auto_now_add=True)
     last_seen_at = models.DateTimeField(auto_now=True)
 
@@ -122,6 +125,14 @@ class WiFiObservation(models.Model):
     is_80211mc_responder = models.BooleanField(default=False)
     operator_friendly_name = models.CharField(max_length=128, blank=True)
     venue_name = models.CharField(max_length=128, blank=True)
+    # OUIs ("AA:BB:CC") of the beacon's vendor-specific IEs (element 221),
+    # from ScanResult.getInformationElements() on Android 11+. Raw input
+    # for signature matching, kept so history can be relabeled.
+    vendor_ie_ouis = models.JSONField(default=list, blank=True)
+    # Derived by scans/wifi_signatures.py from the BSSID, the AP's SSID and
+    # vendor_ie_ouis: [{"id", "rule", "via"?}]. Informational only.
+    signature_matches = models.JSONField(default=list, blank=True)
+    signature_catalog_version = models.IntegerField(null=True, blank=True)
     observed_at = models.DateTimeField()
 
     class Meta:

@@ -3,6 +3,7 @@ from rest_framework import serializers
 
 from .ble_signatures import label_ble_observation, load_catalog, merge_signature_ids
 from .geocoding import GEOCODE_PRECISION
+from .wifi_signatures import MAX_VENDOR_IES, match_wifi, parse_wifi
 from .models import (
     AccessPoint,
     BLEDevice,
@@ -153,6 +154,7 @@ class WiFiObservationSerializer(serializers.ModelSerializer):
             "id", "scan_session", "access_point", "rssi", "frequency_mhz", "channel", "band", "security_type",
             "observed_at", "channel_width_mhz", "center_freq0_mhz", "center_freq1_mhz", "wifi_standard",
             "is_80211mc_responder", "operator_friendly_name", "venue_name",
+            "vendor_ie_ouis", "signature_matches", "signature_catalog_version",
             "latitude", "longitude", "location_accuracy_meters",
         ]
 
@@ -471,7 +473,13 @@ class WiFiObservationInputSerializer(serializers.Serializer):
     is_80211mc_responder = serializers.BooleanField(default=False)
     operator_friendly_name = serializers.CharField(max_length=128, allow_blank=True, default="")
     venue_name = serializers.CharField(max_length=128, allow_blank=True, default="")
+    # Optional (Android 11+ APKs from 2026-11 on). Truncated, never rejected:
+    # a 400 would drop the whole scan session.
+    vendor_ie_ouis = serializers.ListField(child=serializers.CharField(max_length=17), default=list)
     observed_at = serializers.DateTimeField(required=False)
+
+    def validate_vendor_ie_ouis(self, value):
+        return value[:MAX_VENDOR_IES]
 
 
 class FTMRangingObservationInputSerializer(serializers.Serializer):
@@ -630,6 +638,8 @@ class ScanSessionIngestSerializer(serializers.Serializer):
 
         default_observed_at = validated_data["completed_at"]
 
+        # Signature catalog (scans/ble_signatures.py), cached per process.
+        catalog = load_catalog()
         for item in validated_data.get("wifi_observations", []):
             # ap_created, not `created` — that name belongs to the session
             # get_or_create above, and shadowing it here made the
@@ -639,15 +649,27 @@ class ScanSessionIngestSerializer(serializers.Serializer):
                 bssid=item["bssid"], defaults={"ssid": item.get("ssid", "")}
             )
             if not ap_created:
+                # Row lock: the signature_ids union below is a
+                # read-modify-write, and relabel_all_wifi locks the same rows.
+                access_point = AccessPoint.objects.select_for_update().get(pk=access_point.pk)
                 # Always save (not just on SSID change) so last_seen_at
                 # (auto_now) actually reflects this sighting — an AP seen
                 # again with an unchanged SSID otherwise never updates it.
                 if item.get("ssid") and access_point.ssid != item["ssid"]:
                     access_point.ssid = item["ssid"]
-                access_point.save(update_fields=["ssid", "last_seen_at"])
+
+            # Labels use the AP's known SSID (observations don't store one),
+            # exactly as relabel_all_wifi does, so the two always agree.
+            vendor_ie_ouis = item.get("vendor_ie_ouis", [])
+            matches = match_wifi(parse_wifi(item["bssid"], access_point.ssid, vendor_ie_ouis), catalog)
+            access_point.signature_ids = merge_signature_ids(access_point.signature_ids, matches)
+            access_point.save(update_fields=["ssid", "signature_ids", "last_seen_at"])
 
             frequency = item["frequency_mhz"]
             WiFiObservation.objects.create(
+                vendor_ie_ouis=vendor_ie_ouis,
+                signature_matches=matches,
+                signature_catalog_version=catalog.version,
                 scan_session=session,
                 access_point=access_point,
                 rssi=item["rssi"],
@@ -730,7 +752,6 @@ class ScanSessionIngestSerializer(serializers.Serializer):
                 observed_at=item.get("observed_at", default_observed_at),
             )
 
-        catalog = load_catalog() if validated_data.get("ble_observations") else None
         for item in validated_data.get("ble_observations", []):
             obs = BLEObservation(
                 scan_session=session,

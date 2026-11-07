@@ -3,10 +3,15 @@
 import json
 from pathlib import Path
 
-from django.test import SimpleTestCase
+from django.contrib.auth import get_user_model
+from django.test import SimpleTestCase, TestCase
+from rest_framework.test import APIClient
+
+from sensors.models import Sensor
 
 from .ble_signatures import parse_catalog
 from .test_ble_signatures import _catalog_dict, _fleet, _rule
+from .models import AccessPoint, ScanSession, WiFiObservation
 from .wifi_signatures import match_wifi, parse_wifi, universal_oui
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "wifi_signature_cases.json"
@@ -118,3 +123,77 @@ class WifiMatcherTests(SimpleTestCase):
         parsed = _ap("9e:aa:bb:00:00:01", "x", ["fa:0b:bc", "FA-0B-BC", "zz:00:11", "12", 7, "00:50:F2:01"])
         self.assertEqual(parsed.vendor_ie_ouis, ("FA0BBC",))
         self.assertEqual(parsed.bssid_hex, "9EAABB000001")
+
+
+def _wifi(bssid, ssid="", **extra):
+    return {"bssid": bssid, "ssid": ssid, "rssi": -60, "frequency_mhz": 2437,
+            "capabilities": "[WPA2-PSK-CCMP][ESS]", **extra}
+
+
+class IngestWifiSignatureTests(TestCase):
+    def setUp(self):
+        self.sensor = Sensor.objects.create(name="Field Phone")
+        self.ingest = APIClient()
+        self.ingest.credentials(HTTP_AUTHORIZATION=f"Token {self.sensor.token}")
+        self.reader = APIClient()
+        self.reader.force_authenticate(user=get_user_model().objects.create_user(username="op", password="pw-123456"))
+
+    def _post(self, client_scan_id, *observations):
+        response = self.ingest.post("/api/v1/scan-sessions/", {
+            "client_scan_id": client_scan_id,
+            "started_at": "2026-11-07T10:00:00Z", "completed_at": "2026-11-07T10:00:06Z",
+            "latitude": 48.1351, "longitude": 11.582,
+            "wifi_observations": list(observations),
+        }, format="json")
+        self.assertEqual(response.status_code, 201, response.content)
+
+    def test_new_payload_is_labeled(self):
+        self._post("w-1", _wifi("9E:AA:BB:00:00:01", "DJI-Mavic-3", vendor_ie_ouis=["FA:0B:BC", "00:50:F2"]))
+        obs = WiFiObservation.objects.get()
+        self.assertEqual(obs.vendor_ie_ouis, ["FA:0B:BC", "00:50:F2"])
+        self.assertEqual(obs.signature_matches, [
+            {"id": "fleet-dji", "rule": "NAME_CONTAINS"},
+            {"id": "fleet-remote-id", "rule": "VENDOR_IE_OUI", "via": "vendor_ie"},
+        ])
+        self.assertEqual(obs.signature_catalog_version, 98)
+        self.assertEqual(AccessPoint.objects.get().signature_ids, ["fleet-dji", "fleet-remote-id"])
+
+    def test_legacy_wifi_payload_is_labeled(self):
+        self._post("w-legacy", _wifi("24:16:1B:00:00:01", "Corp"))
+        obs = WiFiObservation.objects.get()
+        self.assertEqual(obs.vendor_ie_ouis, [])
+        self.assertEqual(obs.signature_matches, [{"id": "fleet-cisco", "rule": "OUI", "via": "bssid"}])
+
+    def test_vendor_ies_truncated_not_rejected(self):
+        self._post("w-many", _wifi("9E:AA:BB:00:00:02", "x", vendor_ie_ouis=[f"AA:BB:{i:02X}" for i in range(40)]))
+        self.assertEqual(len(WiFiObservation.objects.get().vendor_ie_ouis), 32)
+
+    def test_hidden_sighting_uses_the_known_ssid(self):
+        # The SSID lives on AccessPoint; a later hidden sighting keeps its name.
+        self._post("w-h1", _wifi("9E:AA:BB:00:00:03", "DJI-Mavic-3"))
+        self._post("w-h2", _wifi("9E:AA:BB:00:00:03", ""))
+        self.assertEqual(
+            [o.signature_matches for o in WiFiObservation.objects.order_by("id")],
+            [[{"id": "fleet-dji", "rule": "NAME_CONTAINS"}]] * 2,
+        )
+
+    def test_ap_signature_ids_accumulate(self):
+        self._post("w-a", _wifi("9E:AA:BB:00:00:04", "x", vendor_ie_ouis=["FA:0B:BC"]))
+        self._post("w-b", _wifi("9E:AA:BB:00:00:04", "x"))
+        self.assertEqual(AccessPoint.objects.get().signature_ids, ["fleet-remote-id"])
+
+    def test_export_import_preserves_vendor_ies(self):
+        self._post("w-io", _wifi("9E:AA:BB:00:00:05", "x", vendor_ie_ouis=["50:52:4B"]))
+        exported = self.reader.get("/api/v1/scan-sessions/export/").json()
+        self.assertEqual(exported["sessions"][0]["wifi_observations"][0]["vendor_ie_ouis"], ["50:52:4B"])
+        ScanSession.objects.all().delete()
+        AccessPoint.objects.all().delete()
+        restored = self.reader.post("/api/v1/scan-sessions/import_sessions/", exported, format="json")
+        self.assertEqual(restored.json()["created"], 1, restored.content)
+        self.assertEqual(AccessPoint.objects.get().signature_ids, ["fleet-porkchop"])
+
+    def test_read_serializer_exposes_matches(self):
+        self._post("w-read", _wifi("24:16:1B:00:00:02", "Corp"))
+        rows = self.reader.get("/api/v1/access-points/24:16:1B:00:00:02/wifi-observations/").json()
+        self.assertEqual(rows[0]["signature_matches"], [{"id": "fleet-cisco", "rule": "OUI", "via": "bssid"}])
+        self.assertEqual(rows[0]["vendor_ie_ouis"], [])

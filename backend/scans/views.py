@@ -283,6 +283,7 @@ def export_session_payload(session):
                 "is_80211mc_responder": o.is_80211mc_responder,
                 "operator_friendly_name": o.operator_friendly_name,
                 "venue_name": o.venue_name,
+                "vendor_ie_ouis": o.vendor_ie_ouis,
                 "observed_at": o.observed_at.isoformat(),
             }
             for o in session.wifi_observations.all()
