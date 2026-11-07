@@ -11,7 +11,7 @@ enum class RadioKind(val label: String, val icon: String) {
     WIFI("WiFi", "📶"),
     CELLULAR("Cellular", "📡"),
     BLE("BLE", "🔵"),
-    SATELLITE("Satellites", "🛰️"),
+    SATELLITE("GPS", "🛰️"),
 }
 
 /**

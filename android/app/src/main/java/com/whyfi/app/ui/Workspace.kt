@@ -4,15 +4,7 @@ import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.SystemClock
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.sp
@@ -23,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -62,39 +55,22 @@ enum class Workspace(val key: String, val label: String, val icon: String) {
 }
 
 /**
- * Compact two-way toggle that sits left of a workspace's tab row: phone on
- * top, USB plug below, the active one filled. Sized to the tab row's height
- * so it reads as part of the tab bar rather than a separate control.
+ * One toggle switch left of a workspace's tab row: off = phone radios (📱),
+ * on = USB adapter (🔌), the icon riding on the thumb. A single control
+ * that flips, rather than two buttons side by side.
  */
 @Composable
 fun WorkspaceToggle(current: Workspace, onChange: (Workspace) -> Unit) {
-    val scheme = MaterialTheme.colorScheme
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(1.dp, scheme.outlineVariant),
-        modifier = Modifier.padding(start = 6.dp, end = 2.dp).width(TOGGLE_WIDTH),
-    ) {
-        Column {
-            Workspace.entries.forEach { workspace ->
-                val selected = workspace == current
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(TOGGLE_CELL_HEIGHT)
-                        .background(if (selected) scheme.primaryContainer else Color.Transparent)
-                        .selectable(selected = selected, role = Role.RadioButton) { onChange(workspace) }
-                        .semantics { contentDescription = workspace.label },
-                ) {
-                    Text(workspace.icon, fontSize = 16.sp, color = if (selected) scheme.onSurface else scheme.onSurfaceVariant)
-                }
-            }
-        }
-    }
+    val adapter = current == Workspace.ADAPTER
+    Switch(
+        checked = adapter,
+        onCheckedChange = { onChange(if (it) Workspace.ADAPTER else Workspace.PHONE) },
+        thumbContent = { Text(current.icon, fontSize = 12.sp) },
+        modifier = Modifier
+            .padding(start = 8.dp, end = 4.dp)
+            .semantics { contentDescription = "Workspace: ${current.label}. Toggle to switch." },
+    )
 }
-
-private val TOGGLE_WIDTH = 44.dp
-private val TOGGLE_CELL_HEIGHT = 28.dp
 
 /** The toggle followed by a workspace's tab row, which takes the rest. */
 @Composable

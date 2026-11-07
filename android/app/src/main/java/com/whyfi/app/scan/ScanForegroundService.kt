@@ -125,6 +125,11 @@ data class ScanUiState(
     // Grows live as devices are confirmed during a LAN scan, and stays
     // populated afterwards as the "last results" until the next scan starts.
     val lanDevices: List<LanObservationDto> = emptyList(),
+    /** Where and when the last sweep finished, for the LAN report. */
+    val lanLatitude: Double? = null,
+    val lanLongitude: Double? = null,
+    val lanAccuracyM: Float? = null,
+    val lanFinishedAtMs: Long = 0L,
     // The two most recent completed passes, kept so the UI can show what was
     // actually found rather than only how many — and diff the two (see
     // ScanDiff). Two is the whole buffer: it's what "new since last time"
@@ -171,6 +176,20 @@ class ScanForegroundService : Service() {
     private var remoteAgentJob: Job? = null
     private val _monitorState = MutableStateFlow(MonitorUiState())
     val monitorState: StateFlow<MonitorUiState> = _monitorState.asStateFlow()
+
+    // The phone's path this session (see LocationTrack): fed by every fix
+    // LiveLocationTracker receives, i.e. while scanning, sweeping, or while
+    // the GPS screen is open (watchLocation).
+    private val _locationTrack = MutableStateFlow<List<TrackPoint>>(emptyList())
+    val locationTrack: StateFlow<List<TrackPoint>> = _locationTrack.asStateFlow()
+
+    /** Keeps location updates on while a screen shows the live position.
+     * Reference-counted with scans through LiveLocationTracker. */
+    fun watchLocation(on: Boolean) {
+        if (on) scanCoordinator.liveLocation.acquire() else scanCoordinator.liveLocation.release()
+    }
+
+    fun clearLocationTrack() { _locationTrack.value = emptyList() }
     private var monitorMission: MonitorMission.Files? = null
 
     /** Read at the top of every continuous iteration rather than captured
@@ -230,6 +249,15 @@ class ScanForegroundService : Service() {
         super.onCreate()
         android.util.Log.i("ScanForegroundService", "onCreate")
         scanCoordinator = ScanCoordinator(applicationContext)
+        scanCoordinator.liveLocation.onLocation = { location ->
+            val point = TrackPoint(
+                atMs = location.time.takeIf { it > 0 } ?: System.currentTimeMillis(),
+                lat = location.latitude, lng = location.longitude,
+                accuracyM = if (location.hasAccuracy()) location.accuracy.toDouble() else null,
+                provider = location.provider ?: "unknown",
+            )
+            _locationTrack.update { LocationTrack.append(it, point) }
+        }
         settingsRepository = SettingsRepository(applicationContext)
         createNotificationChannel()
         // Restore the last completed pass so the Dashboard isn't blank after a
@@ -615,7 +643,13 @@ class ScanForegroundService : Service() {
                 onProgress = { checked, total -> _uiState.update { it.copy(lanChecked = checked, lanTotal = total) } },
                 onDeviceFound = { device -> _uiState.update { it.copy(lanDevices = it.lanDevices + device) } },
             )
-            _uiState.update { it.copy(isLanScanning = false, lanDeviceCount = result.lanObservations.size) }
+            _uiState.update {
+                it.copy(
+                    isLanScanning = false, lanDeviceCount = result.lanObservations.size,
+                    lanLatitude = result.latitude, lanLongitude = result.longitude,
+                    lanAccuracyM = result.locationAccuracyMeters, lanFinishedAtMs = System.currentTimeMillis(),
+                )
+            }
             stopIfNothingKeepsUsAlive()
         }
     }

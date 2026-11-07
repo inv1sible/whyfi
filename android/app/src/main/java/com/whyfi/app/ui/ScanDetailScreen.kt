@@ -31,6 +31,7 @@ import com.whyfi.app.scan.DeviceRow
 import com.whyfi.app.scan.RadioKind
 import com.whyfi.app.scan.ScanCoordinator
 import com.whyfi.app.scan.ScanDiff
+import com.whyfi.app.scan.ScanForegroundService
 import com.whyfi.app.scan.ScanUiState
 import com.whyfi.app.ui.components.DataTable
 import com.whyfi.app.ui.components.DataTableRow
@@ -83,6 +84,7 @@ fun ScanDetailScreen(
     onKindChange: (RadioKind) -> Unit,
     onBack: () -> Unit,
     favoritesRepository: FavoritesRepository,
+    service: ScanForegroundService? = null,
 ) {
     val rows = remember(kind, uiState.latestPass, uiState.previousPass) {
         ScanDiff.rowsFor(kind, uiState.latestPass, uiState.previousPass)
@@ -140,6 +142,8 @@ fun ScanDetailScreen(
                 )
             }
         }
+
+        if (kind == RadioKind.SATELLITE) GpsPanel(service, uiState)
 
         Text(
             summaryLine(summary.total, summary.new, summary.gone, summary.comparable),

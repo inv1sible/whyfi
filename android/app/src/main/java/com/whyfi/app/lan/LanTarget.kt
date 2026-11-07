@@ -2,10 +2,12 @@ package com.whyfi.app.lan
 
 /**
  * What a LAN sweep covers: the automatic choice (WiFi first, then wired),
- * one named interface's subnet, or an address range typed by the user.
+ * the WiFi network only (what the LAN screen offers), one named
+ * interface's subnet, or an address range typed by the user.
  */
 sealed interface LanTarget {
     data object Auto : LanTarget
+    data object Wifi : LanTarget
     data class Interface(val name: String) : LanTarget
     data class Custom(val text: String) : LanTarget
 }

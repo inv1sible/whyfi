@@ -257,6 +257,7 @@ private fun WhyfiApp(
             onKindChange = { detailRadio = it.name },
             onBack = { detailRadio = null },
             favoritesRepository = favoritesRepository,
+            service = service,
         )
         return
     }
@@ -300,7 +301,7 @@ private fun WhyfiApp(
         }
         WorkspaceTabBar(workspace, switchWorkspace) {
             TabRow(selectedTabIndex = selectedTab.coerceAtMost(tabCount - 1)) {
-                WhyfiTab(DASHBOARD_ICON, "Dashboard", 0, selectedTab) { goToTab(0) }
+                WhyfiTab(DASHBOARD_ICON, "Overview", 0, selectedTab) { goToTab(0) }
                 WhyfiTab(SCAN_ICON, "Scan", 1, selectedTab) { goToTab(1) }
                 WhyfiTab(LAN_ICON, "LAN", 2, selectedTab) { goToTab(2) }
                 WhyfiTab(SETTINGS_ICON, "Settings", 3, selectedTab) { goToTab(3) }

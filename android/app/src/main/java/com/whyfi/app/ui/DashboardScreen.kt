@@ -19,6 +19,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.whyfi.app.report.PhoneReports
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.whyfi.app.mission.MissionController
@@ -54,13 +56,13 @@ fun DashboardScreen(
     onOpenMission: () -> Unit = {},
 ) {
     val survey = uiState.survey
+    val context = LocalContext.current
     val outbox = rememberOutboxStatus(uiState.completedScanCount)
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("Dashboard", style = MaterialTheme.typography.headlineSmall)
 
         // survey.hasData tracks the session-scoped tally (passCount), which
         // stays 0 when the Dashboard is backfilled from the backend rather
@@ -85,7 +87,12 @@ fun DashboardScreen(
                     "since ${formatClock(survey.startedAtMs)}",
                 style = MaterialTheme.typography.bodyMedium,
             )
-            TextButton(onClick = { service?.resetSessionCounters() }) { Text("Reset") }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ReportButton(enabled = true) {
+                    PhoneReports.overview(context, uiState, service?.locationTrack?.value.orEmpty())
+                }
+                TextButton(onClick = { service?.resetSessionCounters() }) { Text("Reset") }
+            }
         }
 
         Text("Unique devices heard", style = MaterialTheme.typography.titleMedium)

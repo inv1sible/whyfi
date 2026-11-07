@@ -28,6 +28,10 @@ import android.util.Log
 class LiveLocationTracker(private val context: Context) {
     val selector = FixSelector()
 
+    /** Every fix as it arrives (main thread), for the GPS screen's path. */
+    @Volatile
+    var onLocation: ((Location) -> Unit)? = null
+
     @Volatile
     private var latestFused: Location? = null
     private var users = 0
@@ -97,6 +101,7 @@ class LiveLocationTracker(private val context: Context) {
     private fun offer(location: Location) {
         if (location.provider == FUSED) latestFused = location
         selector.offer(location.toFix(), SystemClock.elapsedRealtime())
+        onLocation?.invoke(location)
     }
 
     companion object {

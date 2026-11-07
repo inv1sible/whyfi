@@ -1,5 +1,9 @@
 package com.whyfi.app.usbmon
 
+import com.whyfi.app.report.CellKind
+import com.whyfi.app.report.ReportColumn
+import com.whyfi.app.report.ReportStat
+import com.whyfi.app.report.ReportTable
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.cos
@@ -7,19 +11,10 @@ import kotlin.math.max
 
 /**
  * What goes into a mission PDF's tables, map legend and appendix, kept apart
- * from the drawing (MonitorReportPdf) so it is plain data and JVM-testable
+ * from the drawing (report/ReportPdf) so it is plain data and JVM-testable
  * (MonitorReportContentTest).
  */
 internal object MonitorReportContent {
-
-    enum class CellKind { TEXT, MONO, NUMBER, BAR }
-
-    data class Column(val header: String, val weight: Float, val kind: CellKind = CellKind.TEXT)
-
-    /** [empty] is printed instead of the table when there are no rows. */
-    data class Table(val columns: List<Column>, val rows: List<List<String>>, val empty: String, val note: String? = null)
-
-    data class Stat(val value: String, val label: String)
 
     data class MapMarker(val number: Int, val label: String, val lat: Double, val lng: Double, val uncertaintyM: Double)
 
@@ -47,22 +42,22 @@ internal object MonitorReportContent {
     private fun coord(value: Double) = String.format(Locale.US, "%.6f", value)
     private fun metres(value: Double) = String.format(Locale.US, "≥%.0f m", value)
 
-    fun stats(frames: Long, aps: Int, clients: Int, probingOnly: Int, eapolKeyFrames: Long, pinned: Int): List<Stat> = listOf(
-        Stat(number(frames), "frames received"),
-        Stat(number(aps.toLong()), "access points"),
-        Stat(number(clients.toLong()), "clients"),
-        Stat(number(probingOnly.toLong()), "probing, no association seen"),
-        Stat(number(eapolKeyFrames), "EAPOL-Key frames (latest capture)"),
-        Stat(number(pinned.toLong()), "pinned devices"),
+    fun stats(frames: Long, aps: Int, clients: Int, probingOnly: Int, eapolKeyFrames: Long, pinned: Int): List<ReportStat> = listOf(
+        ReportStat(number(frames), "frames received"),
+        ReportStat(number(aps.toLong()), "access points"),
+        ReportStat(number(clients.toLong()), "clients"),
+        ReportStat(number(probingOnly.toLong()), "probing, no association seen"),
+        ReportStat(number(eapolKeyFrames), "EAPOL-Key frames (latest capture)"),
+        ReportStat(number(pinned.toLong()), "pinned devices"),
     )
 
     /** Section 2: one row per starred device, numbered like the overview map. */
-    fun positionsTable(targets: List<String>, estimates: Map<String, MonitorEstimate?>, names: Map<String, String>): Table =
-        Table(
+    fun positionsTable(targets: List<String>, estimates: Map<String, MonitorEstimate?>, names: Map<String, String>): ReportTable =
+        ReportTable(
             columns = listOf(
-                Column("#", 0.35f, CellKind.NUMBER), Column("Device", 1.5f), Column("MAC", 1.45f, CellKind.MONO),
-                Column("Latitude", 1.05f, CellKind.NUMBER), Column("Longitude", 1.05f, CellKind.NUMBER),
-                Column("Uncertainty", 0.85f, CellKind.NUMBER), Column("Places", 0.6f, CellKind.NUMBER), Column("Status", 1f),
+                ReportColumn("#", 0.35f, CellKind.NUMBER), ReportColumn("Device", 1.5f), ReportColumn("MAC", 1.45f, CellKind.MONO),
+                ReportColumn("Latitude", 1.05f, CellKind.NUMBER), ReportColumn("Longitude", 1.05f, CellKind.NUMBER),
+                ReportColumn("Uncertainty", 0.85f, CellKind.NUMBER), ReportColumn("Places", 0.6f, CellKind.NUMBER), ReportColumn("Status", 1f),
             ),
             rows = targets.mapIndexed { index, mac ->
                 val e = estimates[mac]
@@ -77,7 +72,7 @@ internal object MonitorReportContent {
         )
 
     /** Section 3: receiver-derived hints for every device heard while a fix was available. */
-    fun observationsTable(samplesByMac: Map<String, List<MonitorGeoSample>>, names: Map<String, String>): Table {
+    fun observationsTable(samplesByMac: Map<String, List<MonitorGeoSample>>, names: Map<String, String>): ReportTable {
         val rows = samplesByMac.entries.sortedByDescending { it.value.size }.mapNotNull { (mac, samples) ->
             val e = MonitorLocalization.estimate(samples) ?: return@mapNotNull null
             listOf(
@@ -85,11 +80,11 @@ internal object MonitorReportContent {
                 coord(e.lat), coord(e.lng), metres(e.uncertaintyM), if (e.provisional) "receiver hint" else "estimate",
             )
         }
-        return Table(
+        return ReportTable(
             columns = listOf(
-                Column("Device", 1.5f), Column("MAC", 1.45f, CellKind.MONO), Column("Readings", 0.75f, CellKind.NUMBER),
-                Column("Latitude", 1.05f, CellKind.NUMBER), Column("Longitude", 1.05f, CellKind.NUMBER),
-                Column("Uncertainty", 0.85f, CellKind.NUMBER), Column("Kind", 0.95f),
+                ReportColumn("Device", 1.5f), ReportColumn("MAC", 1.45f, CellKind.MONO), ReportColumn("Readings", 0.75f, CellKind.NUMBER),
+                ReportColumn("Latitude", 1.05f, CellKind.NUMBER), ReportColumn("Longitude", 1.05f, CellKind.NUMBER),
+                ReportColumn("Uncertainty", 0.85f, CellKind.NUMBER), ReportColumn("Kind", 0.95f),
             ),
             rows = rows,
             empty = "No device reading could be matched to a phone location fix.",
@@ -98,11 +93,11 @@ internal object MonitorReportContent {
     }
 
     /** Section 4: every device in the inventory, most recently heard first. */
-    fun devicesTable(devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>>): Table = Table(
+    fun devicesTable(devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>>): ReportTable = ReportTable(
         columns = listOf(
-            Column("MAC", 1.45f, CellKind.MONO), Column("Name / vendor", 1.9f), Column("Type", 1.15f),
-            Column("Best RSSI", 0.7f, CellKind.NUMBER), Column("Channels", 0.85f),
-            Column("Frames", 0.75f, CellKind.NUMBER), Column("Probes", 0.6f, CellKind.NUMBER),
+            ReportColumn("MAC", 1.45f, CellKind.MONO), ReportColumn("Name / vendor", 1.9f), ReportColumn("Type", 1.15f),
+            ReportColumn("Best RSSI", 0.7f, CellKind.NUMBER), ReportColumn("Channels", 0.85f),
+            ReportColumn("Frames", 0.75f, CellKind.NUMBER), ReportColumn("Probes", 0.6f, CellKind.NUMBER),
         ),
         rows = devices.sortedByDescending { it.first.lastMs }.map { (d, g) ->
             listOf(
@@ -115,10 +110,10 @@ internal object MonitorReportContent {
     )
 
     /** Section 5: frames per channel with a share bar (the BAR cell holds the fraction). */
-    fun channelsTable(channelFrames: Map<Int, Long>): Table {
+    fun channelsTable(channelFrames: Map<Int, Long>): ReportTable {
         val total = channelFrames.values.sum().coerceAtLeast(1)
-        return Table(
-            columns = listOf(Column("Channel", 0.8f, CellKind.NUMBER), Column("Frames", 1f, CellKind.NUMBER), Column("Share", 4f, CellKind.BAR)),
+        return ReportTable(
+            columns = listOf(ReportColumn("Channel", 0.8f, CellKind.NUMBER), ReportColumn("Frames", 1f, CellKind.NUMBER), ReportColumn("Share", 4f, CellKind.BAR)),
             rows = channelFrames.entries.sortedBy { it.key }.map { (channel, frames) ->
                 listOf("$channel", number(frames), String.format(Locale.US, "%.4f", frames.toDouble() / total))
             },
@@ -127,10 +122,10 @@ internal object MonitorReportContent {
     }
 
     /** Appendix A: the long per-device fields that would swamp the main table. */
-    fun deviceDetailsTable(devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>>): Table = Table(
+    fun deviceDetailsTable(devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>>): ReportTable = ReportTable(
         columns = listOf(
-            Column("MAC", 1.3f, CellKind.MONO), Column("Associated APs", 1.5f), Column("Probed networks", 1.6f),
-            Column("Security / WPS", 2f), Column("Type reasons", 1.4f),
+            ReportColumn("MAC", 1.3f, CellKind.MONO), ReportColumn("Associated APs", 1.5f), ReportColumn("Probed networks", 1.6f),
+            ReportColumn("Security / WPS", 2f), ReportColumn("Type reasons", 1.4f),
         ),
         rows = devices.sortedBy { it.first.mac }.mapNotNull { (d, g) ->
             val security = listOf(d.securityDetails, d.wpsDetails).filter { it.isNotBlank() }.joinToString(" · ")
@@ -142,10 +137,10 @@ internal object MonitorReportContent {
     )
 
     /** Appendix C: the mission's key events in time order. */
-    fun timelineTable(events: List<MonitorMission.ReplayEvent>, time: (Long) -> String): Table {
+    fun timelineTable(events: List<MonitorMission.ReplayEvent>, time: (Long) -> String): ReportTable {
         val shown = events.filter { it.event in TIMELINE_EVENTS }.sortedBy { it.atMs }
-        return Table(
-            columns = listOf(Column("Time", 1.1f, CellKind.MONO), Column("Event", 1.3f), Column("Details", 3.6f)),
+        return ReportTable(
+            columns = listOf(ReportColumn("Time", 1.1f, CellKind.MONO), ReportColumn("Event", 1.3f), ReportColumn("Details", 3.6f)),
             rows = shown.take(MAX_TIMELINE_ROWS).map { listOf(time(it.atMs), it.event.replace('_', ' '), it.details.ifBlank { "–" }) },
             empty = "No mission events were logged.",
             note = if (shown.size > MAX_TIMELINE_ROWS) "First $MAX_TIMELINE_ROWS of ${shown.size} events; the mission log has all of them." else null,

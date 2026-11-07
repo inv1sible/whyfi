@@ -895,9 +895,10 @@ its own scans.
 
 ## Two workspaces: phone radios vs USB adapter (2026-11-07)
 
-The app has a compact workspace toggle (📱/🔌) left of each workspace's tab
-row (`ui/Workspace.kt`, `WorkspaceToggle`; maintainer asked for it smaller
-than the first full-width segmented switch): **Phone
+The app has a single workspace toggle switch (Material `Switch`, 📱/🔌 on
+the thumb) left of each workspace's tab row (`ui/Workspace.kt`,
+`WorkspaceToggle`; maintainer asked for a smaller control, then for one
+toggle rather than two buttons in one): **Phone
 radios** (Dashboard, Scan, LAN, Settings; teal) and **USB adapter**
 (Live, Map, Devices, Missions, Setup; amber, with a status strip: REC time,
 channels, devices, PCAP size). They are different jobs (periodic passes
@@ -927,3 +928,21 @@ every 2 s; attach broadcasts aren't reliable for runtime receivers).
   pinned devices), 2–5 tables, 6 per-device maps, appendices A details,
   B evidence files, C timeline, D method. Marker numbers must match the
   positions table's # column. No emulator, so layout is checked on a phone.
+
+## Overview, LAN one-liner, GPS path, phone reports (2026-11-07)
+
+- "Dashboard" is labelled **Overview** (no title inside the page; the
+  composable is still `DashboardScreen`). The satellite radio is labelled GPS.
+- The LAN screen is deliberately minimal (maintainer: "reduced to the max"):
+  one row = 📶/✏️ toggle, field (WiFi subnet read-only, or a custom range),
+  Scan. No interface picker or explanatory text on screen; the interface
+  list goes into the LAN report's appendix. Hosts with web ports get browser
+  chips (`lan/LanWebLinks.kt`).
+- `ScanForegroundService.locationTrack` holds this session's path
+  (`scan/LocationTrack.kt`: GPS > fused > network, ≤5,000 points), fed by
+  `LiveLocationTracker.onLocation`. The GPS screen keeps location on while
+  visible (`watchLocation`).
+- LAN, GPS and Overview PDFs: `report/PhoneReports.kt` (drawn with
+  `report/ReportPdf`, contents in `report/PhoneReportContent.kt`), written to
+  external files `reports/` (FileProvider path added) and opened in the
+  default PDF viewer. One file per kind is kept.

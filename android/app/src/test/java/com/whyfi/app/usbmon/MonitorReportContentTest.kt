@@ -1,5 +1,6 @@
 package com.whyfi.app.usbmon
 
+import com.whyfi.app.report.CellKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -46,7 +47,7 @@ class MonitorReportContentTest {
         val table = MonitorReportContent.channelsTable(mapOf(6 to 300L, 1 to 100L))
         assertEquals(listOf("1", "100", "0.2500"), table.rows[0])
         assertEquals(listOf("6", "300", "0.7500"), table.rows[1])
-        assertEquals(MonitorReportContent.CellKind.BAR, table.columns[2].kind)
+        assertEquals(CellKind.BAR, table.columns[2].kind)
     }
 
     @Test

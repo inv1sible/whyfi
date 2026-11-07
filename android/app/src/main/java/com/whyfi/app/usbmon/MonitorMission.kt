@@ -2,6 +2,7 @@ package com.whyfi.app.usbmon
 
 import android.content.Context
 import android.os.SystemClock
+import com.whyfi.app.report.ReportPdf
 import com.whyfi.app.scan.MonitorUiState
 import java.io.File
 import java.io.IOException
@@ -386,7 +387,7 @@ object MonitorMission {
      * of the route and pinned devices, tables (positions, observations,
      * devices, channels), one map per pinned device, then appendices with
      * per-device details, evidence files, the event timeline and method notes.
-     * Table contents come from MonitorReportContent; drawing from MonitorReportPdf.
+     * Table contents come from MonitorReportContent; drawing from report/ReportPdf.
      */
     private fun writeReport(context: Context, files: Files, state: MonitorUiState, evidence: MonitorEvidence) {
         val geoSamples = evidence.samples
@@ -418,7 +419,7 @@ object MonitorMission {
         val markers = MonitorReportContent.markers(targetMacs, estimates, names)
         val timeFormat = DateFormat.getTimeInstance(DateFormat.MEDIUM)
 
-        val doc = MonitorReportPdf(missionName, "whyfi · local monitor mission · generated $generated")
+        val doc = ReportPdf("Monitor mission report", missionName, "whyfi · local monitor mission · generated $generated")
         try {
             // Cover
             doc.keyValues(listOf(

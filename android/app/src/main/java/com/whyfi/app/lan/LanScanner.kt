@@ -227,6 +227,14 @@ class LanScanner(private val context: Context) {
         }
     }
 
+    private fun wifiOf(candidates: List<NetworkCandidate>) = candidates.firstOrNull { it.usable && it.kind == "WiFi" }
+
+    /** The WiFi network a sweep would cover, as "192.168.1.0/24", or null
+     * when the phone isn't on WiFi. */
+    fun wifiSubnet(): String? = wifiOf(inspectNetworks())?.let { nic ->
+        "${LanRange.format(nic.networkBounds().first)}/${nic.prefixLength}"
+    }
+
     /** Why a sweep can't run right now, or null if it can. */
     fun unavailableReason(target: LanTarget = LanTarget.Auto): String? =
         (resolveSubnet(target) as? SubnetResolution.Unavailable)?.reason
@@ -345,6 +353,8 @@ class LanScanner(private val context: Context) {
             .minByOrNull { KIND_PREFERENCE.indexOf(it.kind).takeIf { i -> i >= 0 } ?: KIND_PREFERENCE.size }
         val chosen = when (target) {
             LanTarget.Auto -> auto ?: return SubnetResolution.Unavailable(explainNoCandidate(candidates))
+            LanTarget.Wifi -> wifiOf(candidates)
+                ?: return SubnetResolution.Unavailable("Not connected to WiFi. Connect to WiFi, or enter a custom range.")
             is LanTarget.Interface -> {
                 val nic = candidates.firstOrNull { it.interfaceName == target.name }
                     ?: return SubnetResolution.Unavailable("Interface ${target.name} is gone. Pick another one.")

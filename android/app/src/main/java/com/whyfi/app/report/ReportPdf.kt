@@ -1,4 +1,4 @@
-package com.whyfi.app.usbmon
+package com.whyfi.app.report
 
 import android.graphics.Canvas
 import android.graphics.Color
@@ -6,18 +6,22 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
-import com.whyfi.app.usbmon.MonitorReportContent.CellKind
-import com.whyfi.app.usbmon.MonitorReportContent.Table
 import java.io.OutputStream
 import java.util.Locale
 
 /**
- * Layout primitives for the mission PDF on A4 (595 × 842 pt): a cover band
+ * Layout primitives for whyfi's PDF reports (mission, LAN, GPS, overview) on A4 (595 × 842 pt): a cover band
  * on page 1, a slim running header after it, numbered section headings,
  * wrapped paragraphs, key/value blocks, stat tiles, figures and tables that
  * repeat their header row on every page they spill onto.
  */
-internal class MonitorReportPdf(private val title: String, private val footer: String) {
+class ReportPdf(
+    /** Big line on the cover, e.g. "LAN scan report". */
+    private val kind: String,
+    /** The report's subject, under [kind] on the cover and in the running header. */
+    private val title: String,
+    private val footer: String,
+) {
     private val pdf = PdfDocument()
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var page: PdfDocument.Page? = null
@@ -63,7 +67,7 @@ internal class MonitorReportPdf(private val title: String, private val footer: S
             text(13f, ACCENT, bold = true)
             c.drawText("whyfi", LEFT, 43f, paint)
             text(23f, Color.WHITE, bold = true)
-            c.drawText("Monitor mission report", LEFT, 80f, paint)
+            c.drawText(kind, LEFT, 80f, paint)
             text(11f, Color.rgb(190, 214, 218))
             c.drawText(ellipsize(title, RIGHT - LEFT), LEFT, 100f, paint)
             y = 146f
@@ -73,7 +77,7 @@ internal class MonitorReportPdf(private val title: String, private val footer: S
             paint.color = ACCENT
             c.drawRect(0f, 30f, PAGE_W.toFloat(), 32f, paint)
             text(9f, Color.WHITE, bold = true)
-            c.drawText(ellipsize("whyfi  ·  Monitor mission  ·  $title", RIGHT - LEFT), LEFT, 20f, paint)
+            c.drawText(ellipsize("whyfi  ·  $kind  ·  $title", RIGHT - LEFT), LEFT, 20f, paint)
             y = 56f
         }
     }
@@ -155,7 +159,7 @@ internal class MonitorReportPdf(private val title: String, private val footer: S
     }
 
     /** Key figures as tiles, three to a row. */
-    fun statTiles(stats: List<MonitorReportContent.Stat>) {
+    fun statTiles(stats: List<ReportStat>) {
         val perRow = 3
         val gutter = 8f
         val width = (RIGHT - LEFT - gutter * (perRow - 1)) / perRow
@@ -197,7 +201,7 @@ internal class MonitorReportPdf(private val title: String, private val footer: S
         y += 6f
     }
 
-    fun table(table: Table) {
+    fun table(table: ReportTable) {
         if (table.rows.isEmpty()) {
             paragraph(table.empty, muted = true)
             return
