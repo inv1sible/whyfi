@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -409,8 +412,13 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
             }
         }
         if (selected == MonitorTab.NEARBY) {
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp),
+            // Lazy: a long mission holds thousands of devices, and drawing a
+            // card for each at once ran the app out of memory (crash report
+            // 2026-10-27, OOM while accessibility walked the whole tree).
+            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
+              item(key = "nearby-controls") {
+               Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (showUsb || selectedDevice == null) {
                     UsbPanel(usbDevices, selectedDevice, state.running,
                         {
@@ -428,7 +436,9 @@ private fun MonitorWorkspace(service: ScanForegroundService?, settingsRepository
                 if (!state.running && state.missionLogPath != null) Text("Capture saved. PDF on request in Missions. Start continues; Reset closes this mission.",
                     style = MaterialTheme.typography.bodySmall)
                 if (state.pcapTruncated) Text("PCAP recording stopped at the 200 MB limit.", color = MaterialTheme.colorScheme.error)
-                NearbyView(nearbyDevices, favorites, toggleFavorite, resolvedHiddenAps, toggleHiddenAp, restoreHiddenKey,
+               }
+              }
+                nearbyItems(nearbyDevices, favorites, toggleFavorite, resolvedHiddenAps, toggleHiddenAp, restoreHiddenKey,
                     showHiddenAps, hideNoise, noisePatterns, nearbySort,
                     showFavoriteCards, { showFavoriteCards = !showFavoriteCards },
                     showUnassociatedCards, { showUnassociatedCards = !showUnassociatedCards },
@@ -796,8 +806,7 @@ private fun nearbyOrder(sort: NearbySort): Comparator<Pair<SniffedDevices.Device
             .thenBy { it.first.mac }
     }
 
-@Composable
-private fun NearbyView(
+private fun LazyListScope.nearbyItems(
     devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>>,
     favorites: Set<String>,
     onFavorite: (String) -> Unit,
@@ -821,9 +830,9 @@ private fun NearbyView(
     val order = if (matchesFirst) MonitorInventory.matchOrder(matches) else nearbyOrder(sort)
     if (showHiddenAps) {
         val groups = MonitorApVisibility.groups(hiddenAps, devices.map { it.first })
-        Text("Hidden AP groups (${groups.size})", style = MaterialTheme.typography.titleMedium)
-        if (groups.isEmpty()) Text("No APs hidden in this mission.")
-        groups.forEach { group ->
+        item(key = "hidden-title") { Text("Hidden AP groups (${groups.size})", style = MaterialTheme.typography.titleMedium) }
+        if (groups.isEmpty()) item(key = "hidden-empty") { Text("No APs hidden in this mission.") }
+        items(groups.distinctBy { it.key }, key = { "hidden:" + it.key }) { group ->
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(group.label + if (group.count > 0) " · ${group.count} APs" else "",
                     modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
@@ -846,25 +855,27 @@ private fun NearbyView(
         { it.first }, { it.second },
     )
     if (pinned.isNotEmpty()) {
-        NearbySectionHeader("Favorites", pinned.size, showFavorites, toggleFavorites)
-        if (showFavorites) pinned.forEach { row ->
+        item(key = "hdr-favorites") { NearbySectionHeader("Favorites", pinned.size, showFavorites, toggleFavorites) }
+        if (showFavorites) items(pinned.distinctBy { it.first.mac }, key = { "fav:" + it.first.mac }) { row ->
             DeviceCard(row, newest, true, onFavorite,
                 if (row.first.isAp) byBssid[row.first.mac].orEmpty() else emptyList(), favorites, sort,
                 onHideAp = onHideAp, deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst)
         }
-        HorizontalDivider()
+        item(key = "div-favorites") { HorizontalDivider() }
     }
-    NearbySectionHeader("Unassociated", unassociated.size, showUnassociated, toggleUnassociated)
+    item(key = "hdr-unassociated") { NearbySectionHeader("Unassociated", unassociated.size, showUnassociated, toggleUnassociated) }
     if (showUnassociated) {
-        if (unassociated.isEmpty()) Text("No probing stations without an observed AP association.")
-        unassociated.forEach { DeviceCard(it, newest, false, onFavorite, sort = sort, showActivity = true,
-            deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst) }
+        if (unassociated.isEmpty()) item(key = "unassociated-empty") { Text("No probing stations without an observed AP association.") }
+        items(unassociated.distinctBy { it.first.mac }, key = { "una:" + it.first.mac }) {
+            DeviceCard(it, newest, false, onFavorite, sort = sort, showActivity = true,
+                deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst)
+        }
     }
-    HorizontalDivider()
-    NearbySectionHeader("Access points", aps.size, showAps, toggleAps)
+    item(key = "div-unassociated") { HorizontalDivider() }
+    item(key = "hdr-aps") { NearbySectionHeader("Access points", aps.size, showAps, toggleAps) }
     if (showAps) {
-        if (aps.isEmpty()) Text("No access points received yet.")
-        aps.forEach { ap ->
+        if (aps.isEmpty()) item(key = "aps-empty") { Text("No access points received yet.") }
+        items(aps.distinctBy { it.first.mac }, key = { "ap:" + it.first.mac }) { ap ->
             DeviceCard(ap, newest, false, onFavorite, byBssid[ap.first.mac].orEmpty(), favorites, sort,
                 onHideAp = onHideAp, deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst)
         }

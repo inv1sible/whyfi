@@ -48,7 +48,15 @@ object CrashLogReader {
         }
     }
 
-    data class ParsedCrashLog(val occurredAt: String, val stackTrace: String)
+    /** First body line of an entry: the version that crashed. The report
+     * may be sent much later, from a newer version, so the sender's own
+     * version would mislabel it. */
+    const val VERSION_PREFIX = "App version: "
+
+    fun entryBody(appVersion: String, stackTrace: String): String = "$VERSION_PREFIX$appVersion\n$stackTrace"
+
+    /** [appVersion] is null for logs written before the version was recorded. */
+    data class ParsedCrashLog(val occurredAt: String, val stackTrace: String, val appVersion: String? = null)
 
     /** Splits the raw "timestamp\nstack trace" text WhyfiApplication writes
      * back into its two parts, so the Settings screen can send them to the
@@ -58,6 +66,14 @@ object CrashLogReader {
     fun parse(raw: String): ParsedCrashLog? {
         val newline = raw.indexOf('\n')
         if (newline < 0) return null
-        return ParsedCrashLog(occurredAt = raw.substring(0, newline), stackTrace = raw.substring(newline + 1))
+        val occurredAt = raw.substring(0, newline)
+        val body = raw.substring(newline + 1)
+        if (!body.startsWith(VERSION_PREFIX)) return ParsedCrashLog(occurredAt, body)
+        val end = body.indexOf('\n').let { if (it < 0) body.length else it }
+        return ParsedCrashLog(
+            occurredAt = occurredAt,
+            stackTrace = body.substring(minOf(end + 1, body.length)),
+            appVersion = body.substring(VERSION_PREFIX.length, end).trim().ifEmpty { null },
+        )
     }
 }

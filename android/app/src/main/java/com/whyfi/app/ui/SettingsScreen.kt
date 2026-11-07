@@ -422,6 +422,7 @@ fun SettingsScreen(
                                         try {
                                             crashLogMessage = CrashReportSender.send(
                                                 backendUrl, token, parsed.occurredAt, parsed.stackTrace,
+                                                parsed.appVersion ?: CrashReportSender.unknownVersionLabel(),
                                             )
                                         } finally {
                                             sendingCrashLog = false

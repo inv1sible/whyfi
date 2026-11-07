@@ -14,8 +14,20 @@ import java.io.IOException
  */
 object CrashReportSender {
 
+    /** Label for a crash logged before versions were recorded: the crash
+     * came from this build or an older one. */
+    fun unknownVersionLabel(sender: String = BuildConfig.VERSION_NAME): String = "≤$sender (unrecorded)".take(32)
+
     /** A user-facing result line, never an exception — callers are screens. */
-    suspend fun send(backendUrl: String, token: String, occurredAt: String, text: String): String {
+    /** @param appVersion the version that produced [text]; defaults to this
+     * build, which is right for reports made just now (e.g. diagnostics). */
+    suspend fun send(
+        backendUrl: String,
+        token: String,
+        occurredAt: String,
+        text: String,
+        appVersion: String = BuildConfig.VERSION_NAME,
+    ): String {
         if (backendUrl.isBlank() || token.isBlank()) {
             return "Configure a backend URL and sensor token in Settings first."
         }
@@ -24,7 +36,7 @@ object CrashReportSender {
                 "Token $token",
                 CrashReportRequest(
                     occurredAt = occurredAt,
-                    appVersion = BuildConfig.VERSION_NAME,
+                    appVersion = appVersion.take(32), // backend max_length
                     deviceModel = Build.MODEL,
                     osVersion = Build.VERSION.RELEASE,
                     stackTrace = text,

@@ -71,4 +71,21 @@ class CrashLogReaderTest {
         assertTrue(parsed.stackTrace.contains("=== 2026-10-21T10:00:00Z ===\nNative crash"))
         file.delete()
     }
+
+    @Test
+    fun `parse returns the version that crashed, not the sender's`() {
+        // A crash from 2026-10-27 was sent on 2026-11-07 and labelled with
+        // the newer sending build.
+        val raw = "2026-10-27T05:26:36Z\n" + CrashLogReader.entryBody("2026.10.22-1400", "java.lang.OutOfMemoryError\n\tat x")
+        val parsed = CrashLogReader.parse(raw)!!
+        assertEquals("2026.10.22-1400", parsed.appVersion)
+        assertEquals("java.lang.OutOfMemoryError\n\tat x", parsed.stackTrace)
+    }
+
+    @Test
+    fun `parse of a log without a version line leaves it unknown`() {
+        val parsed = CrashLogReader.parse("2026-10-27T05:26:36Z\njava.lang.OutOfMemoryError")!!
+        assertNull(parsed.appVersion)
+        assertEquals("java.lang.OutOfMemoryError", parsed.stackTrace)
+    }
 }

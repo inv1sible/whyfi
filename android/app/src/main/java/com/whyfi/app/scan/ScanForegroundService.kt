@@ -184,6 +184,11 @@ class ScanForegroundService : Service() {
     @Volatile
     private var appliedResetCountersNonce = 0
 
+    /** remote_scan_enabled at the last heartbeat; null until the first one
+     * after remote control is armed. See [RemoteScanAction]. */
+    @Volatile
+    private var lastRemoteScanEnabled: Boolean? = null
+
     private val _uiState = MutableStateFlow(ScanUiState())
     val uiState: StateFlow<ScanUiState> = _uiState.asStateFlow()
 
@@ -286,6 +291,7 @@ class ScanForegroundService : Service() {
      * foreground, and a persistent notification is worth an explicit opt-in. */
     fun setRemoteControlEnabled(enabled: Boolean) {
         settingsRepository.remoteControlEnabled = enabled
+        lastRemoteScanEnabled = null
         if (enabled) {
             startRemoteAgentIfNeeded()
             updateNotification(idleNotificationText())
@@ -380,13 +386,16 @@ class ScanForegroundService : Service() {
             )
             val intervalMs = policy.scanIntervalSeconds.toLong() * 1000L
 
-            if (policy.remoteScanEnabled) {
-                // Also the update path: if the loop is already running this
-                // just swaps the config it reads each iteration.
-                startContinuous(options, intervalMs)
-            } else if (_uiState.value.isContinuous) {
-                stopContinuous(graceful = true)
+            // Acts on changes of the setting only, so a loop started or
+            // stopped on the phone isn't overruled by the next heartbeat.
+            val looping = _uiState.value.isContinuous
+            when (RemoteScanAction.decide(lastRemoteScanEnabled, policy.remoteScanEnabled, looping)) {
+                // startContinuous also swaps the config of a running loop.
+                RemoteScanAction.START, RemoteScanAction.UPDATE -> startContinuous(options, intervalMs)
+                RemoteScanAction.STOP -> stopContinuous(graceful = true)
+                RemoteScanAction.NONE -> Unit
             }
+            lastRemoteScanEnabled = policy.remoteScanEnabled
 
             // A one-off pass, only when not already looping (the loop covers it).
             if (policy.scanNowNonce != appliedScanNowNonce) {

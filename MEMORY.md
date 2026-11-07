@@ -664,6 +664,13 @@ Other decisions here that would otherwise look arbitrary:
 - Long-polling/WebSocket rejected: `entrypoint.sh` runs gunicorn with 3
   **sync** workers, so a few hanging requests deadlock the backend, PWA
   included.
+- The phone acts on **changes** of `remote_scan_enabled`, not its level
+  (`scan/RemoteScanDecision.kt`, 2026-11-07). Applying the level on every
+  heartbeat stopped a locally started continuous scan after one pass
+  whenever remote control was armed with remote scanning off, and would
+  restart a locally stopped loop while it was on. Whoever acted last (phone
+  or web UI) wins; the first heartbeat after arming (or an app restart) still
+  starts a wanted remote scan.
 - `Sensor.last_seen_at` now means "last contact" (heartbeats bump it every
   few seconds via `SensorTokenAuthentication`). `last_scan_upload_at` was
   added to preserve "last actually contributed data".

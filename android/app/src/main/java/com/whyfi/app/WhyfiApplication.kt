@@ -50,6 +50,9 @@ class WhyfiApplication : Application() {
         val stackTrace = StringWriter().also { throwable.printStackTrace(PrintWriter(it)) }.toString()
         // The steps logged right before the crash say what was being attempted.
         val breadcrumbs = DiagnosticTrace.tailIfRecent(this, System.currentTimeMillis())?.let { "\nLast diagnostic steps:\n$it" }.orEmpty()
-        CrashLogReader.appendEntry(CrashLogReader.crashLogFile(this), timestamp, stackTrace + breadcrumbs)
+        CrashLogReader.appendEntry(
+            CrashLogReader.crashLogFile(this), timestamp,
+            CrashLogReader.entryBody(BuildConfig.VERSION_NAME, stackTrace + breadcrumbs),
+        )
     }
 }
