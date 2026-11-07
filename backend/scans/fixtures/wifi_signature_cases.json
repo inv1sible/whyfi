@@ -1,0 +1,188 @@
+[
+  {
+    "name": "cisco by BSSID prefix",
+    "ap": {
+      "bssid": "24:16:1B:00:00:01",
+      "ssid": "Corp",
+      "vendor_ie_ouis": []
+    },
+    "expect": [
+      "fleet-cisco"
+    ]
+  },
+  {
+    "name": "virtual BSSID matches the universal OUI",
+    "ap": {
+      "bssid": "02:18:0A:11:22:33",
+      "ssid": "Guest",
+      "vendor_ie_ouis": []
+    },
+    "expect": [
+      "fleet-meraki"
+    ]
+  },
+  {
+    "name": "multicast-bit address gets no universal OUI",
+    "ap": {
+      "bssid": "03:18:0A:11:22:33",
+      "ssid": "x",
+      "vendor_ie_ouis": []
+    },
+    "expect": []
+  },
+  {
+    "name": "meraki drops cisco (Cisco vendor IE on a Meraki AP)",
+    "ap": {
+      "bssid": "00:18:0A:11:22:33",
+      "ssid": "Office",
+      "vendor_ie_ouis": [
+        "00:00:0C"
+      ]
+    },
+    "expect": [
+      "fleet-meraki"
+    ]
+  },
+  {
+    "name": "cisco by vendor IE alone",
+    "ap": {
+      "bssid": "9E:AA:BB:00:00:01",
+      "ssid": "Office",
+      "vendor_ie_ouis": [
+        "00:00:0C"
+      ]
+    },
+    "expect": [
+      "fleet-cisco"
+    ]
+  },
+  {
+    "name": "drone Remote ID vendor IE",
+    "ap": {
+      "bssid": "9E:AA:BB:00:00:02",
+      "ssid": "drone-1234",
+      "vendor_ie_ouis": [
+        "FA:0B:BC"
+      ]
+    },
+    "expect": [
+      "fleet-remote-id"
+    ]
+  },
+  {
+    "name": "porkchop vendor IE",
+    "ap": {
+      "bssid": "9E:AA:BB:00:00:03",
+      "ssid": "",
+      "vendor_ie_ouis": [
+        "50:52:4B"
+      ]
+    },
+    "expect": [
+      "fleet-porkchop"
+    ]
+  },
+  {
+    "name": "protocol vendor IEs label nothing",
+    "ap": {
+      "bssid": "9E:AA:BB:00:00:04",
+      "ssid": "Home",
+      "vendor_ie_ouis": [
+        "00:50:F2",
+        "00:0F:AC"
+      ]
+    },
+    "expect": []
+  },
+  {
+    "name": "DJI by SSID",
+    "ap": {
+      "bssid": "9E:AA:BB:00:00:05",
+      "ssid": "DJI-Mavic-3",
+      "vendor_ie_ouis": []
+    },
+    "expect": [
+      "fleet-dji"
+    ]
+  },
+  {
+    "name": "Tesla wall connector by SSID glob",
+    "ap": {
+      "bssid": "9E:AA:BB:00:00:06",
+      "ssid": "TeslaWallConnector_ABC123",
+      "vendor_ie_ouis": []
+    },
+    "expect": [
+      "fleet-tesla"
+    ]
+  },
+  {
+    "name": "BLE-scoped name rule does not apply to Wi-Fi",
+    "ap": {
+      "bssid": "9E:AA:BB:00:00:07",
+      "ssid": "Flipper",
+      "vendor_ie_ouis": []
+    },
+    "expect": []
+  },
+  {
+    "name": "unscoped OUI rule applies to Wi-Fi",
+    "ap": {
+      "bssid": "0C:FA:22:00:00:01",
+      "ssid": "x",
+      "vendor_ie_ouis": []
+    },
+    "expect": [
+      "fleet-flipper"
+    ]
+  },
+  {
+    "name": "axon unscoped OUI",
+    "ap": {
+      "bssid": "00:25:DF:00:00:01",
+      "ssid": "",
+      "vendor_ie_ouis": []
+    },
+    "expect": [
+      "fleet-axon"
+    ]
+  },
+  {
+    "name": "ring setup SSID glob",
+    "ap": {
+      "bssid": "9E:AA:BB:00:00:08",
+      "ssid": "Ring-1a2b",
+      "vendor_ie_ouis": []
+    },
+    "expect": [
+      "fleet-ring"
+    ]
+  },
+  {
+    "name": "glob needs the dash",
+    "ap": {
+      "bssid": "9E:AA:BB:00:00:09",
+      "ssid": "Ring",
+      "vendor_ie_ouis": []
+    },
+    "expect": []
+  },
+  {
+    "name": "hidden network with no matching rule",
+    "ap": {
+      "bssid": "9E:AA:BB:00:00:0A",
+      "ssid": "",
+      "vendor_ie_ouis": []
+    },
+    "expect": []
+  },
+  {
+    "name": "empty",
+    "ap": {
+      "bssid": "",
+      "ssid": "",
+      "vendor_ie_ouis": []
+    },
+    "expect": []
+  }
+]
