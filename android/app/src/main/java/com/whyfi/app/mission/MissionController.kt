@@ -195,7 +195,7 @@ class MissionController(
         if (backendUrl.isNullOrBlank() || token.isNullOrBlank()) {
             _uiState.value = _uiState.value.copy(
                 isLoading = false,
-                error = "Configure a backend URL and sensor token in Settings first.",
+                error = "Mission estimates positions from scans on a whyfi server: Settings → Connect to a server.",
             )
             return
         }

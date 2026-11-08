@@ -189,6 +189,8 @@ private const val DASHBOARD_ICON = "📊"
 private const val SCAN_ICON = "🔍"
 private const val LAN_ICON = "🌐"
 private const val SETTINGS_ICON = "⚙️"
+private const val MISSION_ICON = "🎯"
+private const val MISSION_TAB = 3
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -214,9 +216,8 @@ private fun WhyfiApp(
     // Dismissed for the device(s) plugged in now; a new attach shows it again.
     var bannerDismissedFor by rememberSaveable { mutableStateOf("") }
     val usbKey = attachedUsb.joinToString { it.deviceName }
-    val tabCount = 4
+    val tabCount = 5
     var detailRadio by rememberSaveable { mutableStateOf<String?>(null) }
-    var showMission by rememberSaveable { mutableStateOf(false) }
     var showRecordings by rememberSaveable { mutableStateOf(false) }
 
     // Backs the tab bar with a swipeable pager. selectedTab stays the
@@ -244,11 +245,6 @@ private fun WhyfiApp(
     // close it — without this it would leave the app instead, which reads as
     // a crash.
     BackHandler(enabled = detailRadio != null) { detailRadio = null }
-    // A separate, parallel drill-down, not nested inside the one above —
-    // the two are never open at once (the Mission chip only ever sets
-    // showMission, never alongside detailRadio), so either BackHandler
-    // closing its own screen is sufficient.
-    BackHandler(enabled = showMission) { showMission = false }
     BackHandler(enabled = showRecordings) { showRecordings = false }
 
     val activeDetail = detailRadio?.let { name -> RadioKind.entries.firstOrNull { it.name == name } }
@@ -269,16 +265,6 @@ private fun WhyfiApp(
 
     if (showRecordings) {
         RecordingsScreen(uiState = uiState, onBack = { showRecordings = false })
-        return
-    }
-
-    if (showMission) {
-        MissionScreen(
-            favoritesRepository = favoritesRepository,
-            missionController = missionController,
-            service = service,
-            onBack = { showMission = false },
-        )
         return
     }
 
@@ -314,12 +300,15 @@ private fun WhyfiApp(
                 WhyfiTab(DASHBOARD_ICON, "Overview", 0, selectedTab) { goToTab(0) }
                 WhyfiTab(SCAN_ICON, "Scan", 1, selectedTab) { goToTab(1) }
                 WhyfiTab(LAN_ICON, "LAN", 2, selectedTab) { goToTab(2) }
-                WhyfiTab(SETTINGS_ICON, "Settings", 3, selectedTab) { goToTab(3) }
+                WhyfiTab(MISSION_ICON, "Mission", MISSION_TAB, selectedTab) { goToTab(MISSION_TAB) }
+                WhyfiTab(SETTINGS_ICON, "Settings", 4, selectedTab) { goToTab(4) }
             }
         }
 
-        val openMission: () -> Unit = { showMission = true }
-        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
+        val openMission: () -> Unit = { goToTab(MISSION_TAB) }
+        // No swiping away from Mission: dragging its map would flip pages.
+        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f),
+            userScrollEnabled = pagerState.currentPage != MISSION_TAB) { page ->
             when (page) {
                 0 -> DashboardScreen(
                     service = service, uiState = uiState, onOpenDetail = openDetail,
@@ -331,7 +320,13 @@ private fun WhyfiApp(
                     onOpenRecordings = { showRecordings = true },
                 )
                 2 -> LanScreen(service = service, uiState = uiState)
-                3 -> SettingsScreen(
+                MISSION_TAB -> MissionScreen(
+                    favoritesRepository = favoritesRepository,
+                    missionController = missionController,
+                    service = service,
+                    onBack = null,
+                )
+                4 -> SettingsScreen(
                     settingsRepository = settingsRepository,
                     themePreference = themePreference,
                     onThemePreferenceChange = onThemePreferenceChange,

@@ -48,7 +48,7 @@ import kotlinx.coroutines.withContext
 
 /** Local receive session; completed missions can be uploaded explicitly.
  * [setup] is the adapter workspace's settings (USB test, noise filter),
- * shown in the Setup tab and, while Monitor is locked, on its own. */
+ * shown in the Setup tab. Capture needs a passed USB monitor test ([unlocked]). */
 @Composable
 fun MonitorScreen(
     service: ScanForegroundService?,
@@ -57,21 +57,10 @@ fun MonitorScreen(
     toggle: @Composable () -> Unit,
     setup: @Composable () -> Unit,
 ) {
-    if (!unlocked) {
-        Column(Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                toggle()
-                Text("${MonitorSection.SETUP.icon} Setup", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 10.dp))
-            }
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Monitor is locked until this phone has received frames during the USB monitor test.")
-            Text("Connect the supported adapter through OTG and run the USB monitor test below. A successful test unlocks capture.",
-                style = MaterialTheme.typography.bodySmall)
-            setup()
-        }
-        }
-    } else MonitorWorkspace(service, settingsRepository, toggle, setup)
+    // All tabs are always shown, so the workspace can be explored (missions,
+    // map, setup) without an adapter; only starting a capture needs a passed
+    // USB monitor test.
+    MonitorWorkspace(service, settingsRepository, unlocked, toggle, setup)
 }
 
 /** What a capture is filtered to. The six device categories are grouped
@@ -106,6 +95,7 @@ private enum class NearbySort { RSSI, LAST_SEEN }
 private fun MonitorWorkspace(
     service: ScanForegroundService?,
     settingsRepository: SettingsRepository,
+    unlocked: Boolean,
     toggle: @Composable () -> Unit,
     setup: @Composable () -> Unit,
 ) {
@@ -485,6 +475,13 @@ private fun MonitorWorkspace(
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
               item(key = "nearby-controls") {
                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!unlocked) Card(Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Capture is locked until the USB monitor test in Setup receives frames.",
+                            style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                        TextButton({ selectTab(MonitorTab.SETUP) }) { Text("${MonitorSection.SETUP.icon} Setup") }
+                    }
+                }
                 if (showUsb || selectedDevice == null) {
                     UsbPanel(usbDevices, selectedDevice, state.running,
                         {
@@ -629,7 +626,7 @@ private fun MonitorWorkspace(
                             if (state.running) Button({ service?.stopMonitor() },
                                 enabled = state.status != "Starting…" && state.status != "Stopping…" &&
                                     state.status != "Saving capture…") { Text("Stop") }
-                            else Button(startMonitor, enabled = !starting && continuingMissionId == null && selectedDevice != null) {
+                            else Button(startMonitor, enabled = unlocked && !starting && continuingMissionId == null && selectedDevice != null) {
                                 Text(if (starting) "Starting…" else "Start")
                             }
                             if (selected == MonitorTab.NEARBY) TextButton({ pendingReset = true },

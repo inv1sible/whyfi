@@ -59,7 +59,7 @@ fun MissionScreen(
     favoritesRepository: FavoritesRepository,
     missionController: MissionController,
     service: ScanForegroundService?,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)? = null,
 ) {
     val uiState by missionController.uiState.collectAsState()
     val wifiFavorites by favoritesRepository.favorites(RadioKind.WIFI).collectAsState()
@@ -137,8 +137,9 @@ fun MissionScreen(
                 .background(MaterialTheme.colorScheme.surface),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 16.dp)) {
-                TextButton(onClick = onBack) { Text("← Back") }
-                Text("Mission", style = MaterialTheme.typography.titleMedium)
+                if (onBack != null) TextButton(onClick = onBack) { Text("← Back") }
+                Text("Mission", style = MaterialTheme.typography.titleMedium,
+                    modifier = if (onBack == null) Modifier.padding(vertical = 12.dp) else Modifier)
             }
 
             if (targets.isEmpty()) {
