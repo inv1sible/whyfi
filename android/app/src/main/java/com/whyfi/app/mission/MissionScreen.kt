@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Intent
 import android.provider.Settings
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
+import android.widget.FrameLayout
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.DisposableEffect
@@ -44,6 +46,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -129,35 +132,21 @@ fun MissionScreen(
 
     fun selectOrRetarget(target: MissionTarget) = runTarget(target, nearRadius)
 
-    // A Box, not a Column with the map sandwiched between two bars —
-    // trying to *constrain* the map to a middle slice (weight(1f) +
-    // clipToBounds()) never actually kept it from drawing over its
-    // siblings, because the osmdroid MapView is an embedded Android View
-    // (via AndroidView), and those composite in their own layer rather than
-    // properly interleaving z-order with Compose-drawn siblings in a linear
-    // layout. The fix is to stop fighting that: let the map be the full-
-    // screen *background* layer (nothing above it for it to draw over), and
-    // add the bars as later Compose children in the same Box, each with an
-    // opaque background — later children in a Box always paint on top of
-    // earlier ones, which is the one z-order guarantee that reliably holds
-    // here.
-    Box(modifier = Modifier.fillMaxSize()) {
-        MissionMap(
-            points = uiState.points,
-            livePosition = uiState.livePosition,
-            here = uiState.here,
-            modifier = Modifier.fillMaxSize(),
-            estimatedApex = selectedEstimate(uiState),
-        )
-
+    // Favorites on top, the map in the middle, the status line below. The
+    // osmdroid MapView used to draw over its Compose neighbours when only
+    // clipped by clipToBounds(), so it was a full-screen background with the
+    // bars painted over it — which hid the favorites (user, 2026-11-08).
+    // MissionMap now clips at the View level as well (a clipping FrameLayout
+    // plus an outline clip on the MapView itself).
+    Column(modifier = Modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()
+            modifier = Modifier.fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surface),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 16.dp)) {
-                if (onBack != null) TextButton(onClick = onBack) { Text("← Back") }
-                Text("Mission", style = MaterialTheme.typography.titleMedium,
-                    modifier = if (onBack == null) Modifier.padding(vertical = 12.dp) else Modifier)
+            // As a tab, the tab row already says Mission: no title line.
+            if (onBack != null) Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 16.dp)) {
+                TextButton(onClick = onBack) { Text("← Back") }
+                Text("Mission", style = MaterialTheme.typography.titleMedium)
             }
 
             if (targets.isEmpty()) {
@@ -246,9 +235,19 @@ fun MissionScreen(
             }
         }
 
+        // The map takes the space between the favorites and the status
+        // line, clipped so it can't draw over them (see MissionMap).
+        MissionMap(
+            points = uiState.points,
+            livePosition = uiState.livePosition,
+            here = uiState.here,
+            modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds(),
+            estimatedApex = selectedEstimate(uiState),
+        )
+
         run {
             Row(
-                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                modifier = Modifier.fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface)
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -339,7 +338,7 @@ private fun MissionMap(
             // otherwise need a storage permission on this app's minSdk 28.
             Configuration.getInstance().userAgentValue = ctx.packageName
             Configuration.getInstance().osmdroidTileCache = File(ctx.cacheDir, "osmdroid")
-            MapView(ctx).apply {
+            val map = MapView(ctx).apply {
                 // Explicit rather than relying on whatever MapView's own
                 // constructor defaults to — belt-and-suspenders alongside
                 // clipToBounds() above, so its measured size can't end up
@@ -350,9 +349,19 @@ private fun MissionMap(
                 // Zoomed out over Europe until the first fix arrives.
                 controller.setZoom(4.0)
                 controller.setCenter(GeoPoint(50.0, 10.0))
+                outlineProvider = ViewOutlineProvider.BOUNDS
+                clipToOutline = true
+            }
+            FrameLayout(ctx).apply {
+                clipChildren = true
+                clipToPadding = true
+                outlineProvider = ViewOutlineProvider.BOUNDS
+                clipToOutline = true
+                addView(map)
             }
         },
-        update = { mapView ->
+        update = { frame ->
+            val mapView = frame.getChildAt(0) as MapView
             mapView.overlays.clear()
             overlay?.let { mapView.overlays.add(it) }
             val key = listOf(points, estimatedApex, center == null)

@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -49,6 +51,14 @@ fun WorkspaceToggle(current: Workspace, onChange: (Workspace) -> Unit) {
     Switch(
         checked = adapter,
         onCheckedChange = { onChange(if (it) Workspace.ADAPTER else Workspace.PHONE) },
+        // Both positions in their workspace's accent: green (teal) track for
+        // the phone's radios, amber for the adapter (user, 2026-11-08), not
+        // the grey "off" look.
+        colors = SwitchDefaults.colors(
+            uncheckedTrackColor = MaterialTheme.colorScheme.primary,
+            uncheckedBorderColor = MaterialTheme.colorScheme.primary,
+            uncheckedThumbColor = MaterialTheme.colorScheme.onPrimary,
+        ),
         // Counter-rotated so the emoji stays upright on the turned switch.
         thumbContent = { Text(current.icon, fontSize = 12.sp, modifier = Modifier.rotate(-90f)) },
         modifier = Modifier

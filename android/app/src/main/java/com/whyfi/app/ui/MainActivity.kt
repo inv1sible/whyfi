@@ -288,14 +288,12 @@ private fun WhyfiApp(
             }
         }
 
-        val openMission: () -> Unit = { goToTab(MISSION_TAB) }
         // No swiping away from Mission: dragging its map would flip pages.
         HorizontalPager(state = pagerState, modifier = Modifier.weight(1f),
             userScrollEnabled = pagerState.currentPage != MISSION_TAB) { page ->
             when (page) {
                 0 -> ScanScreen(
                     service = service, uiState = uiState, onOpenDetail = openDetail,
-                    onOpenMission = openMission, missionController = missionController,
                     onOpenRecordings = { showRecordings = true },
                 )
                 1 -> LanScreen(service = service, uiState = uiState)

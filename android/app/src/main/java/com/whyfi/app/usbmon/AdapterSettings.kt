@@ -19,9 +19,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.whyfi.app.BuildConfig
 import com.whyfi.app.data.SettingsRepository
+import com.whyfi.app.ui.SettingsSection
 
 /** Settings that only concern the external USB adapter, shown in the
- * adapter workspace's Setup tab (moved out of the phone's Settings). */
+ * adapter workspace's Settings tab, folded like the phone's (SettingsSection). */
 @Composable
 fun AdapterSettings(settingsRepository: SettingsRepository) {
     var monitorTestPassed by remember { mutableStateOf(settingsRepository.monitorTestPassed) }
@@ -29,9 +30,8 @@ fun AdapterSettings(settingsRepository: SettingsRepository) {
     var noisePatterns by remember { mutableStateOf(settingsRepository.monitorNoisePatterns) }
     var noiseMessage by remember { mutableStateOf<String?>(null) }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("USB monitor test", style = MaterialTheme.typography.titleLarge)
+    SettingsSection("USB monitor test", if (monitorTestPassed) "Passed" else "Optional, not run yet") {
+        run {
             Text(
                 if (monitorTestPassed) "Passed: this phone has received frames from an adapter."
                 else "Optional: checks that a plugged-in adapter delivers frames. Capture works without it.",
@@ -52,9 +52,9 @@ fun AdapterSettings(settingsRepository: SettingsRepository) {
         }
     }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Noise filter", style = MaterialTheme.typography.titleLarge)
+    val patternCount = noisePatterns.lines().count { it.isNotBlank() }
+    SettingsSection("Noise filter", if (patternCount == 0) "No patterns" else "$patternCount pattern${if (patternCount == 1) "" else "s"} for Live's Hide noise") {
+        run {
             Text("Live's Hide noise button matches these case-insensitive patterns against device names, SSIDs, vendors, MACs and activity. One pattern per line. Favorites always remain visible. Raw captures and reports are unchanged.",
                 style = MaterialTheme.typography.bodySmall)
             val validation = MonitorNoiseFilter.compile(noisePatterns)

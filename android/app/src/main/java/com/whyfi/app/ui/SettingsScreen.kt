@@ -422,9 +422,10 @@ private fun rememberOutboxUsage(quotaMb: Int): String {
         if (status.serverConfigured) " (${status.count} scan$plural waiting to upload)" else ""
 }
 
-/** A settings card folded to its title and a one-line summary; tap to open. */
+/** A settings card folded to its title and a one-line summary; tap to open.
+ * Shared by the phone's Settings and the USB adapter's Settings tab. */
 @Composable
-private fun SettingsSection(title: String, summary: String, content: @Composable () -> Unit) {
+fun SettingsSection(title: String, summary: String, content: @Composable () -> Unit) {
     var expanded by rememberSaveable(title) { mutableStateOf(false) }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

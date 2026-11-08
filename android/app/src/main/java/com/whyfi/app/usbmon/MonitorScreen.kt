@@ -16,6 +16,8 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
@@ -63,7 +65,7 @@ fun MonitorScreen(
  * under one Devices section (chips) rather than six top-level tabs. */
 private enum class MonitorTab(val label: String) {
     MISSIONS("Missions"), NEARBY("Live"), MAPPING("Map"), ACCESS_POINTS("APs"), UNASSOCIATED("Unassociated"),
-    IOT("IoT"), CAMERAS("Cameras"), PHONES_LAPTOPS("Phones / laptops"), CLIENTS("Other clients"), SETUP("Setup"),
+    IOT("IoT"), CAMERAS("Cameras"), PHONES_LAPTOPS("Phones / laptops"), CLIENTS("Other clients"), SETUP("Settings"),
 }
 
 private val DEVICE_CATEGORIES = listOf(
@@ -74,7 +76,7 @@ private val DEVICE_CATEGORIES = listOf(
 /** The adapter workspace's top-level tabs, with emoji icons like the phone
  * workspace's tabs (no icon library dependency). */
 private enum class MonitorSection(val label: String, val icon: String) {
-    LIVE("Live", "📡"), MAP("Map", "🗺️"), MISSIONS("Missions", "🗂️"), SETUP("Setup", "🛠️"),
+    LIVE("Live", "📡"), MAP("Map", "🗺️"), MISSIONS("Missions", "🗂️"), SETUP("Settings", "⚙️"),
 }
 
 private fun sectionOf(tab: MonitorTab): MonitorSection = when (tab) {
@@ -83,6 +85,13 @@ private fun sectionOf(tab: MonitorTab): MonitorSection = when (tab) {
     MonitorTab.MISSIONS -> MonitorSection.MISSIONS
     MonitorTab.SETUP -> MonitorSection.SETUP
     else -> MonitorSection.LIVE
+}
+
+private fun tabOf(section: MonitorSection): MonitorTab = when (section) {
+    MonitorSection.LIVE -> MonitorTab.NEARBY
+    MonitorSection.MAP -> MonitorTab.MAPPING
+    MonitorSection.MISSIONS -> MonitorTab.MISSIONS
+    MonitorSection.SETUP -> MonitorTab.SETUP
 }
 
 private enum class NearbySort { RSSI, LAST_SEEN }
@@ -399,26 +408,42 @@ private fun MonitorWorkspace(
         } else beginMonitor()
     }
 
-    Column(Modifier.fillMaxSize()) {
-        val section = sectionOf(selected)
-        val selectTab: (MonitorTab) -> Unit = { tab ->
-            if (tab != MonitorTab.MAPPING) showLocationDetails = false
-            if (tab == MonitorTab.MISSIONS || tab == MonitorTab.NEARBY || tab == MonitorTab.SETUP) replayPlaying = false
-            if (tab in DEVICE_CATEGORIES) lastCategoryName = tab.name
-            selectedName = tab.name
+    val section = sectionOf(selected)
+    val selectTab: (MonitorTab) -> Unit = { tab ->
+        if (tab != MonitorTab.MAPPING) showLocationDetails = false
+        if (tab == MonitorTab.MISSIONS || tab == MonitorTab.NEARBY || tab == MonitorTab.SETUP) replayPlaying = false
+        if (tab in DEVICE_CATEGORIES) lastCategoryName = tab.name
+        selectedName = tab.name
+    }
+    val currentSelectTab by rememberUpdatedState(selectTab)
+    // Swipe left/right moves between tabs like the phone workspace's pager.
+    // Not on Map, where a drag pans the map. Children that scroll
+    // sideways (or sliders) consume their drags first, so this only sees
+    // swipes nothing else wanted.
+    val swipeTabs = if (section == MonitorSection.MAP) Modifier else Modifier.pointerInput(section) {
+        val threshold = 72.dp.toPx()
+        var total = 0f
+        detectHorizontalDragGestures(
+            onDragStart = { total = 0f },
+            onDragEnd = {
+                val next = when {
+                    total < -threshold -> section.ordinal + 1
+                    total > threshold -> section.ordinal - 1
+                    else -> -1
+                }
+                MonitorSection.entries.getOrNull(next)?.let { currentSelectTab(tabOf(it)) }
+            },
+        ) { change, amount ->
+            change.consume()
+            total += amount
         }
+    }
+    Column(Modifier.fillMaxSize().then(swipeTabs)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             toggle()
             TabRow(section.ordinal, Modifier.weight(1f)) {
                 MonitorSection.entries.forEach { entry ->
-                    Tab(entry == section, {
-                        selectTab(when (entry) {
-                            MonitorSection.LIVE -> MonitorTab.NEARBY
-                            MonitorSection.MAP -> MonitorTab.MAPPING
-                            MonitorSection.MISSIONS -> MonitorTab.MISSIONS
-                            MonitorSection.SETUP -> MonitorTab.SETUP
-                        })
-                    }, text = {
+                    Tab(entry == section, { selectTab(tabOf(entry)) }, text = {
                         Text(if (entry == MonitorSection.MISSIONS && missions.isNotEmpty()) "${entry.label} ${missions.size}" else entry.label,
                             maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelSmall)
                     }, icon = { Text(entry.icon, fontSize = 16.sp) })
@@ -452,8 +477,9 @@ private fun MonitorWorkspace(
             }
         }
         if (selected == MonitorTab.SETUP) {
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)) { setup() }
+            // Laid out like the phone's Settings tab (SettingsScreen).
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) { setup() }
         } else if (selected == MonitorTab.NEARBY) {
             // Lazy: a long mission holds thousands of devices, and drawing a
             // card for each at once ran the app out of memory (crash report

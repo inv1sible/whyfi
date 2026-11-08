@@ -35,7 +35,6 @@ import java.io.File
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.whyfi.app.mission.MissionController
 import com.whyfi.app.permissions.PermissionHelper
 import com.whyfi.app.scan.RadioKind
 import com.whyfi.app.scan.ScanForegroundService
@@ -74,13 +73,10 @@ private fun phaseLabel(phase: ScanPhase?): String = when (phase) {
 fun ScanScreen(
     service: ScanForegroundService?,
     uiState: ScanUiState,
-    missionController: MissionController,
     onOpenDetail: (RadioKind) -> Unit = {},
-    onOpenMission: () -> Unit = {},
     onOpenRecordings: () -> Unit = {},
 ) {
     val context = LocalContext.current
-    val serverConfigured = rememberServerConfigured()
 
     var permissionsGranted by remember { mutableStateOf(PermissionHelper.hasAllRequiredPermissions(context)) }
     var locationServicesOn by remember { mutableStateOf(PermissionHelper.isLocationServicesEnabled(context)) }
@@ -160,18 +156,12 @@ fun ScanScreen(
         // sometimes render. Before any scan it shows zeros/dashes and
         // untappable chips; mid-scan it shows live counts with a spinner on
         // whichever phase is running; afterwards it's tappable through to
-        // each radio's detail table. Mission sits at the very right of the
-        // same row as the radio chips, matching Dashboard's layout, and is
-        // always tappable regardless of scan state — it talks to the
-        // backend directly, not to a local pass. Its own spinner doubles as
-        // a live "still tracking" indicator even while you're on this tab
-        // instead of Mission itself.
-        val missionState by missionController.uiState.collectAsState()
+        // each radio's detail table (Mission has its own tab).
         val scanning = uiState.isScanning || uiState.isContinuous
-        // Only tappable once a pass has actually been retained and nothing's
-        // actively running — the detail screen reads uiState.latestPass, so
-        // without one there'd be nothing behind the tap.
-        val openable = !scanning && uiState.latestPass != null
+        // Tappable as soon as a pass exists, also while scanning (continuous
+        // scans would otherwise never let you in): the detail screen reads
+        // uiState.latestPass and follows each new pass.
+        val openable = uiState.latestPass != null
 
         if (scanning) {
             Text(phaseLabel(uiState.currentPhase))
@@ -202,8 +192,6 @@ fun ScanScreen(
                 modifier = Modifier.weight(1f),
                 onClick = if (openable) ({ onOpenDetail(RadioKind.SATELLITE) }) else null,
             )
-            // Mission locates a device from the server's scan history: server only.
-            RadioStatChip("🎯", "Mission", null, missionState.isTracking, Color(0xFFF472B6), modifier = Modifier.weight(1f), onClick = onOpenMission)
         }
         if (openable) {
             Text(

@@ -181,7 +181,19 @@ stale, and don't duplicate what's already obvious from code/tests.
   (`mission/LocalMissionPoints.kt`, same near-filter and weights as the
   backend views; DB prefilter `instr(payloadJson, needle)`, newest 400
   passes). The apex is then the local weighted centroid; the estimator
-  comparison is server only.
+  comparison is server only. Layout: favorites on top, map in between,
+  status below (a Column). The MapView is wrapped in a clipping FrameLayout
+  with outline clips, because as a full-screen background with bars painted
+  over it the favorites ended up hidden (user, 2026-11-08). No Mission chip
+  on Scan any more (it's a tab).
+- **Radio chips on Scan open the results whenever a pass exists**, also
+  while scanning (before, a running continuous scan made them untappable,
+  which read as broken).
+- **USB adapter tabs: Live, Map, Missions, Settings** (was "Setup": both
+  workspaces say Settings, ⚙️). Adapter settings use the phone's collapsible
+  `SettingsSection` (ui/SettingsScreen.kt). Swiping switches USB tabs too
+  (`pointerInput` drag on the workspace, not on Map). The workspace switch
+  shows the phone's teal track in the phone position instead of grey.
 
 - **LAN MACs: the ARP table is closed (Android 10+), NetBIOS is the way.**
   `/proc/net/arp` is unreadable for apps since Android 10 and `ip neigh`
@@ -963,7 +975,7 @@ the thumb) left of each workspace's tab row (`ui/Workspace.kt`,
 `WorkspaceToggle`; maintainer asked for a smaller control, then for one
 toggle rather than two buttons in one): **Phone
 radios** (Scan, LAN, Mission, Settings; teal) and **USB adapter**
-(Live, Map, Missions, Setup; amber). They are different jobs (periodic passes
+(Live, Map, Missions, Settings; amber). They are different jobs (periodic passes
 uploaded as sessions vs a live channel-tuned capture saved as missions), so
 they don't share a tab bar. The Devices tab (category chips) was removed
 2026-11-08 at the user's request; Live lists every device. Adapter-only settings (USB monitor test, noise
