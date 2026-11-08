@@ -44,7 +44,7 @@ object LanReportContent {
                 d.openPorts.sorted().joinToString(", ").ifBlank { "–" },
                 LanWebLinks.links(d.ipAddress, d.openPorts).joinToString("\n") { it.url }.ifBlank { "–" },
                 d.responseTimeMs?.let { String.format(Locale.US, "%.0f ms", it) } ?: "–",
-                d.macAddress.ifBlank { "–" },
+                listOf(d.macAddress, d.vendorOui).filter { it.isNotBlank() }.joinToString("\n").ifBlank { "–" },
             )
         },
         empty = "No device answered the sweep.",
@@ -183,14 +183,17 @@ object OverviewReportContent {
     }
 
     /** Appendix: the last pass's devices for one radio, as on the detail screen. */
-    fun passTable(kind: RadioKind, rows: List<DeviceRow>): ReportTable {
+    fun passTable(kind: RadioKind, rows: List<DeviceRow>, catalog: Map<String, String> = emptyMap()): ReportTable {
         val headers = headers(kind)
         val mono = setOf("BSSID", "MAC", "Cell ID")
+        val withCatalog = rows.any { catalog[it.key.uppercase()] != null }
         return ReportTable(
             columns = headers.map { ReportColumn(it, if (it in mono || it == "SSID" || it == "Name" || it == "Carrier") 1.5f else 0.9f,
-                if (it in mono) CellKind.MONO else CellKind.TEXT) } + ReportColumn("Change", 0.8f),
+                if (it in mono) CellKind.MONO else CellKind.TEXT) } +
+                (if (withCatalog) listOf(ReportColumn("Catalog", 1.1f)) else emptyList()) + ReportColumn("Change", 0.8f),
             rows = rows.map { row ->
                 headers.indices.map { i -> row.columns.getOrElse(i) { "" }.ifBlank { "–" } } +
+                    (if (withCatalog) listOf(catalog[row.key.uppercase()] ?: "–") else emptyList()) +
                     when (row.change) {
                         DeviceChange.NEW -> "new"
                         DeviceChange.GONE -> "gone"
@@ -281,17 +284,23 @@ data class BleDeviceSummary(
 /** The session report written when scanning stops. */
 object ScanReportContent {
     /** One table per radio of every unique device this session, strongest reading first. */
-    fun sessionTable(kind: RadioKind, devices: List<com.whyfi.app.scan.SurveyTally.SeenDevice>): ReportTable {
+    fun sessionTable(kind: RadioKind, devices: List<com.whyfi.app.scan.SurveyTally.SeenDevice>, catalog: Map<String, String> = emptyMap()): ReportTable {
+        val withCatalog = kind != RadioKind.CELLULAR && devices.any { catalog[it.id.uppercase()] != null }
         val (label, id, detail) = when (kind) {
             RadioKind.WIFI -> Triple("SSID", "BSSID", "Band")
             RadioKind.CELLULAR -> Triple("Carrier", "Cell", "Type · cell ID")
             else -> Triple("Name", "MAC", "Type")
         }
         return ReportTable(
-            columns = listOf(ReportColumn(label, 1.6f), ReportColumn(id, 1.6f, CellKind.MONO), ReportColumn(detail, 1.3f),
-                ReportColumn("Best signal", 0.8f, CellKind.NUMBER)),
-            rows = devices.map { listOf(it.label.ifBlank { "–" }, it.id, it.detail.ifBlank { "–" }, "${it.best} dBm") },
+            columns = listOf(ReportColumn(label, 1.6f), ReportColumn(id, 1.6f, CellKind.MONO), ReportColumn(detail, 1.3f)) +
+                (if (withCatalog) listOf(ReportColumn("Catalog", 1.2f)) else emptyList()) +
+                ReportColumn("Best signal", 0.8f, CellKind.NUMBER),
+            rows = devices.map {
+                listOf(it.label.ifBlank { "–" }, it.id, it.detail.ifBlank { "–" }) +
+                    (if (withCatalog) listOf(catalog[it.id.uppercase()] ?: "–") else emptyList()) + "${it.best} dBm"
+            },
             empty = "Nothing heard this session.",
+            note = if (withCatalog) "Catalog: Fieldwatch signature pattern matches, informational, not identifications." else null,
         )
     }
 

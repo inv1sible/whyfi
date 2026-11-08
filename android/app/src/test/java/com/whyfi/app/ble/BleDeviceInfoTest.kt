@@ -45,4 +45,14 @@ class BleDeviceInfoTest {
         assertEquals(0xfe9f, BleAssignedNumbers.uuid16("fe9f"))
         assertEquals(null, BleAssignedNumbers.uuid16("12345678-0000-1000-8000-00805f9b34fb"))
     }
+
+    @Test
+    fun catalogLabelWinsOverSigNumbers() {
+        // The real Nespresso advert: company ID byte-swapped (0x2502), vendor UUID.
+        val nespresso = dto("98:cd:ac:4c:67:8a", records = listOf("2502:408900000000"), uuids = listOf("06aa1910-f22a-11e3-9daa-0002a5d5c51b"))
+        assertEquals("company 0x2502", BleDeviceInfo.describe(nespresso, numbers) { null }.vendor)
+        val labeled = BleDeviceInfo.describe(nespresso, numbers, "Nespresso") { null }
+        assertEquals("Nespresso", labeled.vendor)
+        assertEquals("signature catalog", labeled.vendorSource)
+    }
 }

@@ -17,6 +17,7 @@ from sensors.models import Sensor
 
 from .ble_signatures import is_ble_capable, load_catalog
 from .wifi_signatures import is_wifi_capable
+from .signature_lookup import lookup as signature_lookup
 from .calibration import fit_path_loss
 from .location_quality import clean_session_locations, original_position
 from .floorplan import (
@@ -2767,3 +2768,13 @@ class FloorPlanViewSet(viewsets.ModelViewSet):
             "weak_count": sum(1 for p in points if p["is_weak"]),
             "measured_count": len(points),
         })
+
+
+@api_view(["POST"])
+@authentication_classes([SensorTokenAuthentication])
+@permission_classes([IsAuthenticated])
+def signature_match(request):
+    """Catalog labels for the adverts of one phone scan pass
+    (scans/signature_lookup.py). Nothing is stored: the same adverts are
+    labeled again, and kept, when the pass is uploaded."""
+    return Response(signature_lookup(request.data))

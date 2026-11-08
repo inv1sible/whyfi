@@ -25,6 +25,7 @@ from scans.views import (
     localization_benchmark,
     heatmap,
     mission_ble_observations,
+    signature_match,
     mission_cell_observations,
     mission_wifi_observations,
 )
@@ -68,5 +69,6 @@ urlpatterns = [
     # Must stay ahead of the router include: "me" isn't a sensor pk, it means
     # "whichever sensor this token belongs to".
     path("sensors/me/heartbeat/", sensor_heartbeat),
+    path("signatures/match/", signature_match),
     path("", include(router.urls)),
 ]

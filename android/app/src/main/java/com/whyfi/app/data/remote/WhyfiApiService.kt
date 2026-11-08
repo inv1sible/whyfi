@@ -11,6 +11,13 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 
 interface WhyfiApiService {
+    /** Catalog labels for one pass's adverts; the backend stores nothing (scan/CatalogLabels). */
+    @POST("signatures/match/")
+    suspend fun matchSignatures(
+        @Header("Authorization") authorization: String,
+        @Body payload: com.whyfi.app.scan.CatalogLabels.Request,
+    ): Response<com.whyfi.app.scan.CatalogLabels.Response>
+
     @POST("scan-sessions/")
     suspend fun uploadScanSession(
         @Header("Authorization") authorization: String,

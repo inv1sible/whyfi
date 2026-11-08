@@ -41,6 +41,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.runtime.produceState
 import com.whyfi.app.ble.BleAssignedNumbers
 import com.whyfi.app.ble.BleDeviceInfo
+import com.whyfi.app.scan.CatalogLabels
 import com.whyfi.app.report.PhoneReports
 import com.whyfi.app.usbmon.OuiTable
 import kotlinx.coroutines.Dispatchers
@@ -60,6 +61,7 @@ private fun columnsFor(kind: RadioKind): List<TableColumn> = when (kind) {
         TableColumn("Signal", 80.dp),
         TableColumn("Channel", 110.dp),
         TableColumn("Security", 100.dp),
+        TableColumn("Catalog", 140.dp),
     )
     RadioKind.CELLULAR -> listOf(
         TableColumn("Carrier", 130.dp),
@@ -220,8 +222,12 @@ fun ScanDetailScreen(
             DataTable(
                 columns = columnsFor(kind),
                 rows = rows.map { raw ->
-                    val row = if (kind == RadioKind.BLE) raw.copy(columns = raw.columns +
-                        (bleInfo[raw.key]?.let { BleDeviceInfo.columns(it) } ?: BleDeviceInfo.HEADERS.map { "–" })) else raw
+                    val row = when (kind) {
+                        RadioKind.BLE -> raw.copy(columns = raw.columns +
+                            (bleInfo[raw.key]?.let { BleDeviceInfo.columns(it) } ?: BleDeviceInfo.HEADERS.map { "–" }))
+                        RadioKind.WIFI -> raw.copy(columns = raw.columns + (uiState.catalogLabels[CatalogLabels.key(raw.key)] ?: "–"))
+                        else -> raw
+                    }
                     val id = row.favoriteId
                     val canRange = kind == RadioKind.WIFI && row.is80211mcResponder && row.change != DeviceChange.GONE
                     row.toTableRow(
@@ -293,8 +299,8 @@ private fun rememberBleInfo(uiState: ScanUiState, enabled: Boolean): Map<String,
         }
     }
     val (numbers, oui) = tables ?: return emptyMap()
-    return remember(uiState.latestPass, uiState.previousPass, numbers) {
+    return remember(uiState.latestPass, uiState.previousPass, uiState.catalogLabels, numbers) {
         (uiState.previousPass?.bleObservations.orEmpty() + uiState.latestPass?.bleObservations.orEmpty())
-            .associate { it.bleMac to BleDeviceInfo.describe(it, numbers) { mac -> oui?.vendorOf(mac) } }
+            .associate { it.bleMac to BleDeviceInfo.describe(it, numbers, uiState.catalogLabels[CatalogLabels.key(it.bleMac)]) { mac -> oui?.vendorOf(mac) } }
     }
 }

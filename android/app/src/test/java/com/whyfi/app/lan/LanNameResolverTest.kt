@@ -46,5 +46,15 @@ class LanNameResolverTest {
         entry("WORKGROUP", 0x8400)
         entry("DESKTOP-42", 0x0400)
         assertEquals("DESKTOP-42", LanNameResolver.parseNetbiosName(p.toByteArray()))
+        // No statistics block after the names: no MAC.
+        assertNull(LanNameResolver.parseNetbiosMac(p.toByteArray()))
+
+        // Windows: the unit ID after the name table is the MAC.
+        val windows = ByteArrayOutputStream().apply { write(p.toByteArray()); write(byteArrayOf(0x3c, 0x52, 0x82.toByte(), 0x1a, 0x2b, 0x3c)); write(ByteArray(40)) }
+        assertEquals("3c:52:82:1a:2b:3c", LanNameResolver.parseNetbiosMac(windows.toByteArray()))
+        // Samba: zeros, dropped.
+        val samba = ByteArrayOutputStream().apply { write(p.toByteArray()); write(ByteArray(46)) }
+        assertNull(LanNameResolver.parseNetbiosMac(samba.toByteArray()))
+        assertNull(LanNameResolver.parseNetbiosMac(byteArrayOf(1, 2, 3)))
     }
 }

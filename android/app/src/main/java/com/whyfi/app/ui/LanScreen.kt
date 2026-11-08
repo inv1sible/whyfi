@@ -160,12 +160,14 @@ fun LanScreen(service: ScanForegroundService?, uiState: ScanUiState) {
                 }
             }
         }
-        items(uiState.lanDevices, key = { it.ipAddress }) { device -> LanDeviceRow(device) }
+        items(uiState.lanDevices, key = { it.ipAddress }) { device ->
+            LanDeviceRow(device, uiState.lanGateway?.takeIf { it.gatewayIp == device.ipAddress })
+        }
     }
 }
 
 @Composable
-private fun LanDeviceRow(device: LanObservationDto) {
+private fun LanDeviceRow(device: LanObservationDto, gateway: LanScanner.GatewayRadio? = null) {
     val context = LocalContext.current
     val links = remember(device.ipAddress, device.openPorts) {
         LanWebLinks.links(device.ipAddress, device.openPorts).associateBy { it.label.substringAfter(':').toInt() }
@@ -195,6 +197,14 @@ private fun LanDeviceRow(device: LanObservationDto) {
                         }
                     }) { append("$port") }
                 }
+            }
+            if (device.macAddress.isNotBlank()) parts += {
+                append(device.macAddress)
+                if (device.vendorOui.isNotBlank()) append(" ${device.vendorOui}")
+            }
+            if (gateway != null) parts += {
+                append("Wi‑Fi radio ${gateway.bssid}")
+                gateway.vendor?.let { append(" $it") }
             }
             if (device.onvif.isNotEmpty()) parts += { append("ONVIF ${device.onvif["name"]?.takeIf { n -> n.isNotBlank() } ?: "device"}") }
             parts.forEachIndexed { i, part -> if (i > 0) append(" · "); part() }

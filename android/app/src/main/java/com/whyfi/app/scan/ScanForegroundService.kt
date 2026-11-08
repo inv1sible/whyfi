@@ -20,6 +20,7 @@ import com.whyfi.app.BuildConfig
 import com.whyfi.app.R
 import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.local.WhyfiDatabase
+import com.whyfi.app.data.remote.ApiClientFactory
 import com.whyfi.app.data.remote.LanObservationDto
 import com.whyfi.app.lan.LanTarget
 import com.whyfi.app.report.PhoneReports
@@ -126,8 +127,12 @@ data class ScanUiState(
     // Grows live as devices are confirmed during a LAN scan, and stays
     // populated afterwards as the "last results" until the next scan starts.
     val lanDevices: List<LanObservationDto> = emptyList(),
+    /** The router's Wi-Fi radio (BSSID) from the last sweep; shown, not uploaded. */
+    val lanGateway: com.whyfi.app.lan.LanScanner.GatewayRadio? = null,
     /** Public IP from ident.me after a pass (see PublicIp), and when. */
     val publicIp: String? = null,
+    /** Fieldwatch catalog labels by upper-case MAC/BSSID (see CatalogLabels). */
+    val catalogLabels: Map<String, String> = emptyMap(),
     val publicIpAtMs: Long = 0L,
     /** Where each pass this session was taken, for the scan report's map. */
     val passPositions: List<TrackPoint> = emptyList(),
@@ -661,6 +666,7 @@ class ScanForegroundService : Service() {
                         isLanScanning = false, lanDeviceCount = result.lanObservations.size,
                         // The final list carries the names found after the sweep.
                         lanDevices = result.lanObservations,
+                        lanGateway = scanCoordinator.lanScanner.gatewayRadio(),
                         lanLatitude = result.latitude, lanLongitude = result.longitude,
                         lanAccuracyM = result.locationAccuracyMeters, lanFinishedAtMs = System.currentTimeMillis(),
                     )
@@ -1045,6 +1051,29 @@ class ScanForegroundService : Service() {
             _uiState.update { it.copy(passPositions = (it.passPositions + position).takeLast(MAX_PASS_POSITIONS)) }
         }
         refreshPublicIp()
+        fetchCatalogLabels(pass)
+    }
+
+    /** Adverts already asked about, so a continuous scan only sends new ones. */
+    private val catalogAsked = LinkedHashSet<String>()
+
+    /** Asks the backend which catalog signatures this pass's adverts match.
+     * Best effort: offline or unconfigured, the tables just show no label. */
+    private fun fetchCatalogLabels(pass: ScanSessionUploadRequest) {
+        val url = settingsRepository.backendUrl
+        val token = settingsRepository.sensorToken
+        if (url.isNullOrBlank() || token.isNullOrBlank()) return
+        val request = synchronized(catalogAsked) { CatalogLabels.request(pass, catalogAsked) }
+        if (request.isEmpty) return
+        serviceScope.launch(Dispatchers.IO) {
+            val response = runCatching { ApiClientFactory.create(url).matchSignatures("Token $token", request) }.getOrNull()
+            val body = response?.takeIf { it.isSuccessful }?.body() ?: return@launch
+            synchronized(catalogAsked) {
+                catalogAsked.addAll(CatalogLabels.askedKeys(request))
+                while (catalogAsked.size > CatalogLabels.MAX_KEYS * 2) catalogAsked.remove(catalogAsked.first())
+            }
+            _uiState.update { it.copy(catalogLabels = CatalogLabels.merge(it.catalogLabels, body)) }
+        }
     }
 
     /** Re-reads the public IP when it's older than PublicIp.REFRESH_MS. */

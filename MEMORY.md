@@ -129,6 +129,23 @@ stale, and don't duplicate what's already obvious from code/tests.
   hundreds of APs. Ingest and relabel lock the device / AP row because the
   `signature_ids` union is a read-modify-write (a review found relabel
   could drop a concurrent sighting's ids).
+  The phone shows catalog labels too, without its own matcher: after each
+  pass it POSTs the new/changed adverts to `signatures/match/`
+  (`scans/signature_lookup.py`, sensor token, stores nothing) and keeps the
+  answers by MAC/BSSID (`scan/CatalogLabels.kt`). They win over the SIG /
+  OUI vendor on the BLE screen and add a Catalog column for Wi-Fi and in
+  reports. Why it mattered: the SIG lists alone missed real devices, e.g. a
+  Nespresso Vertuo writes its company ID byte-swapped (0x2502, not 0x0225)
+  and is only recognisable by its vendor UUID / "Venus_" name; Tesla keys by
+  their name pattern; car hotspots by SSID.
+
+- **LAN MACs: the ARP table is closed (Android 10+), NetBIOS is the way.**
+  `/proc/net/arp` is unreadable for apps since Android 10 and `ip neigh`
+  since targetSdk 30, so the sweep's MACs come from the NetBIOS node-status
+  reply's unit ID (`LanNameResolver.parseNetbiosMac`; Samba's all-zero IDs
+  dropped), vendor via `assets/oui.tsv`. The router row also shows the
+  connected BSSID as its "Wi-Fi radio" (`LanScanner.gatewayRadio`): UI and
+  report only, never uploaded as a LAN MAC, since it isn't one.
 
 - **Scan positions come from a live subscription, never getLastKnownLocation()
   alone.** Until 2026-11 each scan took the newest last-known GPS/network fix

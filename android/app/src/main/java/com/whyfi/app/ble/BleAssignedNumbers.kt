@@ -79,7 +79,13 @@ object BleDeviceInfo {
         }
     }
 
-    fun describe(dto: BleObservationDto, numbers: BleAssignedNumbers, ouiVendor: (String) -> String?): Info {
+    /**
+     * [catalog] is the backend's Fieldwatch catalog label for this advert
+     * (scan/CatalogLabels). It wins: it knows vendor-specific UUIDs and name
+     * patterns the SIG lists don't, e.g. a Nespresso machine whose firmware
+     * writes its company ID byte-swapped (0x2502 for 0x0225).
+     */
+    fun describe(dto: BleObservationDto, numbers: BleAssignedNumbers, catalog: String? = null, ouiVendor: (String) -> String?): Info {
         val companyIds = dto.manufacturerRecords.mapNotNull { it.substringBefore(':').toIntOrNull(16) }
             .ifEmpty { listOfNotNull(dto.manufacturerData.substringBefore(':').takeIf { ':' in dto.manufacturerData }?.toIntOrNull(16)) }
         val uuids = (dto.serviceUuids + dto.serviceData.map { it.substringBefore(':') }).distinct()
@@ -90,6 +96,7 @@ object BleDeviceInfo {
         // Only a public address carries a real OUI: top bits 00, universally administered.
         val oui = if (first and 0xC2 == 0) ouiVendor(dto.bleMac) else null
         val (vendor, source) = when {
+            catalog != null -> catalog to "signature catalog"
             company != null -> company to "manufacturer data"
             member != null -> member to "service UUID"
             oui != null -> "$oui?" to "MAC prefix (if public address)"

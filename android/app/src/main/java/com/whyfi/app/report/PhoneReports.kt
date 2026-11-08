@@ -64,7 +64,9 @@ object PhoneReports {
             "Location" to (state.lanLatitude?.let { "%.6f, %.6f".format(Locale.US, it, state.lanLongitude ?: 0.0) +
                 (state.lanAccuracyM?.let { a -> " · ±%.0f m".format(Locale.US, a) } ?: "") } ?: "no fix"),
             "Report generated" to generated,
-        ))
+        ) + listOfNotNull(state.lanGateway?.let { g ->
+            "Router Wi‑Fi radio" to "${g.gatewayIp} · ${g.bssid}${g.vendor?.let { " · $it" } ?: ""} (BSSID, not its LAN MAC)"
+        }))
         doc.statTiles(LanReportContent.stats(devices, state.lanTotal))
         doc.subheading("Contents")
         doc.bullets(listOf("1  Location", "2  Devices", "Appendix A  Banners and ONVIF", "Appendix B  Network interfaces",
@@ -95,7 +97,7 @@ object PhoneReports {
             "A device that answers on none of them is not listed, so a quiet device can be missing.",
             "ONVIF cameras are found by a WS-Discovery multicast probe on the local network.",
             "Device types are guesses from open ports, banners and ONVIF replies.",
-            "Modern Android hides the ARP table from apps, so MAC addresses are usually unavailable.",
+            "Android 10+ hides the ARP table from apps. MAC addresses come from NetBIOS replies (Windows, most NAS), with the vendor from the MAC prefix; other hosts have none.",
             "Map tiles © OpenStreetMap contributors.",
         ), muted = false)
         write(doc, file(context, "lan"))
@@ -250,9 +252,9 @@ object PhoneReports {
             doc.statTiles(GpsReportContent.stats(path, satellites).take(5))
             doc.table(GpsReportContent.providersTable(path))
         }
-        sections.add("WiFi access points", devices.wifi.isNotEmpty()) { doc.table(ScanReportContent.sessionTable(RadioKind.WIFI, devices.wifi)) }
+        sections.add("WiFi access points", devices.wifi.isNotEmpty()) { doc.table(ScanReportContent.sessionTable(RadioKind.WIFI, devices.wifi, state.catalogLabels)) }
         sections.add("Cell towers", devices.cellular.isNotEmpty()) { doc.table(ScanReportContent.sessionTable(RadioKind.CELLULAR, devices.cellular)) }
-        sections.add("Bluetooth devices", devices.ble.isNotEmpty()) { doc.table(ScanReportContent.sessionTable(RadioKind.BLE, devices.ble)) }
+        sections.add("Bluetooth devices", devices.ble.isNotEmpty()) { doc.table(ScanReportContent.sessionTable(RadioKind.BLE, devices.ble, state.catalogLabels)) }
         sections.add("Satellites in the last pass", satellites.isNotEmpty()) { doc.table(OverviewReportContent.passTable(RadioKind.SATELLITE, satellites)) }
         val lan = state.lanDevices.isNotEmpty()
         sections.add("LAN devices (last sweep)", lan) { doc.table(LanReportContent.devicesTable(state.lanDevices)) }
@@ -326,7 +328,7 @@ object PhoneReports {
         }
 
         doc.heading("2", "Devices")
-        doc.table(if (kind == RadioKind.BLE) RadioReportContent.bleTable(rows, summaries) else OverviewReportContent.passTable(kind, rows))
+        doc.table(if (kind == RadioKind.BLE) RadioReportContent.bleTable(rows, summaries) else OverviewReportContent.passTable(kind, rows, state.catalogLabels))
         var notes = "A"
         if (kind == RadioKind.BLE) {
             doc.heading("3", "Vendors")
@@ -339,7 +341,7 @@ object PhoneReports {
         doc.heading(notes, "Appendix $notes · Notes")
         doc.bullets(when (kind) {
             RadioKind.BLE -> listOf(
-                "Vendors come from the Bluetooth SIG company identifier in manufacturer data, else a vendor's registered service UUID, else the MAC prefix (only meaningful for a public address).",
+                "Vendors come from the Fieldwatch signature catalog (matched by the whyfi server: vendor UUIDs, name patterns), else the Bluetooth SIG company identifier in manufacturer data, else a vendor's registered service UUID, else the MAC prefix (only meaningful for a public address). Catalog labels are pattern matches, not identifications.",
                 "Most phones and wearables use rotating private addresses, so one device can appear under several MACs.",
                 "Android does not report whether an address is public or random; the address column is read from the MAC's top bits.",
             )

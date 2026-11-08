@@ -1,6 +1,8 @@
 package com.whyfi.app.lan
 
 import android.content.Context
+import android.net.wifi.WifiManager
+import com.whyfi.app.usbmon.OuiTable
 import com.whyfi.app.data.remote.LanObservationDto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -25,9 +27,10 @@ import java.net.Socket
  * response / the SSH banner a server sends unprompted) — enough to guess a
  * device type without needing a real fingerprinting database.
  *
- * ARP-table MAC lookup is attempted (`/proc/net/arp`) but Android has
- * restricted this since API 23+ for apps without root — degrades to a
- * blank MAC/vendor rather than failing the whole scan when unavailable.
+ * ARP-table MAC lookup is attempted (`/proc/net/arp`), but Android 10+
+ * closes it to apps (and `ip neigh` from Android 11 / targetSdk 30), so on
+ * current phones it comes back empty. MACs then come only from NetBIOS
+ * replies (LanNameResolver); the router's Wi-Fi radio is in [gatewayRadio].
  */
 class LanScanner(private val context: Context) {
 
@@ -115,10 +118,20 @@ class LanScanner(private val context: Context) {
                 found.forEach(onDeviceFound)
                 results += found
             }
-            // Ask the hosts reverse DNS couldn't name (see LanNameResolver).
-            val unnamed = results.filter { it.hostname.isBlank() }.map { it.ipAddress }
-            val names = LanNameResolver.resolve(unnamed)
-            results.map { device -> names[device.ipAddress]?.let { device.copy(hostname = it) } ?: device }
+            // Ask hosts still missing a name or MAC (see LanNameResolver);
+            // NetBIOS replies carry the MAC the ARP table no longer gives.
+            val incomplete = results.filter { it.hostname.isBlank() || it.macAddress.isBlank() }.map { it.ipAddress }
+            val answers = LanNameResolver.resolve(incomplete)
+            val oui = ouiTable()
+            results.map { device ->
+                val answer = answers[device.ipAddress]
+                val mac = device.macAddress.ifBlank { answer?.mac.orEmpty() }
+                device.copy(
+                    hostname = device.hostname.ifBlank { answer?.name.orEmpty() },
+                    macAddress = mac,
+                    vendorOui = device.vendorOui.ifBlank { mac.takeIf { it.isNotBlank() }?.let { oui?.vendorOf(it) }.orEmpty() },
+                )
+            }
         }
 
     /** Returns the open ports plus the fastest successful connect time
@@ -387,6 +400,28 @@ class LanScanner(private val context: Context) {
         val hostCount = minOf((1L shl (32 - nic.prefixLength)) - 2, MAX_HOSTS_TO_SCAN.toLong())
         return LanRange.Ok(network + 1, network + hostCount)
     }
+
+    private var oui: OuiTable? = null
+
+    /** assets/oui.tsv, read once on first use (off the main thread: sweeps run on IO). */
+    private fun ouiTable(): OuiTable? = oui ?: runCatching {
+        context.assets.open("oui.tsv").use { OuiTable.read(it) }
+    }.getOrNull()?.also { oui = it }
+
+    /** The router's IP and the BSSID of the access point the phone is on.
+     * On a home router that's its Wi-Fi radio, not its LAN MAC (often one
+     * digit apart), so it's shown as such and never uploaded as a LAN MAC. */
+    data class GatewayRadio(val gatewayIp: String, val bssid: String, val vendor: String?)
+
+    @Suppress("DEPRECATION")
+    fun gatewayRadio(): GatewayRadio? = runCatching {
+        val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return null
+        val bssid = wifi.connectionInfo?.bssid?.lowercase()?.takeIf { it.isNotBlank() && it != "02:00:00:00:00:00" } ?: return null
+        val gw = wifi.dhcpInfo?.gateway?.takeIf { it != 0 } ?: return null
+        // DhcpInfo stores the address little-endian.
+        val ip = listOf(gw and 0xFF, (gw shr 8) and 0xFF, (gw shr 16) and 0xFF, (gw shr 24) and 0xFF).joinToString(".")
+        GatewayRadio(ip, bssid, ouiTable()?.vendorOf(bssid))
+    }.getOrNull()
 
     private fun readArpTable(): Map<String, String> = runCatching {
         File("/proc/net/arp").bufferedReader().useLines { lines ->
