@@ -20,6 +20,7 @@ import com.whyfi.app.BuildConfig
 import com.whyfi.app.R
 import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.local.RecordingEntity
+import com.whyfi.app.signatures.LocalSignatures
 import com.whyfi.app.data.local.WhyfiDatabase
 import com.whyfi.app.data.remote.ApiClientFactory
 import com.whyfi.app.data.remote.LanObservationDto
@@ -1084,25 +1085,12 @@ class ScanForegroundService : Service() {
         fetchCatalogLabels(pass)
     }
 
-    /** Adverts already asked about, so a continuous scan only sends new ones. */
-    private val catalogAsked = LinkedHashSet<String>()
-
-    /** Asks the backend which catalog signatures this pass's adverts match.
-     * Best effort: offline or unconfigured, the tables just show no label. */
+    /** Labels this pass's devices with the bundled catalog (LocalSignatures). */
     private fun fetchCatalogLabels(pass: ScanSessionUploadRequest) {
-        val url = settingsRepository.backendUrl
-        val token = settingsRepository.sensorToken
-        if (url.isNullOrBlank() || token.isNullOrBlank()) return
-        val request = synchronized(catalogAsked) { CatalogLabels.request(pass, catalogAsked) }
-        if (request.isEmpty) return
-        serviceScope.launch(Dispatchers.IO) {
-            val response = runCatching { ApiClientFactory.create(url).matchSignatures("Token $token", request) }.getOrNull()
-            val body = response?.takeIf { it.isSuccessful }?.body() ?: return@launch
-            synchronized(catalogAsked) {
-                catalogAsked.addAll(CatalogLabels.askedKeys(request))
-                while (catalogAsked.size > CatalogLabels.MAX_KEYS * 2) catalogAsked.remove(catalogAsked.first())
-            }
-            _uiState.update { it.copy(catalogLabels = CatalogLabels.merge(it.catalogLabels, body)) }
+        serviceScope.launch(Dispatchers.Default) {
+            val catalog = LocalSignatures.catalog(applicationContext) ?: return@launch
+            val labels = runCatching { LocalSignatures.labels(catalog, listOf(pass)) }.getOrNull() ?: return@launch
+            _uiState.update { it.copy(catalogLabels = CatalogLabels.merge(it.catalogLabels, labels)) }
         }
     }
 

@@ -133,7 +133,8 @@ fun DashboardScreen(
             // indicator even while you're looking at this tab, not Mission
             // itself — see MissionController.uiState.isTracking.
             val missionState by missionController.uiState.collectAsState()
-            RadioStatChip(
+            // Server only: hidden when standalone.
+            if (rememberServerConfigured()) RadioStatChip(
                 "🎯", "Mission", null, missionState.isTracking, MISSION_COLOR,
                 modifier = Modifier.weight(1f),
                 onClick = onOpenMission,

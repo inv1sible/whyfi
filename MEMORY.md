@@ -107,8 +107,9 @@ stale, and don't duplicate what's already obvious from code/tests.
   no sighting-clustering job, no dismiss/"mark as mine" workflow. Do not
   reintroduce this without an explicit new ask.
 
-- **BLE signature labels come from a vendored catalog, matched only on the
-  backend.** Fieldwatch's `fieldwatch-signatures-v2.json` (MIT, see `NOTICE`)
+- **BLE signature labels come from a vendored catalog, matched on the backend
+  and (since 2026-11-08) identically on the phone.** (The "only on the backend"
+  rule below was lifted for standalone use: see the next paragraph.) Fieldwatch's `fieldwatch-signatures-v2.json` (MIT, see `NOTICE`)
   is kept byte-for-byte unmodified in `backend/scans/signatures/` so an update
   is a file swap plus `manage.py relabel_ble_signatures`. The matcher is a
   port of Fieldwatch's `SignatureEngine.kt`; it stays in one place, like the
@@ -129,10 +130,19 @@ stale, and don't duplicate what's already obvious from code/tests.
   hundreds of APs. Ingest and relabel lock the device / AP row because the
   `signature_ids` union is a read-modify-write (a review found relabel
   could drop a concurrent sighting's ids).
-  The phone shows catalog labels too, without its own matcher: after each
-  pass it POSTs the new/changed adverts to `signatures/match/`
-  (`scans/signature_lookup.py`, sensor token, stores nothing) and keeps the
-  answers by MAC/BSSID (`scan/CatalogLabels.kt`). They win over the SIG /
+  **Two matchers, one behaviour.** The phone carries a Kotlin port
+  (`com.whyfi.app.signatures`, catalog in assets) so standalone phones get
+  labels offline. Parity is enforced, not hoped for: the shared fixture
+  `signature_parity_cases.json` (generated from the catalog by
+  `manage.py generate_signature_parity`, synthetic only, ~6.5k cases) is
+  checked by `scans/test_signature_parity.py` and Android's
+  `SignatureParityTest`, which also pins the asset's SHA-256. A catalog or
+  matcher change means: change both ports, regenerate, copy the fixture to
+  `android/app/src/test/resources/`. A real-data check also exists: export
+  adverts to `android/app/build/parity-real.json` (never commit it, it's
+  scan data); on 2026-11-08, 23,148 real adverts matched 100 %.
+  `signatures/match/` (`scans/signature_lookup.py`) is kept only for v97
+  APKs, which ask the server; newer phones match locally. They win over the SIG /
   OUI vendor on the BLE screen and add a Catalog column for Wi-Fi and in
   reports. Why it mattered: the SIG lists alone missed real devices, e.g. a
   Nespresso Vertuo writes its company ID byte-swapped (0x2502, not 0x0225)
@@ -152,9 +162,13 @@ stale, and don't duplicate what's already obvious from code/tests.
   the old outbox setting key): uploaded recordings go first, oldest first;
   never-uploaded ones are never removed automatically, the Recordings screen
   warns instead (user's choice). Ingest is idempotent on `client_scan_id`, so
-  re-uploads are safe. Planned next: on-phone catalog matching for
-  standalone (shared fixtures with the backend), ask-on-connect, hiding
-  server-only UI without a server, GitHub Releases.
+  re-uploads are safe. Ask on connect (`ui/ServerConnection.kt`): once per
+  server (URL + token) it offers standalone recordings for upload (all /
+  choose / keep); kept ones get a per-row Upload in Recordings. Without a
+  server, Mission, remote control, crash-report sending and USB-mission
+  upload are hidden. **GitHub release APKs are built with an empty
+  `WHYFI_PUBLIC_URL`**: the server build bakes your server's address in as
+  the Settings default, which must not go into a public download.
 
 - **LAN MACs: the ARP table is closed (Android 10+), NetBIOS is the way.**
   `/proc/net/arp` is unreadable for apps since Android 10 and `ip neigh`

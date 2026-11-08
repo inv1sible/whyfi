@@ -3,44 +3,45 @@ package com.whyfi.app.scan
 import com.whyfi.app.data.remote.BleObservationDto
 import com.whyfi.app.data.remote.ScanSessionUploadRequest
 import com.whyfi.app.data.remote.WifiObservationDto
+import com.whyfi.app.signatures.LocalSignatures
+import com.whyfi.app.signatures.SignatureCatalog
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CatalogLabelsTest {
-    private fun ble(mac: String, name: String = "", legacy: String = "") = BleObservationDto(
-        bleMac = mac, stableIdentifier = mac, rssi = -60, txPower = null, manufacturerData = legacy,
-        deviceTypeGuess = "", deviceName = name,
-    )
+    private val catalog = File("src/main/assets/${SignatureCatalog.ASSET}").reader().use { SignatureCatalog.read(it) }
 
-    private fun wifi(bssid: String, ssid: String) = WifiObservationDto(bssid = bssid, ssid = ssid, rssi = -50, frequencyMhz = 2412, capabilities = "")
-
-    private fun pass(ble: List<BleObservationDto>, wifi: List<WifiObservationDto> = emptyList()) = ScanSessionUploadRequest(
+    private fun pass(ble: List<BleObservationDto>, wifi: List<WifiObservationDto>) = ScanSessionUploadRequest(
         clientScanId = "t", startedAt = "", completedAt = "", latitude = null, longitude = null, locationAccuracyMeters = null,
         wifiObservations = wifi, cellObservations = emptyList(), bleObservations = ble, satelliteObservations = emptyList(),
     )
 
     @Test
-    fun onlyNewOrChangedAdvertsAreAskedAgain() {
-        val first = CatalogLabels.request(pass(listOf(ble("aa:01", "Venus_1", legacy = "2502:40")), listOf(wifi("02:00:00:00:00:09", "BMW_1"))), emptySet())
-        assertEquals("2502:40", first.ble.single().manufacturerRecords.single())
-        val asked = CatalogLabels.askedKeys(first).toSet()
-        assertTrue(CatalogLabels.request(pass(listOf(ble("AA:01", "Venus_1", legacy = "2502:40")), listOf(wifi("02:00:00:00:00:09", "BMW_1"))), asked).isEmpty)
-        // Same rotating address, now advertising a name: asked again.
-        assertEquals(1, CatalogLabels.request(pass(listOf(ble("aa:01", "S123C", legacy = "2502:40"))), asked).ble.size)
+    fun realAdvertsGetTheirLabelsOnThePhone() {
+        val nespresso = BleObservationDto(
+            bleMac = "98:cd:ac:4c:67:8a", stableIdentifier = "", rssi = -60, txPower = null, manufacturerData = "2502:408900000000",
+            serviceUuids = listOf("06aa1910-f22a-11e3-9daa-0002a5d5c51b"), deviceTypeGuess = "", deviceName = "Venus_98CDAC4C678A",
+        )
+        val tesla = BleObservationDto(
+            bleMac = "6a:11:22:33:44:55", stableIdentifier = "", rssi = -70, txPower = null, manufacturerData = "",
+            serviceUuids = listOf("00001122-0000-1000-8000-00805f9b34fb"), deviceTypeGuess = "", deviceName = "S512d65624d55b716C",
+        )
+        val plain = BleObservationDto(bleMac = "7f:00:00:00:00:02", stableIdentifier = "", rssi = -80, txPower = null, manufacturerData = "", deviceTypeGuess = "")
+        val bmw = WifiObservationDto(bssid = "02:11:22:33:44:55", ssid = "BMW_12345", rssi = -50, frequencyMhz = 2412, capabilities = "")
+        val labels = LocalSignatures.labels(catalog, listOf(pass(listOf(nespresso, tesla, plain), listOf(bmw))))
+        assertEquals("Nespresso", labels["98:CD:AC:4C:67:8A"])
+        assertEquals("Tesla", labels["6A:11:22:33:44:55"])
+        assertNull(labels["7F:00:00:00:00:02"])
+        assertEquals("BMW", labels["02:11:22:33:44:55"])
     }
 
     @Test
-    fun mergeKeysByUpperCaseMacAndJoinsNames() {
-        val response = CatalogLabels.Response(
-            ble = mapOf("aa:01" to listOf(CatalogLabels.Label("fleet-tesla", "Tesla", "VEHICLE"), CatalogLabels.Label("fleet-ibeacon", "iBeacon", "BEACON"))),
-            wifi = mapOf("02:00:00:00:00:09" to listOf(CatalogLabels.Label("fleet-bmw", "BMW", "VEHICLE"))),
-        )
-        val merged = CatalogLabels.merge(mapOf("AA:01" to "old"), response)
-        assertEquals("Tesla · iBeacon", merged["AA:01"])
-        assertEquals("BMW", merged["02:00:00:00:00:09"])
-        assertNull(CatalogLabels.text(emptyList()))
-        assertEquals(merged, CatalogLabels.merge(merged, CatalogLabels.Response()))
+    fun mergeDropsStaleLabelsAndCapsKeys() {
+        val merged = CatalogLabels.merge(mapOf("AA" to "old", "BB" to "keep"), mapOf("AA" to null, "CC" to "Tesla"))
+        assertEquals(mapOf("BB" to "keep", "CC" to "Tesla"), merged)
+        val many = (0 until CatalogLabels.MAX_KEYS + 10).associate { "K$it" to "x" as String? }
+        assertEquals(CatalogLabels.MAX_KEYS, CatalogLabels.merge(emptyMap(), many).size)
     }
 }

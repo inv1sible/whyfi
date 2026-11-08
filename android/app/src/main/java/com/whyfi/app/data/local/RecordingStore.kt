@@ -56,6 +56,13 @@ class RecordingStore(private val context: Context) {
 
     suspend fun delete(ids: List<String>) = db.recordingDao().delete(ids)
 
+    /** Lets these recordings go to the server (after ask on connect, or one by one). */
+    suspend fun allowSync(ids: List<String>) {
+        if (ids.isEmpty()) return
+        db.recordingDao().allowSync(ids)
+        if (settings.isConfigured) UploadWorker.enqueue(context)
+    }
+
     /** Closes recordings a killed process left open, except [keepOpen]. */
     suspend fun closeStale(keepOpen: List<String>) = db.recordingDao().closeStale(keepOpen.ifEmpty { listOf("") })
 

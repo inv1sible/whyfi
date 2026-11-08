@@ -56,6 +56,7 @@ fun SettingsScreen(
     onThemePreferenceChange: (ThemePreference) -> Unit,
     service: ScanForegroundService?,
 ) {
+    val serverConfigured = rememberServerConfigured()
     // Pre-filled from the build (WHYFI_PUBLIC_URL, set when this APK was
     // built) if nothing's been saved yet — still just a starting point,
     // fully editable. Never pre-filled with a token; see MEMORY.md.
@@ -117,8 +118,8 @@ fun SettingsScreen(
             }
         }
 
-        // -- Remote control --
-        Card(modifier = Modifier.fillMaxWidth()) {
+        // -- Remote control -- (server only: hidden when standalone)
+        if (serverConfigured) Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Remote control", style = MaterialTheme.typography.headlineSmall)
                 Text(
@@ -164,8 +165,12 @@ fun SettingsScreen(
         // -- Backend connection (no header — continues the flow from remote control) --
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Backend connection", style = MaterialTheme.typography.headlineSmall)
-                Text("Point this app at your self-hosted whyfi backend (see docs/deployment.md for creating a sensor + token).")
+                Text(if (serverConfigured) "Server connection" else "Connect to a server (optional)", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    "whyfi works on its own: scans, labels, reports and recordings all stay on this phone. Connecting your " +
+                        "self-hosted whyfi server adds the web map, history across devices, Mission and remote control. " +
+                        "Scan the setup QR code from Settings → Sensors in whyfi in your browser.",
+                )
 
                 val qrScanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
                     val raw = result.contents
@@ -387,7 +392,8 @@ fun SettingsScreen(
                         Text(crashLogText, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
+                        // Crash reports go to your server: hidden when standalone.
+                        if (serverConfigured) Button(
                             enabled = !sendingCrashLog,
                             onClick = {
                                 val parsed = CrashLogReader.parse(crashLogText)

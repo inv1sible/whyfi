@@ -48,7 +48,16 @@ enum class PositionEstimator(val wireValue: String, val label: String) {
  */
 class SettingsRepository(context: Context) {
 
-    private val prefs = context.applicationContext.getSharedPreferences("whyfi_settings", Context.MODE_PRIVATE)
+    private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    /** Identifies the server set up now (URL + token), for "asked once per server". */
+    val serverKey: String
+        get() = "${backendUrl.orEmpty()}|${sensorToken.orEmpty()}".hashCode().toString()
+
+    /** The [serverKey] whose upload question (ConnectUploadPrompt) was answered. */
+    var uploadPromptAnsweredFor: String?
+        get() = prefs.getString("upload_prompt_answered_for", null)
+        set(value) = prefs.edit { putString("upload_prompt_answered_for", value) }
 
     var backendUrl: String?
         get() = prefs.getString(KEY_BACKEND_URL, null)
@@ -191,6 +200,7 @@ class SettingsRepository(context: Context) {
 
         private fun clampInterval(value: Int) = value.coerceIn(MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS)
 
+        const val PREFS_NAME = "whyfi_settings"
         private const val KEY_BACKEND_URL = "backend_url"
         private const val KEY_SENSOR_TOKEN = "sensor_token"
         private const val KEY_THEME = "theme_preference"

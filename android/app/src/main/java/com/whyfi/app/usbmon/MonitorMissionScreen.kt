@@ -155,7 +155,8 @@ internal fun MissionView(
                         }
                         if (devices.orEmpty().size > deviceLimit) TextButton({ deviceLimit += 40 }) { Text("Show more devices") }
                     }
-                    if ((mission.captured || reportReady) && id != settings.activeMonitorMissionId) Button({
+                    // Uploading needs a server; standalone, missions stay on the phone.
+                    if ((mission.captured || reportReady) && id != settings.activeMonitorMissionId && settings.isConfigured) Button({
                         busy = id
                         scope.launch {
                             messages = messages + (id to runCatching {

@@ -264,6 +264,9 @@ private fun WhyfiApp(
         return
     }
 
+    // Standalone recordings are offered for upload once a server is set up.
+    ConnectUploadPrompt()
+
     if (showRecordings) {
         RecordingsScreen(uiState = uiState, onBack = { showRecordings = false })
         return

@@ -45,6 +45,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun RecordingsScreen(uiState: ScanUiState, onBack: () -> Unit) {
     val context = LocalContext.current
+    val serverConfigured = rememberServerConfigured()
     val store = remember { RecordingStore(context.applicationContext) }
     val scope = rememberCoroutineScope()
     var reload by remember { mutableIntStateOf(0) }
@@ -102,6 +103,12 @@ fun RecordingsScreen(uiState: ScanUiState, onBack: () -> Unit) {
                             }
                         },
                         onDelete = { confirmDelete = r },
+                        onUpload = if (serverConfigured && !r.syncAllowed && !r.isOpen && r.passes > 0) ({
+                            scope.launch {
+                                withContext(Dispatchers.IO) { store.allowSync(listOf(r.id)) }
+                                reload++
+                            }
+                        }) else null,
                     )
                 }
             }
@@ -137,7 +144,13 @@ private fun started(r: RecordingSummary) =
     DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(r.startedAtMs))
 
 @Composable
-private fun RecordingRow(r: RecordingSummary, onReport: suspend () -> java.io.File, onShare: () -> Unit, onDelete: () -> Unit) {
+private fun RecordingRow(
+    r: RecordingSummary,
+    onReport: suspend () -> java.io.File,
+    onShare: () -> Unit,
+    onDelete: () -> Unit,
+    onUpload: (() -> Unit)?,
+) {
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(started(r), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
@@ -147,6 +160,7 @@ private fun RecordingRow(r: RecordingSummary, onReport: suspend () -> java.io.Fi
         Row(verticalAlignment = Alignment.CenterVertically) {
             ReportButton(enabled = !r.isOpen && r.passes > 0, generate = onReport)
             TextButton(enabled = r.passes > 0, onClick = onShare) { Text("⤴ Share") }
+            onUpload?.let { TextButton(onClick = it) { Text("☁ Upload") } }
             Spacer(Modifier.weight(1f))
             TextButton(enabled = !r.isOpen, onClick = onDelete) { Text("🗑 Delete") }
         }

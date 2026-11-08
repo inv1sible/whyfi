@@ -80,6 +80,7 @@ fun ScanScreen(
     onOpenRecordings: () -> Unit = {},
 ) {
     val context = LocalContext.current
+    val serverConfigured = rememberServerConfigured()
 
     var permissionsGranted by remember { mutableStateOf(PermissionHelper.hasAllRequiredPermissions(context)) }
     var locationServicesOn by remember { mutableStateOf(PermissionHelper.isLocationServicesEnabled(context)) }
@@ -201,7 +202,8 @@ fun ScanScreen(
                 modifier = Modifier.weight(1f),
                 onClick = if (openable) ({ onOpenDetail(RadioKind.SATELLITE) }) else null,
             )
-            RadioStatChip("🎯", "Mission", null, missionState.isTracking, Color(0xFFF472B6), modifier = Modifier.weight(1f), onClick = onOpenMission)
+            // Mission locates a device from the server's scan history: server only.
+            if (serverConfigured) RadioStatChip("🎯", "Mission", null, missionState.isTracking, Color(0xFFF472B6), modifier = Modifier.weight(1f), onClick = onOpenMission)
         }
         if (openable) {
             Text(

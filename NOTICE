@@ -7,9 +7,12 @@ BLE signature catalog (Fieldwatch)
 
 backend/scans/signatures/fieldwatch-signatures-v2.json is vendored unmodified
 from Fieldwatch (https://github.com/OffGridPete/Fieldwatch), commit
-2f79baf95a1a9cdfcc8261f3fb58079aeb75f191. The matching rules in
-backend/scans/ble_signatures.py are a Python port of Fieldwatch's
-SignatureEngine.kt and related helpers. Both are used under the MIT License:
+2f79baf95a1a9cdfcc8261f3fb58079aeb75f191, and shipped in the Android app as
+android/app/src/main/assets/fieldwatch-signatures-v2.json (byte-identical).
+The matching rules in backend/scans/ble_signatures.py and wifi_signatures.py
+are a Python port of Fieldwatch's SignatureEngine.kt and related helpers, and
+android/app/src/main/java/com/whyfi/app/signatures/ a Kotlin port of those.
+All are used under the MIT License:
 
 MIT License
 

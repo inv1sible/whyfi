@@ -390,7 +390,10 @@ object PhoneReports {
             publicIp = recording.publicIp,
             publicIpAtMs = recording.endedAtMs ?: recording.startedAtMs,
             lanDevices = passes.lastOrNull { it.lanObservations.isNotEmpty() }?.lanObservations.orEmpty(),
-            catalogLabels = catalogLabels,
+            // From the recording's own passes, so old recordings get labels too.
+            catalogLabels = catalogLabels + (com.whyfi.app.signatures.LocalSignatures.catalog(context)
+                ?.let { cat -> com.whyfi.app.signatures.LocalSignatures.labels(cat, passes).mapNotNull { (k, v) -> v?.let { k to it } }.toMap() }
+                .orEmpty()),
         )
         scan(context, state, emptyList(), tally.devices(), endedAtMs = recording.endedAtMs, fileKind = "recording")
     }
