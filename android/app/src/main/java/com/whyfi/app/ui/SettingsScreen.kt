@@ -326,12 +326,12 @@ fun SettingsScreen(
         // -- Offline storage --
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Offline storage", style = MaterialTheme.typography.headlineSmall)
+                Text("Storage on this phone", style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    "Scans are queued on the phone whenever the backend is unreachable, then uploaded automatically. " +
-                        "This caps how much space that queue may use — once it's full, the oldest queued scans are " +
-                        "dropped to make room. A reachable backend keeps the queue near empty, so this only matters " +
-                        "while you're offline. A scan pass is roughly 5–30 KB depending on how many networks and " +
+                    "Every scan is kept on the phone as a recording (Scan → Recordings), with or without a server. " +
+                        "When this limit is reached, recordings that are already uploaded are removed first, oldest " +
+                        "first. Recordings that aren't uploaded are never removed automatically; the Recordings " +
+                        "screen warns instead. A scan pass is roughly 5–30 KB depending on how many networks and " +
                         "devices are around.",
                 )
                 Text("Currently using $outboxUsage", style = MaterialTheme.typography.bodyMedium)
@@ -353,6 +353,10 @@ fun SettingsScreen(
                             // Read back, since the setter clamps to the allowed range.
                             quotaMb = settingsRepository.outboxQuotaMb.toString()
                             savedMessage = "Storage limit saved."
+                            // A lower limit applies now, not at the next scan.
+                            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                runCatching { com.whyfi.app.data.local.RecordingStore(context.applicationContext).enforceLimit() }
+                            }
                         }
                     },
                 ) {
@@ -430,8 +434,8 @@ fun SettingsScreen(
 private fun rememberOutboxUsage(quotaMb: Int): String {
     val status = rememberOutboxStatus(quotaMb) ?: return "…"
     val plural = if (status.count == 1) "" else "s"
-    return "${formatBytes(status.bytes)} of $quotaMb MB " +
-        "(${status.count} scan$plural waiting to upload)"
+    return "${formatBytes(status.bytes)} of $quotaMb MB" +
+        if (status.serverConfigured) " (${status.count} scan$plural waiting to upload)" else ""
 }
 
 @Composable

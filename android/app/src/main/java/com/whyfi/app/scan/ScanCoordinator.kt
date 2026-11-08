@@ -1,5 +1,8 @@
 package com.whyfi.app.scan
 
+import com.whyfi.app.data.local.RecordingEntity
+import com.whyfi.app.data.local.RecordingStore
+
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -10,20 +13,15 @@ import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
-import com.google.gson.Gson
 import com.whyfi.app.ble.BleDeviceScanner
 import com.whyfi.app.cellular.CellularManager
 import com.whyfi.app.data.SettingsRepository
-import com.whyfi.app.data.local.PendingScanDao
-import com.whyfi.app.data.local.PendingScanEntity
-import com.whyfi.app.data.local.WhyfiDatabase
 import com.whyfi.app.data.remote.BleObservationDto
 import com.whyfi.app.data.remote.CellObservationDto
 import com.whyfi.app.data.remote.FtmObservationDto
 import com.whyfi.app.data.remote.LanObservationDto
 import com.whyfi.app.data.remote.SatelliteObservationDto
 import com.whyfi.app.data.remote.ScanSessionUploadRequest
-import com.whyfi.app.data.remote.UploadWorker
 import com.whyfi.app.data.remote.WifiObservationDto
 import com.whyfi.app.gnss.GnssStatusManager
 import com.whyfi.app.lan.LanScanner
@@ -82,10 +80,13 @@ class ScanCoordinator(private val context: Context) {
     /** Live GPS/network/fused fixes while anything here needs a position. */
     val liveLocation = LiveLocationTracker(context)
     private val settingsRepository = SettingsRepository(context)
-    private val gson = Gson()
+    /** Where every pass goes: the phone's recordings (and from there, a server). */
+    val recordings = RecordingStore(context)
 
     suspend fun runScan(
         options: ScanOptions = ScanOptions(),
+        /** The recording this pass belongs to; null makes it a one-pass recording. */
+        recordingId: String? = null,
         onPhaseChange: (ScanPhase) -> Unit = {},
         // Fired right after each radio's results are in, before moving to
         // the next one — lets the UI fold each radio's own results in as
@@ -102,7 +103,7 @@ class ScanCoordinator(private val context: Context) {
         val passStartBootMs = SystemClock.elapsedRealtime()
         liveLocation.acquire()
         try {
-            return runScanPass(options, startedAt, passStartBootMs, onPhaseChange, onPartialResult, onRadioActive)
+            return runScanPass(options, recordingId, startedAt, passStartBootMs, onPhaseChange, onPartialResult, onRadioActive)
         } finally {
             liveLocation.release()
         }
@@ -110,6 +111,7 @@ class ScanCoordinator(private val context: Context) {
 
     private suspend fun runScanPass(
         options: ScanOptions,
+        recordingId: String?,
         startedAt: String,
         passStartBootMs: Long,
         onPhaseChange: (ScanPhase) -> Unit,
@@ -153,7 +155,7 @@ class ScanCoordinator(private val context: Context) {
             satelliteObservations = satelliteObservations,
         )
 
-        enqueueForUpload(payload)
+        recordings.store(payload, recordingId, RecordingEntity.KIND_SCAN)
         onPhaseChange(ScanPhase.DONE)
         return payload
     }
@@ -163,6 +165,7 @@ class ScanCoordinator(private val context: Context) {
      * session — same pattern the removed NFC tap flow used. */
     suspend fun runLanScan(
         target: LanTarget = LanTarget.Auto,
+        recordingId: String? = null,
         onProgress: (checked: Int, total: Int) -> Unit = { _, _ -> },
         onDeviceFound: (LanObservationDto) -> Unit = {},
     ): ScanSessionUploadRequest {
@@ -178,7 +181,7 @@ class ScanCoordinator(private val context: Context) {
 
         val payload = location.toRequest(startedAt).copy(lanObservations = devices)
 
-        enqueueForUpload(payload)
+        recordings.store(payload, recordingId, RecordingEntity.KIND_LAN)
         return payload
     }
 
@@ -190,7 +193,7 @@ class ScanCoordinator(private val context: Context) {
      * that BSSID (RTT ranging needs the real ScanResult object, not just the
      * BSSID string). Uploads through the same outbox as every other scan —
      * see [enqueueForUpload] — so it survives being offline. */
-    suspend fun rangeOnce(bssid: String): FtmObservationDto {
+    suspend fun rangeOnce(bssid: String, recordingId: String? = null): FtmObservationDto {
         val scanResult = wifiScanManager.lastScanResults().firstOrNull { it.BSSID == bssid }
             ?: return FtmObservationDto(bssid = bssid, success = false, status = "no_recent_scan")
 
@@ -205,48 +208,8 @@ class ScanCoordinator(private val context: Context) {
             liveLocation.release()
         }
         val payload = location.toRequest(startedAt).copy(ftmObservations = listOf(result))
-        enqueueForUpload(payload)
+        recordings.store(payload, recordingId, RecordingEntity.KIND_RANGE)
         return result
-    }
-
-    private suspend fun enqueueForUpload(payload: ScanSessionUploadRequest) {
-        val dao = WhyfiDatabase.getInstance(context).pendingScanDao()
-        dao.insert(
-            PendingScanEntity(
-                clientScanId = payload.clientScanId,
-                payloadJson = gson.toJson(payload),
-                createdAtEpochMs = System.currentTimeMillis(),
-            ),
-        )
-        enforceOutboxQuota(dao)
-        UploadWorker.enqueue(context)
-    }
-
-    /** Keeps the offline outbox inside the user's storage budget by dropping
-     * the oldest queued scans first.
-     *
-     * Budgeted in bytes rather than "keep the newest N scans" because payload
-     * size swings by an order of magnitude with how crowded the airwaves are
-     * — a fixed count would mean wildly different disk use in a quiet street
-     * versus an apartment block. Oldest-first because when a survey has to
-     * lose something, the stale end is worth less than what's happening now.
-     */
-    private suspend fun enforceOutboxQuota(dao: PendingScanDao) {
-        val quotaBytes = settingsRepository.outboxQuotaBytes
-        if ((dao.totalBytes() ?: 0L) <= quotaBytes) return
-
-        val sizes = dao.sizesOldestFirst()
-        var remaining = sizes.sumOf { it.bytes }
-        val doomed = mutableListOf<String>()
-        for (entry in sizes) {
-            // Never evict the last row: if a single scan somehow exceeds the
-            // whole quota, dropping it would silently discard every scan
-            // forever. Better to overshoot the budget by one payload.
-            if (remaining <= quotaBytes || doomed.size == sizes.size - 1) break
-            doomed += entry.clientScanId
-            remaining -= entry.bytes
-        }
-        if (doomed.isNotEmpty()) dao.deleteAll(doomed)
     }
 
     private data class ResolvedLocation(val primary: LocationFix?, val fused: Location?, val fixAgeMs: Long?)

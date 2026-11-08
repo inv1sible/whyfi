@@ -7,8 +7,14 @@ import androidx.compose.ui.platform.LocalContext
 import com.whyfi.app.data.local.WhyfiDatabase
 import java.util.Locale
 
-/** How much is queued for upload right now. Null until the first read lands. */
-data class OutboxStatus(val bytes: Long, val count: Int)
+/** What the phone stores and what still waits for a server. Null until the first read lands. */
+data class OutboxStatus(
+    /** Everything stored: recordings, uploaded or not. */
+    val bytes: Long,
+    /** Passes waiting to upload (only counts with a server set up). */
+    val count: Int,
+    val serverConfigured: Boolean,
+)
 
 /**
  * Reads the outbox size once per change of [refreshKey].
@@ -24,7 +30,11 @@ fun rememberOutboxStatus(refreshKey: Any?): OutboxStatus? {
     val context = LocalContext.current
     val status by produceState<OutboxStatus?>(initialValue = null, refreshKey) {
         val dao = WhyfiDatabase.getInstance(context).pendingScanDao()
-        value = OutboxStatus(bytes = dao.totalBytes() ?: 0L, count = dao.count())
+        value = OutboxStatus(
+            bytes = dao.totalBytes() ?: 0L,
+            count = dao.uploadableCount(),
+            serverConfigured = com.whyfi.app.data.SettingsRepository(context).isConfigured,
+        )
     }
     return status
 }

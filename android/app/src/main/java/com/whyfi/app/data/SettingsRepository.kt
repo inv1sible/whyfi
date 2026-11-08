@@ -130,9 +130,9 @@ class SettingsRepository(context: Context) {
         get() = prefs.getString("active_monitor_mission_id", null)
         set(value) = prefs.edit { putString("active_monitor_mission_id", value) }
 
-    /** How much storage the offline outbox may use before the oldest queued
-     * scans are dropped. Only bites while uploads are failing — a reachable
-     * backend drains the queue continuously, so steady-state usage is ~0. */
+    /** How much storage recordings may use (RecordingStore / StoragePolicy):
+     * uploaded recordings are removed first; never-uploaded ones never
+     * automatically. The key keeps its old "outbox" name so a saved value survives. */
     var outboxQuotaMb: Int
         get() = prefs.getInt(KEY_OUTBOX_QUOTA_MB, DEFAULT_OUTBOX_QUOTA_MB)
         set(value) = prefs.edit { putInt(KEY_OUTBOX_QUOTA_MB, value.coerceIn(MIN_OUTBOX_QUOTA_MB, MAX_OUTBOX_QUOTA_MB)) }
@@ -173,7 +173,7 @@ class SettingsRepository(context: Context) {
     }
 
     companion object {
-        const val DEFAULT_OUTBOX_QUOTA_MB = 100
+        const val DEFAULT_OUTBOX_QUOTA_MB = 500
         const val MIN_OUTBOX_QUOTA_MB = 5
         const val MAX_OUTBOX_QUOTA_MB = 10_000
 

@@ -139,6 +139,23 @@ stale, and don't duplicate what's already obvious from code/tests.
   and is only recognisable by its vendor UUID / "Venus_" name; Tesla keys by
   their name pattern; car hotspots by SSID.
 
+- **The phone keeps its own scan history (recordings), server optional.**
+  Since Room v2 (`MIGRATION_1_2`) every pass is stored in a recording
+  (`RecordingEntity`: Start→Stop, a single scan, or a lone LAN sweep/range)
+  and stays after upload (`PendingScanEntity.syncState`) instead of being
+  deleted. Why: standalone use ("whyfi SA") for new / one-time users, and
+  less server work; the user wants several recordings and missions on the
+  phone. `RecordingStore` owns it; `UploadWorker` uploads only passes of
+  recordings with `syncAllowed` (true when a server was set up at recording
+  time; standalone ones wait for "ask on connect" after the setup QR, the
+  user's choice 2026-11-08). Storage limit (`StoragePolicy`, default 500 MB,
+  the old outbox setting key): uploaded recordings go first, oldest first;
+  never-uploaded ones are never removed automatically, the Recordings screen
+  warns instead (user's choice). Ingest is idempotent on `client_scan_id`, so
+  re-uploads are safe. Planned next: on-phone catalog matching for
+  standalone (shared fixtures with the backend), ask-on-connect, hiding
+  server-only UI without a server, GitHub Releases.
+
 - **LAN MACs: the ARP table is closed (Android 10+), NetBIOS is the way.**
   `/proc/net/arp` is unreadable for apps since Android 10 and `ip neigh`
   since targetSdk 30, so the sweep's MACs come from the NetBIOS node-status

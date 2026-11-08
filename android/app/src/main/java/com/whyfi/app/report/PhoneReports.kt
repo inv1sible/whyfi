@@ -222,6 +222,9 @@ object PhoneReports {
         state: ScanUiState,
         track: List<TrackPoint>,
         devices: com.whyfi.app.scan.SurveyTally.SessionDevices,
+        /** For a stored recording: when it ended, and the file name kind. */
+        endedAtMs: Long? = null,
+        fileKind: String = "scan",
     ): File = withContext(Dispatchers.IO) {
         val generated = now()
         val survey = state.survey
@@ -230,7 +233,7 @@ object PhoneReports {
         val last = track.lastOrNull() ?: positions.lastOrNull()
         doc.keyValues(listOf(
             "Session" to (if (survey.startedAtMs > 0) DateFormat.getDateTimeInstance().format(Date(survey.startedAtMs)) else "–") +
-                " – " + time.format(Date()),
+                " – " + time.format(Date(endedAtMs ?: System.currentTimeMillis())),
             "Passes" to "${survey.passCount} this session · ${state.completedScanCount} completed",
             "Public IP" to publicIpLine(state),
             "Last position" to (last?.let { "%.6f, %.6f".format(Locale.US, it.lat, it.lng) +
@@ -273,13 +276,13 @@ object PhoneReports {
         }
         doc.heading(notes, "Appendix $notes · Notes")
         doc.bullets(listOf(
-            "Each device is listed once with the strongest reading this session; the web app has every pass.",
+            "Each device is listed once with the strongest reading this session; every pass is kept in the recording on the phone (Recordings → Share) and, when uploaded, in the web app.",
             "Bluetooth devices rotate their MAC address, so one device can appear several times.",
             "The public IP comes from ident.me and is what the internet saw at that time; it changes with the network.",
             "Positions use GPS first, then fused, then network fixes; accuracy is Android's 68 % radius.",
             "Map tiles © OpenStreetMap contributors.",
         ), muted = false)
-        write(doc, file(context, "scan"))
+        write(doc, file(context, fileKind))
     }
 
     /** WiFi, cellular or BLE: the last pass from the detail screen. */
@@ -358,6 +361,63 @@ object PhoneReports {
     }
 
     /** Opens [file] in the default PDF viewer; returns an error message, or null. */
+    /** The scan report for a stored recording, rebuilt from its passes. */
+    suspend fun recording(
+        context: Context,
+        recording: com.whyfi.app.data.local.RecordingSummary,
+        passes: List<com.whyfi.app.data.remote.ScanSessionUploadRequest>,
+        catalogLabels: Map<String, String>,
+    ): File = withContext(Dispatchers.IO) {
+        val radioPasses = passes.filter { it.lanObservations.isEmpty() && it.ftmObservations.isEmpty() }
+        val tally = com.whyfi.app.scan.SurveyTally()
+        radioPasses.forEach {
+            tally.beginPass()
+            tally.recordWifi(it.wifiObservations); tally.recordCellular(it.cellObservations)
+            tally.recordBle(it.bleObservations); tally.recordSatellite(it.satelliteObservations)
+        }
+        val positions = passes.mapNotNull { p ->
+            val lat = p.latitude ?: return@mapNotNull null
+            val lng = p.longitude ?: return@mapNotNull null
+            TrackPoint(com.whyfi.app.scan.RecordingFormat.epochMs(p.completedAt) ?: recording.startedAtMs, lat, lng,
+                p.locationAccuracyMeters?.toDouble(), p.locationProvider.ifBlank { "unknown" })
+        }
+        val state = ScanUiState(
+            latestPass = radioPasses.lastOrNull(),
+            previousPass = radioPasses.dropLast(1).lastOrNull(),
+            completedScanCount = radioPasses.size,
+            survey = tally.snapshot().copy(startedAtMs = recording.startedAtMs),
+            passPositions = positions,
+            publicIp = recording.publicIp,
+            publicIpAtMs = recording.endedAtMs ?: recording.startedAtMs,
+            lanDevices = passes.lastOrNull { it.lanObservations.isNotEmpty() }?.lanObservations.orEmpty(),
+            catalogLabels = catalogLabels,
+        )
+        scan(context, state, emptyList(), tally.devices(), endedAtMs = recording.endedAtMs, fileKind = "recording")
+    }
+
+    /** Shares a file (PDF report or a recording's raw JSON) through the chooser. */
+    fun share(context: Context, file: File, mime: String): String? = try {
+        val uri = FileProvider.getUriForFile(context, context.packageName + AUTHORITY_SUFFIX, file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = mime
+            putExtra(Intent.EXTRA_STREAM, uri)
+            clipData = ClipData.newRawUri(file.name, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(Intent.createChooser(intent, "Share recording").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        null
+    } catch (e: Exception) {
+        "Could not share: ${e.message}"
+    }
+
+    /** A recording's passes as one JSON array (the upload format), under reports/. */
+    suspend fun exportJson(context: Context, recording: com.whyfi.app.data.local.RecordingSummary, json: String): File = withContext(Dispatchers.IO) {
+        val dir = File(context.getExternalFilesDir(null) ?: throw IOException("No app storage available"), "reports").apply { mkdirs() }
+        dir.listFiles { f -> f.name.startsWith("whyfi-recording-") && f.name.endsWith(".json") }?.forEach { it.delete() }
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date(recording.startedAtMs))
+        File(dir, "whyfi-recording-$stamp.json").apply { writeText(json) }
+    }
+
     fun open(context: Context, file: File): String? = try {
         val uri = FileProvider.getUriForFile(context, context.packageName + AUTHORITY_SUFFIX, file)
         val intent = Intent(Intent.ACTION_VIEW).apply {

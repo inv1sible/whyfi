@@ -155,11 +155,10 @@ fun DashboardScreen(
         HorizontalDivider()
         outbox?.let {
             Text(
-                if (it.count == 0) {
-                    "Everything uploaded — nothing waiting."
-                } else {
-                    "${it.count} scan${if (it.count == 1) "" else "s"} waiting to upload " +
-                        "(${formatBytes(it.bytes)})."
+                when {
+                    !it.serverConfigured -> "Scans are saved on this phone (${formatBytes(it.bytes)}): Scan → Recordings."
+                    it.count == 0 -> "Everything uploaded — nothing waiting."
+                    else -> "${it.count} scan${if (it.count == 1) "" else "s"} waiting to upload."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -171,7 +170,7 @@ fun DashboardScreen(
         // than letting someone read it as their whole survey.
         Text(
             "These totals cover this scanning session only and reset when the scanner stops. " +
-                "The complete survey — every scan ever uploaded, on a map — is in whyfi in your browser.",
+                "Every scan is kept under Scan → Recordings; with a server, the complete survey is also on a map in whyfi in your browser.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

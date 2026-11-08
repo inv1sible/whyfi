@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat
 import com.whyfi.app.BuildConfig
 import com.whyfi.app.R
 import com.whyfi.app.data.SettingsRepository
+import com.whyfi.app.data.local.RecordingEntity
 import com.whyfi.app.data.local.WhyfiDatabase
 import com.whyfi.app.data.remote.ApiClientFactory
 import com.whyfi.app.data.remote.LanObservationDto
@@ -43,6 +44,7 @@ import com.whyfi.app.usbmon.SniffedDevices
 import com.whyfi.app.usbmon.UsbMonitorNative
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
@@ -273,6 +275,8 @@ class ScanForegroundService : Service() {
             _locationTrack.update { LocationTrack.append(it, point) }
         }
         settingsRepository = SettingsRepository(applicationContext)
+        // Nothing is recording yet: close what a killed process left open.
+        serviceScope.launch(Dispatchers.IO) { runCatching { scanCoordinator.recordings.closeStale(emptyList()) } }
         createNotificationChannel()
         // Restore the last completed pass so the Dashboard isn't blank after a
         // force-stop or reboot. Only latestPass + completedScanCount are
@@ -492,7 +496,12 @@ class ScanForegroundService : Service() {
     fun scanOnce(options: ScanOptions) {
         if (_uiState.value.isScanning || _uiState.value.isContinuous) return
         serviceScope.launch {
-            runOnePass(options)
+            beginRecording()
+            try {
+                runOnePass(options)
+            } finally {
+                endRecording()
+            }
             craftScanReport()
             stopIfNothingKeepsUsAlive()
         }
@@ -517,6 +526,7 @@ class ScanForegroundService : Service() {
         // fresh fix instead of a cold start (see LiveLocationTracker).
         scanCoordinator.liveLocation.acquire()
         continuousJob = serviceScope.launch {
+            beginRecording()
             try {
                 while (isActive && !gracefulStopRequested) {
                     val config = continuousConfig.value
@@ -530,6 +540,7 @@ class ScanForegroundService : Service() {
             } finally {
                 // Runs on cancellation too, so both stop paths converge here.
                 continuousJob = null
+                endRecording()
                 scanCoordinator.liveLocation.release()
                 motionDetector.stop()
                 _uiState.update {
@@ -658,6 +669,8 @@ class ScanForegroundService : Service() {
             try {
                 val result = scanCoordinator.runLanScan(
                     target = target,
+                    // Inside the running scan's recording, else its own.
+                    recordingId = recordingId,
                     onProgress = { checked, total -> _uiState.update { it.copy(lanChecked = checked, lanTotal = total) } },
                     onDeviceFound = { device -> _uiState.update { it.copy(lanDevices = it.lanDevices + device) } },
                 )
@@ -980,6 +993,22 @@ class ScanForegroundService : Service() {
         monitorMission?.let { MonitorMission.append(it, event, details) }
     }
 
+    /** The recording passes go into while a scan runs (see RecordingStore). */
+    @Volatile private var recordingId: String? = null
+
+    private suspend fun beginRecording() {
+        recordingId = runCatching { scanCoordinator.recordings.begin(RecordingEntity.KIND_SCAN) }.getOrNull()
+    }
+
+    /** Closes the recording; NonCancellable because it runs from a cancelled loop's finally. */
+    private suspend fun endRecording() {
+        val id = recordingId ?: return
+        recordingId = null
+        withContext(NonCancellable + Dispatchers.IO) {
+            runCatching { scanCoordinator.recordings.end(id, _uiState.value.publicIp) }
+        }
+    }
+
     private suspend fun runOnePass(options: ScanOptions) {
         _uiState.update {
             it.copy(
@@ -994,6 +1023,7 @@ class ScanForegroundService : Service() {
         surveyTally.beginPass()
         val pass = scanCoordinator.runScan(
             options,
+            recordingId = recordingId,
             onPhaseChange = { phase ->
                 _uiState.update { it.copy(currentPhase = phase) }
                 updateNotification(phaseNotificationLabel(phase))

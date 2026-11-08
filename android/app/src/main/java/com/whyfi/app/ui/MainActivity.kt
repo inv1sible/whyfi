@@ -217,6 +217,7 @@ private fun WhyfiApp(
     val tabCount = 4
     var detailRadio by rememberSaveable { mutableStateOf<String?>(null) }
     var showMission by rememberSaveable { mutableStateOf(false) }
+    var showRecordings by rememberSaveable { mutableStateOf(false) }
 
     // Backs the tab bar with a swipeable pager. selectedTab stays the
     // source of truth for TabRow's indicator and survives rotation via
@@ -248,6 +249,7 @@ private fun WhyfiApp(
     // showMission, never alongside detailRadio), so either BackHandler
     // closing its own screen is sufficient.
     BackHandler(enabled = showMission) { showMission = false }
+    BackHandler(enabled = showRecordings) { showRecordings = false }
 
     val activeDetail = detailRadio?.let { name -> RadioKind.entries.firstOrNull { it.name == name } }
     if (activeDetail != null) {
@@ -259,6 +261,11 @@ private fun WhyfiApp(
             favoritesRepository = favoritesRepository,
             service = service,
         )
+        return
+    }
+
+    if (showRecordings) {
+        RecordingsScreen(uiState = uiState, onBack = { showRecordings = false })
         return
     }
 
@@ -318,6 +325,7 @@ private fun WhyfiApp(
                 1 -> ScanScreen(
                     service = service, uiState = uiState, onOpenDetail = openDetail,
                     onOpenMission = openMission, missionController = missionController,
+                    onOpenRecordings = { showRecordings = true },
                 )
                 2 -> LanScreen(service = service, uiState = uiState)
                 3 -> SettingsScreen(

@@ -11,6 +11,7 @@ import androidx.work.WorkerParameters
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import com.whyfi.app.data.SettingsRepository
+import com.whyfi.app.data.local.PendingScanEntity
 import com.whyfi.app.data.local.WhyfiDatabase
 import java.io.IOException
 
@@ -28,7 +29,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         }
 
         val dao = WhyfiDatabase.getInstance(applicationContext).pendingScanDao()
-        val pending = dao.getAll()
+        val pending = dao.uploadable()
         if (pending.isEmpty()) return Result.success()
 
         val api = ApiClientFactory.create(backendUrl)
@@ -40,13 +41,15 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 val payload = gson.fromJson(entity.payloadJson, ScanSessionUploadRequest::class.java)
                 val response = api.uploadScanSession("Token $token", payload)
                 when {
-                    response.isSuccessful -> dao.delete(entity.clientScanId)
+                    // Kept on the phone as history; the storage limit removes it later.
+                    response.isSuccessful -> dao.setSyncState(entity.clientScanId, PendingScanEntity.SYNC_UPLOADED)
                     isPermanentReject(response.code()) -> {
                         // Retrying this forever would wedge the whole queue
                         // behind it: every later scan stays stuck, the phone
                         // keeps scanning, the map stays empty, and nothing
-                        // anywhere says why. Drop the one bad payload instead.
-                        dao.delete(entity.clientScanId)
+                        // anywhere says why. Mark the one bad payload refused
+                        // instead (it stays in its recording on the phone).
+                        dao.setSyncState(entity.clientScanId, PendingScanEntity.SYNC_REJECTED)
                     }
                     else -> anyFailure = true
                 }
@@ -59,6 +62,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             }
         }
 
+        // Uploaded recordings are now removable under the storage limit.
+        runCatching { com.whyfi.app.data.local.RecordingStore(applicationContext).enforceLimit() }
         return if (anyFailure) Result.retry() else Result.success()
     }
 

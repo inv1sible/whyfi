@@ -19,6 +19,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -76,6 +77,7 @@ fun ScanScreen(
     missionController: MissionController,
     onOpenDetail: (RadioKind) -> Unit = {},
     onOpenMission: () -> Unit = {},
+    onOpenRecordings: () -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -139,6 +141,8 @@ fun ScanScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("whyfi scanner", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+            // Every scan is kept on the phone (RecordingStore).
+            TextButton(onClick = onOpenRecordings) { Text("🗂️ Recordings") }
             // Written automatically when scanning stops (all radios, public
             // IP, location); regenerated if passes ran since.
             if (uiState.latestPass != null && !uiState.isScanning && !uiState.isContinuous) {
