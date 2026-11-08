@@ -25,6 +25,11 @@ CSRF_TRUSTED_ORIGINS = [
     o.strip() for o in os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()
 ]
 
+# Django's default of "same-origin" drops the Referer on cross-origin requests,
+# but OSM's tile servers require one under their usage policy and answer 403
+# without it. Other origins only ever see the origin here, never the path.
+SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
