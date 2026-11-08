@@ -1,0 +1,84 @@
+package com.whyfi.app.mission
+
+import com.google.gson.Gson
+import com.whyfi.app.data.remote.BleObservationDto
+import com.whyfi.app.data.remote.CellObservationDto
+import com.whyfi.app.data.remote.ScanSessionUploadRequest
+import com.whyfi.app.data.remote.WifiObservationDto
+import com.whyfi.app.scan.RadioKind
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class LocalMissionPointsTest {
+    private val gson = Gson()
+    private val lat = 52.52
+    private val lng = 13.405
+
+    private fun wifi(ssid: String, rssi: Int) = WifiObservationDto(bssid = "aa:bb:cc:dd:ee:01", ssid = ssid, rssi = rssi, frequencyMhz = 2412, capabilities = "")
+    private fun ble(mac: String, rssi: Int) = BleObservationDto(
+        bleMac = mac, stableIdentifier = "", rssi = rssi, txPower = null, manufacturerData = "", deviceTypeGuess = "UNKNOWN",
+    )
+    private fun cell(cellId: String, dbm: Int?) = CellObservationDto(
+        mcc = "262", mnc = "01", carrierName = "", radioType = "LTE", cellId = cellId, tacOrLac = "4711", band = "",
+        isServingCell = true, signalDbm = dbm, rsrp = null, rsrq = null, sinr = null,
+    )
+
+    private fun pass(
+        lat: Double? = this.lat, lng: Double? = this.lng,
+        wifi: List<WifiObservationDto> = emptyList(), ble: List<BleObservationDto> = emptyList(), cells: List<CellObservationDto> = emptyList(),
+    ): String = gson.toJson(ScanSessionUploadRequest(
+        clientScanId = "x", startedAt = "", completedAt = "", latitude = lat, longitude = lng, locationAccuracyMeters = null,
+        wifiObservations = wifi, bleObservations = ble, cellObservations = cells,
+    ))
+
+    @Test
+    fun wifiBySsidNearbyOnly() {
+        val target = MissionTarget(RadioKind.WIFI, "Home <5G>")
+        val payloads = listOf(
+            pass(wifi = listOf(wifi("Home <5G>", -50), wifi("Other", -40))),
+            pass(lat = lat + 0.0005, wifi = listOf(wifi("Home <5G>", -70))), // ~55 m
+            pass(lat = lat + 0.01, wifi = listOf(wifi("Home <5G>", -30))), // ~1.1 km: outside
+            pass(lat = null, wifi = listOf(wifi("Home <5G>", -30))), // no fix
+        )
+        val result = LocalMissionPoints.points(payloads, target, lat, lng, 250.0)
+        assertEquals(listOf(-50.0, -70.0), result.points.map { it.weight })
+        assertEquals(2, result.passes)
+        assertFalse(result.truncated)
+        // The database prefilter must find the SSID the way Gson stored it.
+        assertTrue(payloads.all { it.contains(LocalMissionPoints.needle(target)) })
+    }
+
+    @Test
+    fun bleByMacIgnoringCase() {
+        val target = MissionTarget(RadioKind.BLE, "AA:BB:CC:00:11:22")
+        val result = LocalMissionPoints.points(listOf(pass(ble = listOf(ble("aa:bb:cc:00:11:22", -60), ble("aa:bb:cc:00:11:23", -40)))), target, lat, lng, 250.0)
+        assertEquals(listOf(-60.0), result.points.map { it.weight })
+    }
+
+    @Test
+    fun cellByTowerKeySkipsMissingSignal() {
+        val target = MissionTarget(RadioKind.CELLULAR, "262-01-4711-1234567")
+        val payloads = listOf(pass(cells = listOf(cell("1234567", -95), cell("1234567", null), cell("7654321", -80))))
+        val result = LocalMissionPoints.points(payloads, target, lat, lng, 250.0)
+        assertEquals(listOf(-95.0), result.points.map { it.weight })
+        assertTrue(payloads[0].contains(LocalMissionPoints.needle(target)))
+    }
+
+    @Test
+    fun capsAndFlagsTruncation() {
+        val target = MissionTarget(RadioKind.WIFI, "Net")
+        val payloads = List(5) { pass(wifi = listOf(wifi("Net", -50))) }
+        val result = LocalMissionPoints.points(payloads, target, lat, lng, 250.0, cap = 3)
+        assertEquals(3, result.points.size)
+        assertTrue(result.truncated)
+    }
+
+    @Test
+    fun brokenJsonIsSkipped() {
+        val target = MissionTarget(RadioKind.WIFI, "Net")
+        val result = LocalMissionPoints.points(listOf("{not json", pass(wifi = listOf(wifi("Net", -50)))), target, lat, lng, 250.0)
+        assertEquals(1, result.points.size)
+    }
+}

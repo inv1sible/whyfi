@@ -203,7 +203,7 @@ fun ScanScreen(
                 onClick = if (openable) ({ onOpenDetail(RadioKind.SATELLITE) }) else null,
             )
             // Mission locates a device from the server's scan history: server only.
-            if (serverConfigured) RadioStatChip("🎯", "Mission", null, missionState.isTracking, Color(0xFFF472B6), modifier = Modifier.weight(1f), onClick = onOpenMission)
+            RadioStatChip("🎯", "Mission", null, missionState.isTracking, Color(0xFFF472B6), modifier = Modifier.weight(1f), onClick = onOpenMission)
         }
         if (openable) {
             Text(

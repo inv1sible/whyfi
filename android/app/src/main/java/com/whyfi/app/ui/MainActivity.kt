@@ -185,12 +185,11 @@ private fun maskToken(token: String): String =
 /** Emoji rather than vector icons, matching RadioStatChip — the app has no
  * icon library on the classpath and the radio glyphs here are the same ones
  * used for results throughout, so they already mean something to the reader. */
-private const val DASHBOARD_ICON = "📊"
 private const val SCAN_ICON = "🔍"
 private const val LAN_ICON = "🌐"
 private const val SETTINGS_ICON = "⚙️"
 private const val MISSION_ICON = "🎯"
-private const val MISSION_TAB = 3
+private const val MISSION_TAB = 2
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -204,7 +203,6 @@ private fun WhyfiApp(
     // rememberSaveable, not remember: rotating the phone shouldn't throw you
     // out of a results table back to the Scan tab.
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    var advancedMode by remember { mutableStateOf(settingsRepository.advancedModeEnabled) }
     // See Workspace.kt: phone radios and the USB adapter are separate
     // workspaces, switchable at any time (adapter or not).
     var workspace by rememberSaveable { mutableStateOf(Workspace.from(settingsRepository.workspace)) }
@@ -212,11 +210,7 @@ private fun WhyfiApp(
         workspace = it
         settingsRepository.workspace = it.key
     }
-    val attachedUsb = rememberAttachedUsbDevices()
-    // Dismissed for the device(s) plugged in now; a new attach shows it again.
-    var bannerDismissedFor by rememberSaveable { mutableStateOf("") }
-    val usbKey = attachedUsb.joinToString { it.deviceName }
-    val tabCount = 5
+    val tabCount = 4
     var detailRadio by rememberSaveable { mutableStateOf<String?>(null) }
     var showRecordings by rememberSaveable { mutableStateOf(false) }
 
@@ -269,18 +263,14 @@ private fun WhyfiApp(
     }
 
     if (workspace == Workspace.ADAPTER) {
-        val emptyMonitor = remember { kotlinx.coroutines.flow.MutableStateFlow(MonitorUiState()) }
-        val monitorState by (service?.monitorState ?: emptyMonitor).collectAsState()
         MaterialTheme(colorScheme = adapterColorScheme(MaterialTheme.colorScheme)) {
             Surface(Modifier.fillMaxSize()) {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    AdapterStatusStrip(monitorState, attachedUsb)
                     MonitorScreen(
                         service = service,
                         settingsRepository = settingsRepository,
-                        unlocked = advancedMode,
                         toggle = { WorkspaceToggle(workspace, switchWorkspace) },
-                        setup = { AdapterSettings(settingsRepository, onAdvancedModeChange = { advancedMode = it }) },
+                        setup = { AdapterSettings(settingsRepository) },
                     )
                 }
             }
@@ -289,19 +279,12 @@ private fun WhyfiApp(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        if (attachedUsb.isNotEmpty() && bannerDismissedFor != usbKey) {
-            AdapterAttachedBanner(
-                onSwitch = { switchWorkspace(Workspace.ADAPTER) },
-                onDismiss = { bannerDismissedFor = usbKey },
-            )
-        }
         WorkspaceTabBar(workspace, switchWorkspace) {
             TabRow(selectedTabIndex = selectedTab.coerceAtMost(tabCount - 1)) {
-                WhyfiTab(DASHBOARD_ICON, "Overview", 0, selectedTab) { goToTab(0) }
-                WhyfiTab(SCAN_ICON, "Scan", 1, selectedTab) { goToTab(1) }
-                WhyfiTab(LAN_ICON, "LAN", 2, selectedTab) { goToTab(2) }
+                WhyfiTab(SCAN_ICON, "Scan", 0, selectedTab) { goToTab(0) }
+                WhyfiTab(LAN_ICON, "LAN", 1, selectedTab) { goToTab(1) }
                 WhyfiTab(MISSION_ICON, "Mission", MISSION_TAB, selectedTab) { goToTab(MISSION_TAB) }
-                WhyfiTab(SETTINGS_ICON, "Settings", 4, selectedTab) { goToTab(4) }
+                WhyfiTab(SETTINGS_ICON, "Settings", 3, selectedTab) { goToTab(3) }
             }
         }
 
@@ -310,23 +293,19 @@ private fun WhyfiApp(
         HorizontalPager(state = pagerState, modifier = Modifier.weight(1f),
             userScrollEnabled = pagerState.currentPage != MISSION_TAB) { page ->
             when (page) {
-                0 -> DashboardScreen(
-                    service = service, uiState = uiState, onOpenDetail = openDetail,
-                    onOpenMission = openMission, missionController = missionController,
-                )
-                1 -> ScanScreen(
+                0 -> ScanScreen(
                     service = service, uiState = uiState, onOpenDetail = openDetail,
                     onOpenMission = openMission, missionController = missionController,
                     onOpenRecordings = { showRecordings = true },
                 )
-                2 -> LanScreen(service = service, uiState = uiState)
+                1 -> LanScreen(service = service, uiState = uiState)
                 MISSION_TAB -> MissionScreen(
                     favoritesRepository = favoritesRepository,
                     missionController = missionController,
                     service = service,
                     onBack = null,
                 )
-                4 -> SettingsScreen(
+                3 -> SettingsScreen(
                     settingsRepository = settingsRepository,
                     themePreference = themePreference,
                     onThemePreferenceChange = onThemePreferenceChange,

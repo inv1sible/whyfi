@@ -3,6 +3,7 @@ package com.whyfi.app.mission
 import android.content.Context
 import com.whyfi.app.data.PositionEstimator
 import com.whyfi.app.data.SettingsRepository
+import com.whyfi.app.data.local.RecordingStore
 import com.whyfi.app.data.remote.ApiClientFactory
 import com.whyfi.app.data.remote.MissionEstimatesDto
 import com.whyfi.app.scan.LocationSnapshot
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** A favorited thing Mission view can track — an SSID (WIFI), a MAC/stable
@@ -57,6 +59,14 @@ data class MissionUiState(
     /** The estimator the user picked in Settings, carried into UI state so
      * the screen doesn't have to re-read SharedPreferences to label things. */
     val estimator: PositionEstimator = PositionEstimator.CENTROID,
+    /** The phone's position while Mission is on screen ([MissionController.watchHere]),
+     * independent of tracking: the map centres on it before any target. */
+    val here: LatLng? = null,
+    /** True when [points] come from scans stored on this phone rather than
+     * the server (no server set up, or it couldn't be reached). */
+    val fromPhone: Boolean = false,
+    /** Why the phone's scans were used although a server is set up. */
+    val notice: String? = null,
 )
 
 /**
@@ -88,6 +98,19 @@ class MissionController(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var locationSubscription: AutoCloseable? = null
     private var trackingJob: Job? = null
+    private val recordings = RecordingStore(context)
+
+    /** Follows the phone's position for the map while Mission is visible.
+     * Null without location permission. Close it when Mission leaves the
+     * screen. */
+    fun watchHere(): AutoCloseable? {
+        LocationSnapshot.lastKnown(context)?.let { setHere(it.latitude, it.longitude) }
+        return LocationSnapshot.requestUpdates(context, includeFused = true) { setHere(it.latitude, it.longitude) }
+    }
+
+    private fun setHere(lat: Double, lng: Double) {
+        _uiState.value = _uiState.value.copy(here = LatLng(lat, lng))
+    }
 
     /** One-shot fetch for a tap on a favorite that isn't being tracked. */
     suspend fun selectTarget(target: MissionTarget, radiusMeters: Double = DEFAULT_NEAR_RADIUS_M) {
@@ -163,7 +186,7 @@ class MissionController(
      * leaves the map showing what was last found. */
     fun clearSelection() {
         stopTrackingJobs()
-        _uiState.value = MissionUiState()
+        _uiState.value = MissionUiState(here = _uiState.value.here)
     }
 
     private fun stopTrackingJobs() {
@@ -182,6 +205,7 @@ class MissionController(
 
     private suspend fun fetchOnce(target: MissionTarget, radiusMeters: Double) {
         val location = LocationSnapshot.lastKnown(context)
+            ?: _uiState.value.here?.let { here -> android.location.Location("mission").apply { latitude = here.lat; longitude = here.lng } }
         if (location == null) {
             _uiState.value = _uiState.value.copy(
                 isLoading = false,
@@ -193,10 +217,7 @@ class MissionController(
         val backendUrl = settingsRepository.backendUrl
         val token = settingsRepository.sensorToken
         if (backendUrl.isNullOrBlank() || token.isNullOrBlank()) {
-            _uiState.value = _uiState.value.copy(
-                isLoading = false,
-                error = "Mission estimates positions from scans on a whyfi server: Settings → Connect to a server.",
-            )
+            fetchLocal(target, location.latitude, location.longitude, radiusMeters, notice = null)
             return
         }
 
@@ -211,7 +232,7 @@ class MissionController(
                     )
                     val body = response.body()
                     if (!response.isSuccessful || body == null) {
-                        _uiState.value = _uiState.value.copy(isLoading = false, error = "Fetch failed (HTTP ${response.code()}).")
+                        fetchLocal(target, location.latitude, location.longitude, radiusMeters, "Server answered HTTP ${response.code()}")
                         return
                     }
                     estimates = body.estimates
@@ -223,7 +244,7 @@ class MissionController(
                     )
                     val body = response.body()
                     if (!response.isSuccessful || body == null) {
-                        _uiState.value = _uiState.value.copy(isLoading = false, error = "Fetch failed (HTTP ${response.code()}).")
+                        fetchLocal(target, location.latitude, location.longitude, radiusMeters, "Server answered HTTP ${response.code()}")
                         return
                     }
                     estimates = body.estimates
@@ -235,7 +256,7 @@ class MissionController(
                     )
                     val body = response.body()
                     if (!response.isSuccessful || body == null) {
-                        _uiState.value = _uiState.value.copy(isLoading = false, error = "Fetch failed (HTTP ${response.code()}).")
+                        fetchLocal(target, location.latitude, location.longitude, radiusMeters, "Server answered HTTP ${response.code()}")
                         return
                     }
                     estimates = body.estimates
@@ -250,10 +271,30 @@ class MissionController(
                 error = null,
                 estimates = estimates,
                 estimator = settingsRepository.positionEstimator,
+                fromPhone = false,
+                notice = null,
             )
         } catch (e: IOException) {
-            _uiState.value = _uiState.value.copy(isLoading = false, error = "Could not reach the backend: ${e.message}")
+            fetchLocal(target, location.latitude, location.longitude, radiusMeters, "Server not reachable")
         }
+    }
+
+    /** Readings from this phone's stored scans (LocalMissionPoints). The
+     * cone apex is then the local weighted centroid (no estimator comparison). */
+    private suspend fun fetchLocal(target: MissionTarget, lat: Double, lng: Double, radiusMeters: Double, notice: String?) {
+        val result = withContext(Dispatchers.IO) {
+            LocalMissionPoints.points(recordings.payloadsContaining(LocalMissionPoints.needle(target)), target, lat, lng, radiusMeters)
+        }
+        _uiState.value = _uiState.value.copy(
+            isLoading = false,
+            points = result.points,
+            truncated = result.truncated,
+            error = null,
+            estimates = null,
+            estimator = settingsRepository.positionEstimator,
+            fromPhone = true,
+            notice = notice,
+        )
     }
 
     companion object {

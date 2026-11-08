@@ -48,19 +48,15 @@ import kotlinx.coroutines.withContext
 
 /** Local receive session; completed missions can be uploaded explicitly.
  * [setup] is the adapter workspace's settings (USB test, noise filter),
- * shown in the Setup tab. Capture needs a passed USB monitor test ([unlocked]). */
+ * shown in the Setup tab. Capture needs no prior USB monitor test. */
 @Composable
 fun MonitorScreen(
     service: ScanForegroundService?,
     settingsRepository: SettingsRepository,
-    unlocked: Boolean,
     toggle: @Composable () -> Unit,
     setup: @Composable () -> Unit,
 ) {
-    // All tabs are always shown, so the workspace can be explored (missions,
-    // map, setup) without an adapter; only starting a capture needs a passed
-    // USB monitor test.
-    MonitorWorkspace(service, settingsRepository, unlocked, toggle, setup)
+    MonitorWorkspace(service, settingsRepository, toggle, setup)
 }
 
 /** What a capture is filtered to. The six device categories are grouped
@@ -78,7 +74,7 @@ private val DEVICE_CATEGORIES = listOf(
 /** The adapter workspace's top-level tabs, with emoji icons like the phone
  * workspace's tabs (no icon library dependency). */
 private enum class MonitorSection(val label: String, val icon: String) {
-    LIVE("Live", "📡"), MAP("Map", "🗺️"), DEVICES("Devices", "📋"), MISSIONS("Missions", "🗂️"), SETUP("Setup", "🛠️"),
+    LIVE("Live", "📡"), MAP("Map", "🗺️"), MISSIONS("Missions", "🗂️"), SETUP("Setup", "🛠️"),
 }
 
 private fun sectionOf(tab: MonitorTab): MonitorSection = when (tab) {
@@ -86,7 +82,7 @@ private fun sectionOf(tab: MonitorTab): MonitorSection = when (tab) {
     MonitorTab.MAPPING -> MonitorSection.MAP
     MonitorTab.MISSIONS -> MonitorSection.MISSIONS
     MonitorTab.SETUP -> MonitorSection.SETUP
-    else -> MonitorSection.DEVICES
+    else -> MonitorSection.LIVE
 }
 
 private enum class NearbySort { RSSI, LAST_SEEN }
@@ -95,7 +91,6 @@ private enum class NearbySort { RSSI, LAST_SEEN }
 private fun MonitorWorkspace(
     service: ScanForegroundService?,
     settingsRepository: SettingsRepository,
-    unlocked: Boolean,
     toggle: @Composable () -> Unit,
     setup: @Composable () -> Unit,
 ) {
@@ -266,7 +261,9 @@ private fun MonitorWorkspace(
         }
     }
     val replaying = selectedMissionLogPath != null
-    val selected = MonitorTab.entries.firstOrNull { it.name == selectedName } ?: MonitorTab.NEARBY
+    // The device category tables have no tab any more (Live lists every
+    // device); a category saved from before falls back to Live.
+    val selected = MonitorTab.entries.firstOrNull { it.name == selectedName }?.takeIf { it !in DEVICE_CATEGORIES } ?: MonitorTab.NEARBY
     val nearbyDevices = displayDevices.filter {
         (focusedKind == null || it.second.kind == focusedKind) || (showHiddenAps && MonitorApVisibility.isHidden(it.first, resolvedHiddenAps))
     }
@@ -420,21 +417,11 @@ private fun MonitorWorkspace(
                             MonitorSection.MAP -> MonitorTab.MAPPING
                             MonitorSection.MISSIONS -> MonitorTab.MISSIONS
                             MonitorSection.SETUP -> MonitorTab.SETUP
-                            MonitorSection.DEVICES -> MonitorTab.entries.firstOrNull { it.name == lastCategoryName } ?: MonitorTab.ACCESS_POINTS
                         })
                     }, text = {
                         Text(if (entry == MonitorSection.MISSIONS && missions.isNotEmpty()) "${entry.label} ${missions.size}" else entry.label,
                             maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelSmall)
                     }, icon = { Text(entry.icon, fontSize = 16.sp) })
-                }
-            }
-        }
-        if (section == MonitorSection.DEVICES) {
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                DEVICE_CATEGORIES.forEach { tab ->
-                    FilterChip(tab == selected, { selectTab(tab) },
-                        label = { Text("${tab.label} (${monitorRows(tab, categoryDevices).size})") })
                 }
             }
         }
@@ -475,13 +462,6 @@ private fun MonitorWorkspace(
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
               item(key = "nearby-controls") {
                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!unlocked) Card(Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Capture is locked until the USB monitor test in Setup receives frames.",
-                            style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                        TextButton({ selectTab(MonitorTab.SETUP) }) { Text("${MonitorSection.SETUP.icon} Setup") }
-                    }
-                }
                 if (showUsb || selectedDevice == null) {
                     UsbPanel(usbDevices, selectedDevice, state.running,
                         {
@@ -626,7 +606,7 @@ private fun MonitorWorkspace(
                             if (state.running) Button({ service?.stopMonitor() },
                                 enabled = state.status != "Starting…" && state.status != "Stopping…" &&
                                     state.status != "Saving capture…") { Text("Stop") }
-                            else Button(startMonitor, enabled = unlocked && !starting && continuingMissionId == null && selectedDevice != null) {
+                            else Button(startMonitor, enabled = !starting && continuingMissionId == null && selectedDevice != null) {
                                 Text(if (starting) "Starting…" else "Start")
                             }
                             if (selected == MonitorTab.NEARBY) TextButton({ pendingReset = true },

@@ -23,7 +23,7 @@ import com.whyfi.app.data.SettingsRepository
 /** Settings that only concern the external USB adapter, shown in the
  * adapter workspace's Setup tab (moved out of the phone's Settings). */
 @Composable
-fun AdapterSettings(settingsRepository: SettingsRepository, onAdvancedModeChange: (Boolean) -> Unit) {
+fun AdapterSettings(settingsRepository: SettingsRepository) {
     var monitorTestPassed by remember { mutableStateOf(settingsRepository.monitorTestPassed) }
     var showUsbMonitorTest by remember { mutableStateOf(false) }
     var noisePatterns by remember { mutableStateOf(settingsRepository.monitorNoisePatterns) }
@@ -33,8 +33,8 @@ fun AdapterSettings(settingsRepository: SettingsRepository, onAdvancedModeChange
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("USB monitor test", style = MaterialTheme.typography.titleLarge)
             Text(
-                if (monitorTestPassed) "Passed. Capture is unlocked."
-                else "Capture is locked until a USB monitor test receives frames.",
+                if (monitorTestPassed) "Passed: this phone has received frames from an adapter."
+                else "Optional: checks that a plugged-in adapter delivers frames. Capture works without it.",
                 style = MaterialTheme.typography.bodySmall,
             )
             OutlinedButton(onClick = { showUsbMonitorTest = true }) { Text("Run USB monitor test (experimental)") }
@@ -45,9 +45,7 @@ fun AdapterSettings(settingsRepository: SettingsRepository, onAdvancedModeChange
                     onDismiss = { showUsbMonitorTest = false },
                     onSuccessfulTest = {
                         settingsRepository.monitorTestPassed = true
-                        settingsRepository.advancedModeEnabled = true
                         monitorTestPassed = true
-                        onAdvancedModeChange(true)
                     },
                 )
             }

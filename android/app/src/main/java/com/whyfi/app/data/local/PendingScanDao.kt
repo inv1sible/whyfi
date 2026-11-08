@@ -48,6 +48,11 @@ interface PendingScanDao {
     @Query("DELETE FROM pending_scans WHERE clientScanId = :clientScanId")
     suspend fun delete(clientScanId: String)
 
+    /** Newest stored passes whose JSON contains [needle] (Mission without a
+     * server, see LocalMissionPoints). Bounded: passes can be large. */
+    @Query("SELECT payloadJson FROM pending_scans WHERE instr(payloadJson, :needle) > 0 ORDER BY createdAtEpochMs DESC LIMIT :limit")
+    suspend fun payloadsContaining(needle: String, limit: Int): List<String>
+
     @Query("SELECT COUNT(*) FROM pending_scans")
     suspend fun count(): Int
 

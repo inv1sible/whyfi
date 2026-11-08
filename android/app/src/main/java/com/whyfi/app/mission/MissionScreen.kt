@@ -1,6 +1,19 @@
 package com.whyfi.app.mission
 
+import android.Manifest
+import android.content.Intent
+import android.provider.Settings
 import android.view.ViewGroup
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.whyfi.app.scan.LocationSnapshot
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -72,6 +85,30 @@ fun MissionScreen(
             .sortedBy { it.identifier }
     }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    // Location starts with the screen: the map follows the phone before any
+    // favorite is picked. Asked for here when not granted yet.
+    var locationRevision by remember { mutableIntStateOf(0) }
+    val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { locationRevision++ }
+    val hasLocation = remember(locationRevision) { LocationSnapshot.hasLocationPermission(context) }
+    val locationOn = remember(locationRevision) { LocationSnapshot.isLocationEnabled(context) }
+    LaunchedEffect(Unit) {
+        if (!LocationSnapshot.hasLocationPermission(context)) {
+            locationLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+        }
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        // Back from the system location settings: look again.
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) locationRevision++ }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    DisposableEffect(hasLocation, locationOn) {
+        val subscription = if (hasLocation) missionController.watchHere() else null
+        onDispose { subscription?.close() }
+    }
 
     // The 250m near-filter keeps a favorited target's sightings from some
     // other place entirely (a travel router, a BLE device that moved) from
@@ -105,32 +142,13 @@ fun MissionScreen(
     // earlier ones, which is the one z-order guarantee that reliably holds
     // here.
     Box(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            when {
-                uiState.target == null -> Text(
-                    "Pick a favorite below to see its estimated location.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 32.dp),
-                )
-                uiState.points.isEmpty() -> Text(
-                    if (uiState.isLoading) {
-                        "Locating…"
-                    } else if (uiState.error != null) {
-                        ""
-                    } else {
-                        "No readings of \"${uiState.target?.identifier}\" found near your current location."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 32.dp),
-                )
-                else -> MissionMap(
-                    points = uiState.points,
-                    livePosition = uiState.livePosition,
-                    modifier = Modifier.fillMaxSize(),
-                    estimatedApex = selectedEstimate(uiState),
-                )
-            }
-        }
+        MissionMap(
+            points = uiState.points,
+            livePosition = uiState.livePosition,
+            here = uiState.here,
+            modifier = Modifier.fillMaxSize(),
+            estimatedApex = selectedEstimate(uiState),
+        )
 
         Column(
             modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()
@@ -209,7 +227,9 @@ fun MissionScreen(
                 // the choice visibly changes something — the cone apex moves
                 // as you switch, with the readout below showing how far the
                 // others land from it.
-                if (uiState.target != null) {
+                // The estimator comparison comes from the server; the phone's
+                // own scans give a weighted centroid only.
+                if (uiState.target != null && !uiState.fromPhone) {
                     MissionEstimatorSelector(
                         current = uiState.estimator,
                         onSelect = { selected ->
@@ -226,7 +246,7 @@ fun MissionScreen(
             }
         }
 
-        if (uiState.target != null) {
+        run {
             Row(
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface)
@@ -234,7 +254,12 @@ fun MissionScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    statusBarText(uiState),
+                    when {
+                        !hasLocation -> "Mission needs location permission."
+                        !locationOn -> "Location is off."
+                        else -> statusBarText(uiState)
+                    },
+                    modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodySmall,
                     color = if (uiState.error != null) {
                         MaterialTheme.colorScheme.error
@@ -242,6 +267,12 @@ fun MissionScreen(
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 )
+                if (!hasLocation) TextButton({
+                    locationLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                }) { Text("Allow") }
+                else if (!locationOn) TextButton({
+                    runCatching { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+                }) { Text("Turn on") }
             }
         }
     }
@@ -251,8 +282,18 @@ private fun statusBarText(uiState: MissionUiState): String {
     // Always true now that the near-filter is fixed on — see nearRadius.
     val where = "near your current location"
     return when {
+        uiState.target == null && uiState.here == null -> "Waiting for a location fix…"
+        uiState.target == null -> "Pick a favorite above to locate it."
         uiState.isLoading -> "Locating…"
         uiState.error != null -> uiState.error
+        uiState.points.isEmpty() && uiState.fromPhone ->
+            listOfNotNull(uiState.notice, "No readings of \"${uiState.target.identifier}\" in this phone's scans $where.").joinToString(". ")
+        uiState.points.isEmpty() -> "No readings of \"${uiState.target.identifier}\" found $where."
+        uiState.fromPhone -> listOfNotNull(
+            uiState.notice,
+            "${uiState.points.size} reading${if (uiState.points.size == 1) "" else "s"} from this phone's scans" +
+                if (uiState.isTracking) " — tracking." else ".",
+        ).joinToString(". ")
         uiState.truncated && uiState.isTracking -> {
             "Showing ${uiState.points.size} readings (more exist) — tracking, outlined cone is your position."
         }
@@ -270,19 +311,24 @@ private fun statusBarText(uiState: MissionUiState): String {
 private fun MissionMap(
     points: List<MissionPoint>,
     livePosition: LatLng?,
+    here: LatLng?,
     modifier: Modifier = Modifier,
     estimatedApex: LatLng? = null,
 ) {
     val density = LocalDensity.current.density
-    val overlay = remember(points, livePosition, estimatedApex) {
-        buildOverlay(points, livePosition, density, estimatedApex)
+    val overlay = remember(points, livePosition, estimatedApex, here) {
+        if (points.isEmpty()) hereOverlay(here, density) else buildOverlay(points, livePosition, density, estimatedApex)
     }
     // The camera looks at the same place the cone points from — the selected
     // estimator's position, falling back to a local centroid when the backend
-    // hasn't supplied one.
-    val center = remember(points, estimatedApex) {
-        estimatedApex ?: Geo.weightedCentroid(points.map { WeightedLatLng(it.lat, it.lng, it.weight) })
+    // hasn't supplied one — or at the phone while there is nothing to show.
+    val center = remember(points, estimatedApex, here != null) {
+        if (points.isEmpty()) here
+        else estimatedApex ?: Geo.weightedCentroid(points.map { WeightedLatLng(it.lat, it.lng, it.weight) })
     }
+    // Recentred only when what it looks at changes (new readings, first
+    // fix), not on every location update, so the map can be panned.
+    val centeredOn = remember { arrayOfNulls<Any>(1) }
 
     AndroidView(
         modifier = modifier,
@@ -301,13 +347,20 @@ private fun MissionMap(
                 layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 setTileSource(TileSourceFactory.MAPNIK)
                 setMultiTouchControls(true)
-                controller.setZoom(18.0)
+                // Zoomed out over Europe until the first fix arrives.
+                controller.setZoom(4.0)
+                controller.setCenter(GeoPoint(50.0, 10.0))
             }
         },
         update = { mapView ->
             mapView.overlays.clear()
-            mapView.overlays.add(overlay)
-            mapView.controller.setCenter(GeoPoint(center.lat, center.lng))
+            overlay?.let { mapView.overlays.add(it) }
+            val key = listOf(points, estimatedApex, center == null)
+            if (center != null && centeredOn[0] != key) {
+                centeredOn[0] = key
+                mapView.controller.setZoom(18.0)
+                mapView.controller.setCenter(GeoPoint(center.lat, center.lng))
+            }
             mapView.invalidate()
         },
     )
@@ -397,6 +450,15 @@ private fun EstimatorReadout(uiState: MissionUiState) {
             )
         }
     }
+}
+
+/** Just the phone's position, as a small green circle. */
+private fun hereOverlay(here: LatLng?, density: Float): ConeOverlay? = here?.let {
+    val circle = Geo.circlePolygon(it, MissionController.FALLBACK_CIRCLE_RADIUS_M)
+    ConeOverlay(
+        listOf(MissionShape.Circle(Geo.smoothPolygon(circle, 1), ConeOverlay.ESTIMATED_POSITION_GREEN_ARGB, emphasized = true)),
+        apex = null, readingPoints = listOf(it), fadeNonEmphasized = false, strokeWidthPx = 3f * density,
+    )
 }
 
 /** [estimatedApex] is the backend's answer under the estimator the user

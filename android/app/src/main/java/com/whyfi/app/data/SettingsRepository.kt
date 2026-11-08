@@ -104,12 +104,6 @@ class SettingsRepository(context: Context) {
         get() = prefs.getString(KEY_WORKSPACE, "phone") ?: "phone"
         set(value) = prefs.edit { putString(KEY_WORKSPACE, value) }
 
-    var advancedModeEnabled: Boolean
-        get() = monitorTestPassed
-        set(value) {
-            if (value) monitorTestPassed = true
-        }
-
     var monitorChannels: Set<Int>
         get() = prefs.getString(KEY_MONITOR_CHANNELS, null)
             ?.split(',')?.mapNotNull { it.toIntOrNull() }?.toSet().orEmpty()

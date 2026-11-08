@@ -713,7 +713,7 @@ class ScanForegroundService : Service() {
     /** One bounded, user-started receive session. The service owns and closes
      * the USB connection so changing tabs cannot end the capture. */
     fun startMonitor(connection: UsbDeviceConnection, device: String, channels: IntArray, durationMs: Int, recordPcap: Boolean) {
-        if (!settingsRepository.advancedModeEnabled || _monitorState.value.running || channels.isEmpty() ||
+        if (_monitorState.value.running || channels.isEmpty() ||
             channels.any { it !in UsbMonitorNative.DEFAULT_CHANNELS } || durationMs !in 1..600_000
         ) {
             connection.close()

@@ -34,6 +34,13 @@ object LocationSnapshot {
         }
     }
 
+    /** Whether location is switched on in the system settings at all. */
+    fun isLocationEnabled(context: Context): Boolean {
+        val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager? ?: return false
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) manager.isLocationEnabled
+        else manager.isProviderEnabled(LocationManager.GPS_PROVIDER) || manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+    }
+
     private fun providers(includeFused: Boolean): List<String> =
         listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER) +
             if (includeFused && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)

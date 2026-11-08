@@ -3,6 +3,7 @@ package com.whyfi.app.ui
 import android.content.Intent
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,11 +27,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.whyfi.app.BuildConfig
 import com.whyfi.app.data.SettingsRepository
@@ -80,33 +83,23 @@ fun SettingsScreen(
 
     Column(
         // Scrollable: this screen has outgrown a single phone height.
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("Settings", style = MaterialTheme.typography.headlineSmall)
-        SelectionContainer {
-            Text("Installed app: ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
-                style = MaterialTheme.typography.bodyMedium)
-        }
-        Text("USB adapter settings (monitor test, noise filter) are under Setup in the USB adapter workspace.",
-            style = MaterialTheme.typography.bodySmall)
-
-        // -- Appearance --
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Appearance", style = MaterialTheme.typography.headlineSmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ThemeOption("System", ThemePreference.SYSTEM, themePreference, onThemePreferenceChange)
-                    ThemeOption("Light", ThemePreference.LIGHT, themePreference, onThemePreferenceChange)
-                    ThemeOption("Dark", ThemePreference.DARK, themePreference, onThemePreferenceChange)
-                }
+        // Compact: one line per section, details on tap (SettingsSection).
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            SelectionContainer {
+                Text("whyfi ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f))
             }
+            ThemeOption("System", ThemePreference.SYSTEM, themePreference, onThemePreferenceChange)
+            ThemeOption("Light", ThemePreference.LIGHT, themePreference, onThemePreferenceChange)
+            ThemeOption("Dark", ThemePreference.DARK, themePreference, onThemePreferenceChange)
         }
 
         // -- Location source --
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Location source", style = MaterialTheme.typography.headlineSmall)
+        SettingsSection("Location source", "Best fresh fix per scan: GPS, network, fused") {
                 Text(
                     "While scanning, whyfi keeps GPS, network and Android's fused location (API 31+) " +
                         "running and gives each scan the best fresh fix: within 75 m and 30 s, with " +
@@ -115,13 +108,10 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
         }
 
         // -- Remote control -- (server only: hidden when standalone)
-        if (serverConfigured) Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Remote control", style = MaterialTheme.typography.headlineSmall)
+        if (serverConfigured) SettingsSection("Remote control", if (remoteControlOn) "On: the web UI drives scanning" else "Off") {
                 Text(
                     "Lets whyfi in your browser start and stop scanning on this phone, and set how often it scans. " +
                         "The phone checks in with the backend every few seconds and does what it's told — Android " +
@@ -159,17 +149,15 @@ fun SettingsScreen(
                         Text("Exempt whyfi from battery optimisation")
                     }
                 }
-            }
         }
 
         // -- Backend connection (no header — continues the flow from remote control) --
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(if (serverConfigured) "Server connection" else "Connect to a server (optional)", style = MaterialTheme.typography.headlineSmall)
+        SettingsSection(if (serverConfigured) "Server connection" else "Connect to a server (optional)", if (serverConfigured) "Connected to ${android.net.Uri.parse(backendUrl).host ?: backendUrl}" else "Not connected: whyfi works on its own") {
                 Text(
-                    "whyfi works on its own: scans, labels, reports and recordings all stay on this phone. Connecting your " +
-                        "self-hosted whyfi server adds the web map, history across devices, Mission and remote control. " +
+                    "whyfi works on its own: scans, labels, reports, Mission and recordings all stay on this phone. Connecting your " +
+                        "self-hosted whyfi server adds the web map, history across devices, better Mission estimates and remote control. " +
                         "Scan the setup QR code from Settings → Sensors in whyfi in your browser.",
+                    style = MaterialTheme.typography.bodySmall,
                 )
 
                 val qrScanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -260,13 +248,10 @@ fun SettingsScreen(
                 }
 
                 savedMessage?.let { Text(it) }
-            }
         }
 
         // -- Scan cadence --
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Scan cadence", style = MaterialTheme.typography.headlineSmall)
+        SettingsSection("Scan cadence", if (adaptiveScan) "Follows movement: $stationaryInterval / $walkingInterval / $drivingInterval s" else "One fixed interval") {
                 Text(
                     "A phone sitting on a desk keeps re-scanning the same airwaves; a phone in a car covers new " +
                         "ground every second. With this on, the scanner picks its interval from how the phone is " +
@@ -325,13 +310,10 @@ fun SettingsScreen(
                         )
                     }
                 }
-            }
         }
 
         // -- Offline storage --
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Storage on this phone", style = MaterialTheme.typography.headlineSmall)
+        SettingsSection("Storage on this phone", "Using $outboxUsage") {
                 Text(
                     "Every scan is kept on the phone as a recording (Scan → Recordings), with or without a server. " +
                         "When this limit is reached, recordings that are already uploaded are removed first, oldest " +
@@ -367,13 +349,10 @@ fun SettingsScreen(
                 ) {
                     Text("Save storage limit")
                 }
-            }
         }
 
         // -- Diagnostics --
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Diagnostics", style = MaterialTheme.typography.headlineSmall)
+        SettingsSection("Diagnostics", if (remember { CrashLogReader.readCrashLog(context) } == null) "No crash recorded" else "A crash was recorded") {
                 Text(
                     "If whyfi crashes, the exception is written to this app's private storage before Android's normal " +
                         "crash handling takes over, so it can be read and sent from here afterward — no computer, adb, or " +
@@ -428,7 +407,6 @@ fun SettingsScreen(
                     crashLogMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 }
 
-            }
         }
     }
 }
@@ -442,6 +420,25 @@ private fun rememberOutboxUsage(quotaMb: Int): String {
     val plural = if (status.count == 1) "" else "s"
     return "${formatBytes(status.bytes)} of $quotaMb MB" +
         if (status.serverConfigured) " (${status.count} scan$plural waiting to upload)" else ""
+}
+
+/** A settings card folded to its title and a one-line summary; tap to open. */
+@Composable
+private fun SettingsSection(title: String, summary: String, content: @Composable () -> Unit) {
+    var expanded by rememberSaveable(title) { mutableStateOf(false) }
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleSmall)
+                    Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Text(if (expanded) "▴" else "▾", style = MaterialTheme.typography.titleMedium)
+            }
+            if (expanded) content()
+        }
+    }
 }
 
 @Composable

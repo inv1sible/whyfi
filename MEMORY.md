@@ -165,10 +165,23 @@ stale, and don't duplicate what's already obvious from code/tests.
   re-uploads are safe. Ask on connect (`ui/ServerConnection.kt`): once per
   server (URL + token) it offers standalone recordings for upload (all /
   choose / keep); kept ones get a per-row Upload in Recordings. Without a
-  server, Mission, remote control, crash-report sending and USB-mission
-  upload are hidden. **GitHub release APKs are built with an empty
+  server, remote control, crash-report sending and USB-mission upload are
+  hidden. **GitHub release APKs are built with an empty
   `WHYFI_PUBLIC_URL`**: the server build bakes your server's address in as
   the Settings default, which must not go into a public download.
+  **Test builds go to the local server's Download page only** (user,
+  2026-11-08: "to not clutter GitHub"); publish a GitHub release only when
+  asked. Same key, so server builds install over the GitHub one; the baked
+  URL is only a default, without a token the app stays standalone.
+- **Mission works without a server** (user: "I would like to have a map
+  anyway"). It is the third phone tab; the map and the phone's position
+  (`MissionController.watchHere`, permission asked on open, "Turn on" when
+  location is off) show before any target. Without a server, or when it
+  can't be reached, readings come from the phone's stored passes
+  (`mission/LocalMissionPoints.kt`, same near-filter and weights as the
+  backend views; DB prefilter `instr(payloadJson, needle)`, newest 400
+  passes). The apex is then the local weighted centroid; the estimator
+  comparison is server only.
 
 - **LAN MACs: the ARP table is closed (Android 10+), NetBIOS is the way.**
   `/proc/net/arp` is unreadable for apps since Android 10 and `ip neigh`
@@ -747,7 +760,8 @@ version bump.
 
 ## Tab navigation: HorizontalPager (experimental API, opt-in)
 
-The four main tabs (Dashboard/Scan/LAN/Settings) use
+The four main tabs (Scan/LAN/Mission/Settings since 2026-11-08; Overview
+was removed at the user's request) use
 `HorizontalPager` from `androidx.compose.foundation.pager` for swipe-between-tabs.
 In Compose BOM 2024.06.00 (foundation 1.6.8) this API is still
 `@ExperimentalFoundationApi` — `WhyfiApp` carries `@OptIn(ExperimentalFoundationApi::class)`
@@ -756,8 +770,9 @@ Compose approach and the API surface (`HorizontalPager`, `rememberPagerState`,
 `animateScrollToPage`) hasn't changed between 1.6 and 1.7. When the BOM is
 bumped past foundation 1.7 (where the API stabilised), the opt-in can be removed.
 
-The pager wraps only the four tab screens. Drill-downs (ScanDetailScreen,
-MissionScreen) early-return above the pager, so swipe never reaches them —
+The pager wraps only the four tab screens; swiping is off while Mission is
+shown, since dragging its map would flip pages. Drill-downs
+(ScanDetailScreen, RecordingsScreen) early-return above the pager, so swipe never reaches them —
 the system back button closes those via their existing `BackHandler`s. This is
 load-bearing: a swipe that switched tabs while a detail screen was open would
 feel like the back button broke.
@@ -947,21 +962,20 @@ The app has a single workspace toggle switch (Material `Switch`, 📱/🔌 on
 the thumb) left of each workspace's tab row (`ui/Workspace.kt`,
 `WorkspaceToggle`; maintainer asked for a smaller control, then for one
 toggle rather than two buttons in one): **Phone
-radios** (Dashboard, Scan, LAN, Settings; teal) and **USB adapter**
-(Live, Map, Devices, Missions, Setup; amber, with a status strip: REC time,
-channels, devices, PCAP size). They are different jobs (periodic passes
+radios** (Scan, LAN, Mission, Settings; teal) and **USB adapter**
+(Live, Map, Missions, Setup; amber). They are different jobs (periodic passes
 uploaded as sessions vs a live channel-tuned capture saved as missions), so
-they don't share a tab bar. The six device categories are chips under
-Devices instead of six tabs. Adapter-only settings (USB monitor test, noise
+they don't share a tab bar. The Devices tab (category chips) was removed
+2026-11-08 at the user's request; Live lists every device. Adapter-only settings (USB monitor test, noise
 filter) moved from Settings to Setup (`usbmon/AdapterSettings.kt`).
 
 The switch is deliberately available **without an adapter plugged in**
 (maintainer request: develop, test and demo the adapter UI without
-hardware). Monitor still locks capture until the USB test passed; the
-locked screen shows Setup so the test is reachable there. The choice is
-saved (`SettingsRepository.workspace`). A plugged-in USB device shows a
-banner in the phone workspace offering to switch (deviceList is polled
-every 2 s; attach broadcasts aren't reliable for runtime receivers).
+hardware). Since 2026-11-08 capture needs **no USB monitor test** (user:
+"have USB ready without a test run"); the test in Setup is optional. The
+adapter status strip and the "USB device connected" banner were removed at
+the user's request (no hint bars). The choice is saved
+(`SettingsRepository.workspace`).
 
 ## LAN sweep targets and the mission PDF layout (2026-11-07)
 
