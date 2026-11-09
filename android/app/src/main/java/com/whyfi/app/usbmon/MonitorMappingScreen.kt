@@ -79,8 +79,7 @@ internal fun MonitorMappingView(
     onUserPan: () -> Unit = {},
     liveLocations: List<Location> = emptyList(),
     onLocationPermissionChanged: () -> Unit = {},
-    showUncertainty: Boolean = true,
-    onToggleUncertainty: () -> Unit = {},
+    layers: MonitorMapLayers = MonitorMapLayers(),
 ) {
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         onLocationPermissionChanged()
@@ -233,8 +232,7 @@ internal fun MonitorMappingView(
                     mapKey = logPath.orEmpty(), recenterToken = recenterToken.toString(),
                     focusToken = if (replay && followReceiver) replayCutoffMs.toString() else "",
                     followReceiver = followReceiver && mac == null,
-                    showUncertainty = showUncertainty,
-                    onToggleUncertainty = onToggleUncertainty,
+                    layers = layers,
                     receiverPath = receiverPath, onUserPan = onUserPan, onEstimateTap = { tappedMac ->
                         if (tappedMac in apTargetMacs) {
                             onSelectAp(tappedMac)
@@ -255,8 +253,8 @@ internal fun MonitorMappingView(
                     else -> "No receiver location or device estimate available yet."
                 }, style = MaterialTheme.typography.bodySmall)
             }
-            SlidingGeoDetails(showGeoDetails, Modifier.align(Alignment.TopCenter)) {
-                GeoDetailsContent(fine, coarse, providerStatus, permitted, fixes, clockMs,
+            com.whyfi.app.mission.MapDetailsPanel(showGeoDetails, Modifier.align(Alignment.TopCenter)) {
+                GeoDetailsContent(context, fine, coarse, providerStatus, permitted, fixes, clockMs,
                     { permissionLauncher.launch(it) }, replay, replayReceiver, state, mac, route,
                     targets, estimates, displayLabels)
             }
@@ -265,18 +263,8 @@ internal fun MonitorMappingView(
 }
 
 @Composable
-private fun SlidingGeoDetails(visible: Boolean, modifier: Modifier = Modifier,
-                              content: @Composable () -> Unit) {
-    AnimatedVisibility(visible, modifier = modifier,
-        enter = slideInVertically { -it }, exit = slideOutVertically { -it }) {
-        Surface(Modifier.fillMaxWidth(), tonalElevation = 6.dp, shadowElevation = 6.dp) {
-            content()
-        }
-    }
-}
-
-@Composable
 private fun GeoDetailsContent(
+    context: Context,
     fine: Boolean, coarse: Boolean, providerStatus: String, permitted: Boolean,
     fixes: List<MonitorLocationCandidate>, clockMs: Long,
     requestPermission: (Array<String>) -> Unit,
@@ -284,8 +272,7 @@ private fun GeoDetailsContent(
     mac: String?, route: List<MonitorGeoSample>, targets: List<String>,
     estimates: Map<String, MonitorEstimate>, displayLabels: Map<String, String>,
 ) {
-        Column(Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             if (replay) {
                 Text("Recorded receiver at selected time", style = MaterialTheme.typography.titleSmall)
                 Text(replayReceiver?.let { selected ->
@@ -294,21 +281,12 @@ private fun GeoDetailsContent(
                         if (selected.held) " · position held within reported accuracy" else "")
                 } ?: "No geotagged reading before this point.", style = MaterialTheme.typography.bodySmall)
             }
-            Text("Android location diagnostics · app v${BuildConfig.VERSION_CODE}",
-                style = MaterialTheme.typography.titleSmall)
-            Text("Permission: ${if (fine) "precise" else if (coarse) "approximate" else "none"} · $providerStatus",
-                style = MaterialTheme.typography.bodySmall)
-            if (!permitted) TextButton({ requestPermission(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION)) }) { Text("Grant location permission") }
-            if (fixes.isEmpty()) Text("Android has delivered no GPS, network or fused fix. Check Location and permission in Android settings.",
-                style = MaterialTheme.typography.bodySmall)
-            fixes.forEach { fix ->
-                val ageMs = (clockMs - fix.bootMs).coerceAtLeast(0)
-                Text("${fix.provider}: %.6f, %.6f · ±%.0f m · %d s old%s".format(
-                    fix.lat, fix.lng, fix.accuracyM, ageMs / 1_000,
-                    if (ageMs > MonitorLocationPolicy.MAX_FIX_AGE_MS) " (too old for capture)" else ""),
-                    style = MaterialTheme.typography.bodySmall)
-            }
+            // Shared with the phone's Mission map (mission/MapControls.kt).
+            com.whyfi.app.mission.LocationFixList(context, fixes.map { fix ->
+                com.whyfi.app.mission.FixInfo(fix.provider, fix.lat, fix.lng, fix.accuracyM, (clockMs - fix.bootMs).coerceAtLeast(0))
+            }, { requestPermission(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) },
+                staleAfterMs = MonitorLocationPolicy.MAX_FIX_AGE_MS)
+            Text("app v${BuildConfig.VERSION_CODE}", style = MaterialTheme.typography.bodySmall)
             if (!replay && (state.running || state.receiverFixCount > 0 || state.geoDiagnostics.radioReadings > 0)) {
                 val diagnostics = state.geoDiagnostics
                 Text("Capture location updates: ${if (state.locationUpdatesRegistered) "registered" else "unavailable"}",

@@ -304,12 +304,13 @@ object ScanReportContent {
         )
     }
 
-    fun stats(survey: SurveyStats, publicIp: String?): List<ReportStat> = listOf(
+    /** Tiles for the radios in [asked] only ("What to scan"). */
+    fun stats(survey: SurveyStats, publicIp: String?, asked: com.whyfi.app.scan.ScanOptions = com.whyfi.app.scan.ScanOptions()): List<ReportStat> = listOfNotNull(
         ReportStat(ReportFormat.number(survey.passCount.toLong()), "scan passes"),
-        ReportStat(ReportFormat.number(survey.uniqueWifi.toLong()), "WiFi access points"),
-        ReportStat(ReportFormat.number(survey.uniqueCellular.toLong()), "cell towers"),
-        ReportStat(ReportFormat.number(survey.uniqueBle.toLong()), "Bluetooth devices"),
-        ReportStat(ReportFormat.number(survey.uniqueSatellites.toLong()), "satellites"),
+        ReportStat(ReportFormat.number(survey.uniqueWifi.toLong()), "WiFi access points").takeIf { asked.includeWifi },
+        ReportStat(ReportFormat.number(survey.uniqueCellular.toLong()), "cell towers").takeIf { asked.includeCellular },
+        ReportStat(ReportFormat.number(survey.uniqueBle.toLong()), "Bluetooth devices").takeIf { asked.includeBle },
+        ReportStat(ReportFormat.number(survey.uniqueSatellites.toLong()), "satellites").takeIf { asked.includeGnss },
         ReportStat(publicIp ?: "–", "public IP"),
     )
 }

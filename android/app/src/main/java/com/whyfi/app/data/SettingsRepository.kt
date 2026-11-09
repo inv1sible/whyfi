@@ -125,6 +125,29 @@ class SettingsRepository(context: Context) {
         get() = prefs.getString("monitor_noise_patterns", "unknown device") ?: "unknown device"
         set(value) = prefs.edit { putString("monitor_noise_patterns", value) }
 
+    /** Scan → "What to scan": remembered, and the scan report covers the same radios. */
+    var scanIncludeWifi: Boolean
+        get() = prefs.getBoolean("scan_include_wifi", true)
+        set(value) = prefs.edit { putBoolean("scan_include_wifi", value) }
+    var scanIncludeCellular: Boolean
+        get() = prefs.getBoolean("scan_include_cellular", true)
+        set(value) = prefs.edit { putBoolean("scan_include_cellular", value) }
+    var scanIncludeBle: Boolean
+        get() = prefs.getBoolean("scan_include_ble", true)
+        set(value) = prefs.edit { putBoolean("scan_include_ble", value) }
+    var scanIncludeGnss: Boolean
+        get() = prefs.getBoolean("scan_include_gnss", true)
+        set(value) = prefs.edit { putBoolean("scan_include_gnss", value) }
+
+    /** The tab last shown in each workspace, so switching phone/USB (or
+     * reopening the app) comes back to it. */
+    var phoneTab: Int
+        get() = prefs.getInt("phone_tab", 0)
+        set(value) = prefs.edit { putInt("phone_tab", value) }
+    var monitorTab: String?
+        get() = prefs.getString("monitor_tab", null)
+        set(value) = prefs.edit { putString("monitor_tab", value) }
+
     var monitorHideNoise: Boolean
         get() = prefs.getBoolean("monitor_hide_noise", false)
         set(value) = prefs.edit { putBoolean("monitor_hide_noise", value) }

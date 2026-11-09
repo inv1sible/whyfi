@@ -93,16 +93,19 @@ class LocalMissionPointsTest {
     }
 
     @Test
-    fun latestRecordingKeepsTheNewestOnly() {
+    fun latestSessionStopsAtTheFirstLongGap() {
+        val min = 60_000L
         val points = listOf(
-            MissionPoint(lat, lng, -50.0, atMs = 10, recordingId = "old"),
-            MissionPoint(lat, lng, -60.0, atMs = 30, recordingId = "new"),
-            MissionPoint(lat, lng, -70.0, atMs = 20, recordingId = "new"),
+            MissionPoint(lat, lng, -50.0, atMs = 0),          // yesterday's session
+            MissionPoint(lat, lng, -60.0, atMs = 300 * min),  // today, 300 min later
+            MissionPoint(lat, lng, -70.0, atMs = 320 * min),
+            MissionPoint(lat, lng, -80.0, atMs = 345 * min),
         )
-        assertEquals(listOf(-60.0, -70.0), LocalMissionPoints.latestRecording(points).map { it.weight })
-        // Without recordings (server readings) nothing is dropped.
-        val server = listOf(MissionPoint(lat, lng, -50.0))
-        assertEquals(server, LocalMissionPoints.latestRecording(server))
+        assertEquals(listOf(-60.0, -70.0, -80.0), LocalMissionPoints.latestSession(points).map { it.weight })
+        // Untimed readings: nothing to split on, all kept.
+        val untimed = listOf(MissionPoint(lat, lng, -50.0), MissionPoint(lat, lng, -60.0))
+        assertEquals(untimed, LocalMissionPoints.latestSession(untimed))
+        assertEquals(emptyList<MissionPoint>(), LocalMissionPoints.latestSession(emptyList()))
     }
 
     @Test

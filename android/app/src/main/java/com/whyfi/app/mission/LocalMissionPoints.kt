@@ -60,10 +60,21 @@ object LocalMissionPoints {
         return Result(points.take(cap), points.size > cap, passes)
     }
 
-    /** Only the readings of the newest recording among [points] (by time). */
-    fun latestRecording(points: List<MissionPoint>): List<MissionPoint> {
-        val newest = points.filter { it.recordingId != null }.maxByOrNull { it.atMs ?: 0L }?.recordingId ?: return points
-        return points.filter { it.recordingId == newest }
+    /** Gap that ends a session for [latestSession]. */
+    const val SESSION_GAP_MS = 30 * 60 * 1000L
+
+    /** Mission's "Latest": the newest reading plus every one before it with
+     * no gap over [gapMs], from the server or the phone alike. Readings
+     * without a time are dropped once any has one; none timed: all kept. */
+    fun latestSession(points: List<MissionPoint>, gapMs: Long = SESSION_GAP_MS): List<MissionPoint> {
+        val timed = points.filter { it.atMs != null }.sortedByDescending { it.atMs }
+        if (timed.isEmpty()) return points
+        var oldest = timed.first().atMs!!
+        for (point in timed.drop(1)) {
+            if (oldest - point.atMs!! > gapMs) break
+            oldest = point.atMs
+        }
+        return points.filter { (it.atMs ?: Long.MIN_VALUE) >= oldest }
     }
 
     /** The newest non-blank advertised name of BLE device [mac] in [payloads]. */

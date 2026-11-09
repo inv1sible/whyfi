@@ -186,23 +186,43 @@ stale, and don't duplicate what's already obvious from code/tests.
   with outline clips, because as a full-screen background with bars painted
   over it the favorites ended up hidden (user, 2026-11-08). No Mission chip
   on Scan any more (it's a tab). Since 2026-11-09 laid out like the USB
-  Map: map, a controls bar (status, Track switch, ◎ Accuracy, Cones, 24 h,
-  Latest recording, ⌖), then the devices-to-track chips. Without Track only
-  the phone's position updates (user's choice); a picked target loads once.
-  BLE favorites show their advertised name (last pass, stored scans via
-  `MissionController.loadBleNames`, then catalog label). The map frames the
-  readings (`frameMap`, street scale for one point). "Latest recording"
-  always reads the phone's recordings (the server has no recording concept);
-  filtered views use the local centroid, not the server's estimate.
+  Map: map, a controls bar (status, Track switch, layer toggles, ⓘ ⟳ ⌖), then
+  the devices-to-track chips. Without Track only the phone's position updates
+  (user's choice); a picked target loads once. BLE favorites show their
+  advertised name (last pass, stored scans via `MissionController.loadBleNames`,
+  then catalog label). Since v104 (2026-11-09) the map zooms to the radio's
+  usual range around the estimate (`radioRangeM`: BLE 30 m, Wi‑Fi 80 m, cell
+  1 km; user: "zoom in to scan width"). Toggles: ◎ Accuracy, Cones, Close
+  (the round "orange circles" = readings too near the estimate for a cone),
+  Readings (dots), 24 h, Latest. "Latest" = newest session, no gap over 30 min
+  (`LocalMissionPoints.latestSession`), on server or phone data alike; the
+  old phone-only "Latest recording" showed nothing while 24 h had server
+  data. Filtered views use the local centroid, not the server's estimate.
+- **Both maps share controls** (`mission/MapControls.kt`): `MapLayerChip`,
+  `MapButtons` (ⓘ ⟳ ⌖), `LocationFixList`/`MapDetailsPanel` (permission,
+  providers, each provider's fix) and the "gps ±8 m" status prefix
+  (`fixSummary`). USB map layers: `MonitorMapLayers` (accuracy, cones,
+  readings, path), toggled in its controls bar (the old in-map "±" chip is
+  gone).
+- **Naming (2026-11-09): "recordings" are called missions everywhere in the
+  UI** (🎯 Missions; code identifiers stay Recording*). Scan headers: "whyfi
+  phone" and "whyfi USB" (the user chose "whyfi USB", not "whyfi pro"), each
+  with 🎯 Missions and a report button. "What to scan" is remembered and the
+  scan report covers only those radios (`ScanUiState.scanOptions`). Scan's
+  radio chips fall back to the last pass's counts (they showed 0/– after a
+  restart while the tap showed results).
 - **Radio chips on Scan open the results whenever a pass exists**, also
   while scanning (before, a running continuous scan made them untappable,
   which read as broken).
 - **Tabs (2026-11-09): phone Scan · Mission · LAN · Settings; USB Scan ·
-  Map · Net ops · Settings.** Both first tabs are "Scan" 🔍, the map sits at
-  place 2 in both. Saved USB missions are the USB Scan tab's 🗂️ Recordings
-  (sub view, MonitorTab.MISSIONS, like the phone's Recordings which also
-  open inside the Scan tab now). Net ops is a placeholder ("preview, coming
-  soon"; user wants it implemented soon — ask what it should do). The USB
+  Mission · Net ops · Settings.** Both first tabs are "Scan" 🔍, the map is
+  "Mission" 🎯 at place 2 in both. Saved USB missions are the USB Scan tab's
+  🎯 Missions (sub view, MonitorTab.MISSIONS, like the phone's Missions list
+  which also opens inside the Scan tab). Net ops (preview) shows the device
+  category tables (APs, Unassociated, IoT, …) as the old Devices tab did,
+  until the user says what Net ops should do. Each workspace remembers its
+  last tab in settings (`phoneTab`, `monitorTab`), across switching and
+  restarts. The USB
   monitor test runs inline in its Settings card (bounded height, scrolls;
   stops the probe when the card leaves composition). Earlier: USB "Setup"
   was renamed Settings (both workspaces say Settings, ⚙️). Adapter settings use the phone's collapsible
@@ -990,7 +1010,7 @@ the thumb) left of each workspace's tab row (`ui/Workspace.kt`,
 `WorkspaceToggle`; maintainer asked for a smaller control, then for one
 toggle rather than two buttons in one): **Phone
 radios** (Scan, LAN, Mission, Settings; teal) and **USB adapter**
-(Scan, Map, Net ops, Settings; amber). They are different jobs (periodic passes
+(Scan, Mission, Net ops, Settings; amber). They are different jobs (periodic passes
 uploaded as sessions vs a live channel-tuned capture saved as missions), so
 they don't share a tab bar. The Devices tab (category chips) was removed
 2026-11-08 at the user's request; Live lists every device. Adapter-only settings (USB monitor test, noise

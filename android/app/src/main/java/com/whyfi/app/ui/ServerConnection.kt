@@ -95,12 +95,12 @@ fun ConnectUploadPrompt() {
     val bytes = offer.sumOf { it.bytes }
     AlertDialog(
         onDismissRequest = {},
-        title = { Text("Upload recordings to this server?") },
+        title = { Text("Upload missions to this server?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "${offer.size} recording${if (offer.size == 1) "" else "s"} (${RecordingFormat.bytes(bytes)}) were made " +
-                        "without a server. They stay on this phone either way; you can still upload them later from Recordings.",
+                    "${offer.size} mission${if (offer.size == 1) "" else "s"} (${RecordingFormat.bytes(bytes)}) were made " +
+                        "without a server. They stay on this phone either way; you can still upload them later from Scan → Missions.",
                 )
                 if (choosing) LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
                     items(offer, key = { it.id }) { r ->

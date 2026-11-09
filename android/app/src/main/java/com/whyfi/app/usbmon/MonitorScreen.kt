@@ -77,9 +77,10 @@ private val DEVICE_CATEGORIES = listOf(
 /** The adapter workspace's top-level tabs, with emoji icons like the phone
  * workspace's tabs (no icon library dependency). */
 private enum class MonitorSection(val label: String, val icon: String) {
-    // Same first tab as the phone workspace: Scan, 🔍. Missions are the Scan
-    // tab's Recordings (sub view), their tab slot went to Net ops (preview).
-    LIVE("Scan", "🔍"), MAP("Map", "🗺️"), NET_OPS("Net ops", "🛰️"), SETUP("Settings", "⚙️"),
+    // Same tabs as the phone workspace where they match: Scan 🔍, Mission 🎯
+    // (the map), Settings ⚙️. Saved missions are a sub view of Scan; Net ops
+    // lists devices by category until it gets its own features.
+    LIVE("Scan", "🔍"), MAP("Mission", "🎯"), NET_OPS("Net ops", "🛰️"), SETUP("Settings", "⚙️"),
 }
 
 private fun sectionOf(tab: MonitorTab): MonitorSection = when (tab) {
@@ -88,18 +89,17 @@ private fun sectionOf(tab: MonitorTab): MonitorSection = when (tab) {
     MonitorTab.MISSIONS -> MonitorSection.LIVE
     MonitorTab.NET_OPS -> MonitorSection.NET_OPS
     MonitorTab.SETUP -> MonitorSection.SETUP
+    in DEVICE_CATEGORIES -> MonitorSection.NET_OPS
     else -> MonitorSection.LIVE
 }
 
-/** Net ops: a placeholder tab, announced as a preview (user, 2026-11-09). */
+/** Net ops (preview): for now the device lists by category, as the old
+ * Devices tab had them (user, 2026-11-09). */
 @Composable
-private fun NetOpsPreview(modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("🛰️ Net ops", style = MaterialTheme.typography.titleLarge)
-        Text("Preview: coming soon.", style = MaterialTheme.typography.bodyMedium)
-        Text("Saved missions are now under Scan → 🗂️ Recordings.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
+private fun NetOpsHeader() {
+    Text("🛰️ Net ops preview: devices by category. More is coming here.",
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 private fun tabOf(section: MonitorSection): MonitorTab = when (section) {
@@ -174,9 +174,13 @@ private fun MonitorWorkspace(
     var starting by remember { mutableStateOf(false) }
     var recordPcap by remember { mutableStateOf(settingsRepository.monitorRecordPcap) }
     var error by remember { mutableStateOf<String?>(null) }
-    var selectedName by rememberSaveable { mutableStateOf(MonitorTab.NEARBY.name) }
-    // Devices reopens on the category last looked at.
-    var lastCategoryName by rememberSaveable { mutableStateOf(MonitorTab.ACCESS_POINTS.name) }
+    // Kept in settings too, so switching to the phone and back (or
+    // reopening the app) comes back to the same tab.
+    var selectedName by rememberSaveable { mutableStateOf(settingsRepository.monitorTab ?: MonitorTab.NEARBY.name) }
+    // Net ops reopens on the category last looked at.
+    var lastCategoryName by rememberSaveable {
+        mutableStateOf(settingsRepository.monitorTab?.takeIf { name -> DEVICE_CATEGORIES.any { it.name == name } } ?: MonitorTab.ACCESS_POINTS.name)
+    }
     var selectedMissionLogPath by remember { mutableStateOf<String?>(null) }
     var replayMission by remember { mutableStateOf<MonitorReplayMission?>(null) }
     var replayFraction by remember { mutableFloatStateOf(1f) }
@@ -188,7 +192,10 @@ private fun MonitorWorkspace(
     var locationRecenter by remember { mutableIntStateOf(0) }
     var followMe by rememberSaveable { mutableStateOf(false) }
     var showLocationDetails by remember { mutableStateOf(false) }
-    var showMapUncertainty by rememberSaveable { mutableStateOf(true) }
+    var mapAccuracy by rememberSaveable { mutableStateOf(true) }
+    var mapCones by rememberSaveable { mutableStateOf(true) }
+    var mapReadings by rememberSaveable { mutableStateOf(true) }
+    var mapPath by rememberSaveable { mutableStateOf(true) }
     var locationSummary by remember { mutableStateOf("") }
     var missionRevision by remember { mutableIntStateOf(0) }
     var pendingReset by remember { mutableStateOf(false) }
@@ -285,9 +292,10 @@ private fun MonitorWorkspace(
         }
     }
     val replaying = selectedMissionLogPath != null
-    // The device category tables have no tab any more (Live lists every
-    // device); a category saved from before falls back to Live.
-    val selected = MonitorTab.entries.firstOrNull { it.name == selectedName }?.takeIf { it !in DEVICE_CATEGORIES } ?: MonitorTab.NEARBY
+    // Net ops shows the device category tables.
+    val selected = MonitorTab.entries.firstOrNull { it.name == selectedName }
+        ?.let { if (it == MonitorTab.NET_OPS) MonitorTab.entries.firstOrNull { c -> c.name == lastCategoryName } ?: MonitorTab.ACCESS_POINTS else it }
+        ?: MonitorTab.NEARBY
     val nearbyDevices = displayDevices.filter {
         (focusedKind == null || it.second.kind == focusedKind) || (showHiddenAps && MonitorApVisibility.isHidden(it.first, resolvedHiddenAps))
     }
@@ -424,7 +432,9 @@ private fun MonitorWorkspace(
     }
 
     val section = sectionOf(selected)
-    val selectTab: (MonitorTab) -> Unit = { tab ->
+    val selectTab: (MonitorTab) -> Unit = { picked ->
+        val tab = if (picked == MonitorTab.NET_OPS) MonitorTab.entries.firstOrNull { it.name == lastCategoryName } ?: MonitorTab.ACCESS_POINTS else picked
+        settingsRepository.monitorTab = tab.name
         if (tab != MonitorTab.MAPPING) showLocationDetails = false
         if (tab == MonitorTab.MISSIONS || tab == MonitorTab.NEARBY || tab == MonitorTab.SETUP) replayPlaying = false
         if (tab in DEVICE_CATEGORIES) lastCategoryName = tab.name
@@ -465,7 +475,26 @@ private fun MonitorWorkspace(
                 }
             }
         }
+        if (section == MonitorSection.NET_OPS) {
+            NetOpsHeader()
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                DEVICE_CATEGORIES.forEach { tab ->
+                    FilterChip(tab == selected, { selectTab(tab) },
+                        label = { Text("${tab.label} (${monitorRows(tab, categoryDevices).size})") })
+                }
+            }
+        }
         if (selected == MonitorTab.NEARBY) {
+            // Top line like the phone's Scan tab: name, missions, report.
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("whyfi USB", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                TextButton({ selectTab(MonitorTab.MISSIONS) }) { Text("🎯 Missions") }
+                val reportMission = missions.firstOrNull { it.directory.name == activeId } ?: missions.firstOrNull()
+                if (reportMission != null && !state.running) com.whyfi.app.ui.ReportButton(enabled = true) {
+                    withContext(Dispatchers.IO) { MonitorMission.ensureReport(context, reportMission) }
+                }
+            }
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Updates", style = MaterialTheme.typography.bodySmall)
                 TextButton({
@@ -491,9 +520,7 @@ private fun MonitorWorkspace(
                 }) { Text(if (nearbySort == NearbySort.RSSI) "RSSI ↓" else "Latest ↓") }
             }
         }
-        if (selected == MonitorTab.NET_OPS) {
-            NetOpsPreview(Modifier.weight(1f))
-        } else if (selected == MonitorTab.SETUP) {
+        if (selected == MonitorTab.SETUP) {
             // Laid out like the phone's Settings tab (SettingsScreen).
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) { setup() }
@@ -505,8 +532,10 @@ private fun MonitorWorkspace(
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
               item(key = "nearby-controls") {
                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Saved missions, like the phone's Scan → Recordings.
-                OutlinedButton({ selectTab(MonitorTab.MISSIONS) }) { Text("🗂️ Recordings") }
+                if (!showUsb && selectedDevice != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Adapter: ${describe(selectedDevice!!)}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    if (!state.running) TextButton({ showUsb = true }) { Text("Change") }
+                }
                 if (showUsb || selectedDevice == null) {
                     UsbPanel(usbDevices, selectedDevice, state.running,
                         {
@@ -524,6 +553,10 @@ private fun MonitorWorkspace(
                 if (!state.running && state.missionLogPath != null) Text("Capture saved. PDF on request in Missions. Start continues; Reset closes this mission.",
                     style = MaterialTheme.typography.bodySmall)
                 if (state.pcapTruncated) Text("PCAP recording stopped at the 200 MB limit.", color = MaterialTheme.colorScheme.error)
+                if (nearbyDevices.isEmpty() && !state.running) Text(
+                    if (selectedDevice == null) "Connect the USB adapter, then press Start below to capture."
+                    else "No devices yet. Press Start below to capture; devices show up here as they are heard.",
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                }
               }
                 nearbyItems(nearbyDevices, favorites, toggleFavorite, resolvedHiddenAps, toggleHiddenAp, restoreHiddenKey,
@@ -535,7 +568,7 @@ private fun MonitorWorkspace(
         } else if (selected == MonitorTab.MISSIONS) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton({ selectTab(MonitorTab.NEARBY) }) { Text("← Back") }
-                Text("🗂️ Recordings", style = MaterialTheme.typography.titleMedium)
+                Text("🎯 Missions", style = MaterialTheme.typography.titleMedium)
             }
             BackHandler { selectTab(MonitorTab.NEARBY) }
             MissionView(context, settingsRepository, missions, missionsLoading, { missionRevision++ }, vendorTable,
@@ -587,7 +620,7 @@ private fun MonitorWorkspace(
                 }, onFavoriteAp = toggleFavorite,
                 Modifier.weight(1f), onUserPan = { followMe = false }, liveLocations = liveLocations.values.toList(),
                 onLocationPermissionChanged = { locationPermissionRevision++ },
-                showUncertainty = showMapUncertainty, onToggleUncertainty = { showMapUncertainty = !showMapUncertainty })
+                layers = MonitorMapLayers(mapAccuracy, mapCones, mapReadings, mapPath))
         } else {
             if (replaying && activeReplay?.snapshots?.isEmpty() == true) Text(
                 "This older mission did not save device roles or category snapshots.",
@@ -611,6 +644,14 @@ private fun MonitorWorkspace(
             }
             Surface(Modifier.fillMaxWidth(), tonalElevation = 5.dp, shadowElevation = 5.dp) {
                 Column(Modifier.padding(horizontal = 10.dp, vertical = 5.dp)) {
+                    // Layer toggles, like the phone's Mission map.
+                    if (selected == MonitorTab.MAPPING) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        com.whyfi.app.mission.MapLayerChip("◎ Accuracy", mapAccuracy) { mapAccuracy = !mapAccuracy }
+                        com.whyfi.app.mission.MapLayerChip("Cones", mapCones) { mapCones = !mapCones }
+                        com.whyfi.app.mission.MapLayerChip("Readings", mapReadings) { mapReadings = !mapReadings }
+                        com.whyfi.app.mission.MapLayerChip("Path", mapPath) { mapPath = !mapPath }
+                    }
                     if (replaying && selected != MonitorTab.NEARBY) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton({
@@ -631,7 +672,7 @@ private fun MonitorWorkspace(
                                 locationTargets = emptyList()
                             }) { Text("Live") }
                             if (selected == MonitorTab.MAPPING) {
-                                LocationFooterControls(showLocationDetails, { showLocationDetails = !showLocationDetails },
+                                com.whyfi.app.mission.MapButtons(showLocationDetails, { showLocationDetails = !showLocationDetails },
                                     { locationRefresh++ }, followMe, { enabled ->
                                         followMe = enabled
                                         if (enabled) { selectedLocationMac = null; locationRecenter++ }
@@ -668,7 +709,7 @@ private fun MonitorWorkspace(
                             Text(if (recordPcap) "PCAP on" else "PCAP off", style = MaterialTheme.typography.bodySmall)
                             Spacer(Modifier.weight(1f))
                             if (selected == MonitorTab.MAPPING) {
-                                LocationFooterControls(showLocationDetails, { showLocationDetails = !showLocationDetails },
+                                com.whyfi.app.mission.MapButtons(showLocationDetails, { showLocationDetails = !showLocationDetails },
                                     { locationRefresh++ }, followMe, { enabled ->
                                         followMe = enabled
                                         if (enabled) { selectedLocationMac = null; locationRecenter++ }
@@ -736,25 +777,6 @@ private fun MonitorWorkspace(
             }) { Text("Reset") } },
             dismissButton = { TextButton({ pendingReset = false }) { Text("Cancel") } })
 
-    }
-}
-
-@Composable
-private fun LocationFooterControls(
-    detailsOpen: Boolean, onDetails: () -> Unit, onRefresh: () -> Unit,
-    followMe: Boolean, onFollowChange: (Boolean) -> Unit,
-) {
-    IconButton(onDetails, modifier = Modifier.size(40.dp).semantics {
-        contentDescription = if (detailsOpen) "Hide geolocation details" else "Show geolocation details"
-    }) { Text("ⓘ", style = MaterialTheme.typography.titleLarge) }
-    IconButton(onRefresh, modifier = Modifier.size(40.dp).semantics {
-        contentDescription = "Refresh location and mission"
-    }) { Text("⟳", style = MaterialTheme.typography.titleLarge) }
-    IconToggleButton(followMe, onFollowChange, modifier = Modifier.size(40.dp).semantics {
-        contentDescription = if (followMe) "Stop following my position" else "Follow my position"
-    }) {
-        Text("⌖", style = MaterialTheme.typography.titleLarge,
-            color = if (followMe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

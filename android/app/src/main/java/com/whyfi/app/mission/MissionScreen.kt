@@ -116,10 +116,18 @@ fun MissionScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+    // Each provider's latest fix, for the status line and the ⓘ panel
+    // (the same stats as the USB adapter's Mission map).
+    var fixes by remember { mutableStateOf<Map<String, android.location.Location>>(emptyMap()) }
     DisposableEffect(hasLocation, locationOn) {
-        val subscription = if (hasLocation) missionController.watchHere() else null
+        fixes = LocationSnapshot.lastKnownCandidates(context).associateBy { it.provider ?: "unknown" }
+        val subscription = if (hasLocation) missionController.watchHere { fix -> fixes = fixes + ((fix.provider ?: "unknown") to fix) } else null
         onDispose { subscription?.close() }
     }
+    var clockMs by remember { mutableStateOf(android.os.SystemClock.elapsedRealtime()) }
+    LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(2_000); clockMs = android.os.SystemClock.elapsedRealtime() } }
+    val fixInfos = fixes.values.map { it.toFixInfo(clockMs) }
+    val bestFix = fixInfos.filter { it.ageMs < 120_000 }.minByOrNull { it.accuracyM } ?: fixInfos.minByOrNull { it.ageMs }
 
     // The 250m near-filter keeps a favorited target's sightings from some
     // other place entirely (a travel router, a BLE device that moved) from
@@ -140,16 +148,23 @@ fun MissionScreen(
 
     fun selectOrRetarget(target: MissionTarget) = runTarget(target, nearRadius)
 
-    // Display options (bottom bar). Accuracy circles and cones only change
-    // the drawing; "24 h" filters what was loaded; "Latest recording"
-    // reloads from the phone's newest recording of the target.
+    // Display options (controls bar). Accuracy, cones, close readings and
+    // reading dots only change the drawing; "24 h" and "Latest" filter what
+    // was loaded (server or phone alike). "Latest" is the newest session:
+    // readings with no gap over 30 min (LocalMissionPoints.latestSession).
     var showAccuracy by rememberSaveable { mutableStateOf(false) }
     var showCones by rememberSaveable { mutableStateOf(true) }
+    var showClose by rememberSaveable { mutableStateOf(true) }
+    var showReadings by rememberSaveable { mutableStateOf(true) }
     var last24h by rememberSaveable { mutableStateOf(false) }
+    var latest by rememberSaveable { mutableStateOf(false) }
+    var follow by rememberSaveable { mutableStateOf(false) }
+    var showDetails by rememberSaveable { mutableStateOf(false) }
     var recenter by remember { mutableIntStateOf(0) }
     val now = remember(uiState.points, last24h) { System.currentTimeMillis() }
-    val shown = remember(uiState.points, last24h, now) {
-        if (!last24h) uiState.points else uiState.points.filter { (it.atMs ?: 0L) >= now - DAY_MS }
+    val shown = remember(uiState.points, last24h, latest, now) {
+        val day = if (!last24h) uiState.points else uiState.points.filter { (it.atMs ?: 0L) >= now - DAY_MS }
+        if (latest) LocalMissionPoints.latestSession(day) else day
     }
     // The server's estimate covers every reading; once filtered, the cone
     // points from the filtered readings' own centroid instead.
@@ -190,16 +205,41 @@ fun MissionScreen(
             if (uiState.points.isNotEmpty()) EstimatorReadout(uiState)
         }
 
-        MissionMap(
-            points = shown,
-            livePosition = uiState.livePosition,
-            here = uiState.here,
-            modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds(),
-            estimatedApex = apex,
-            showAccuracy = showAccuracy,
-            showCones = showCones,
-            recenter = recenter,
-        )
+        Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
+            MissionMap(
+                points = shown,
+                livePosition = uiState.livePosition,
+                here = uiState.here,
+                modifier = Modifier.fillMaxSize(),
+                estimatedApex = apex,
+                showAccuracy = showAccuracy,
+                showCones = showCones,
+                showClose = showClose,
+                showReadings = showReadings,
+                rangeM = radioRangeM(uiState.target?.kind),
+                follow = follow,
+                recenter = recenter,
+            )
+            MapDetailsPanel(showDetails, Modifier.align(Alignment.TopCenter)) {
+                LocationFixList(context, fixInfos, {
+                    locationLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                })
+                uiState.target?.let { target ->
+                    Text("Target", style = MaterialTheme.typography.titleSmall)
+                    Text("${target.kind.icon} ${label(target)} · ${shown.size} of ${uiState.points.size} readings shown · " +
+                        (if (uiState.fromPhone) "from this phone's scans" else "from the server") +
+                        " · within ${nearRadius.toInt()} m of you", style = MaterialTheme.typography.bodySmall)
+                    val centre = apex ?: shown.takeIf { it.isNotEmpty() }?.let { pts -> Geo.weightedCentroid(pts.map { WeightedLatLng(it.lat, it.lng, it.weight) }) }
+                    centre?.let { Text("Estimate: %.6f, %.6f · zoomed to about ±%d m, the radio's usual range".format(it.lat, it.lng, radioRangeM(target.kind).toInt()),
+                        style = MaterialTheme.typography.bodySmall) }
+                    shown.mapNotNull { it.accuracyM }.sorted().takeIf { it.isNotEmpty() }?.let { acc ->
+                        Text("Reading accuracy: best ±${acc.first().toInt()} m · median ±${acc[acc.size / 2].toInt()} m", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                Text("Close readings (round shapes) are readings taken too near the estimated position to draw a cone.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
 
         // Controls: status, Track and the display options.
         Surface(Modifier.fillMaxWidth(), tonalElevation = 5.dp, shadowElevation = 5.dp) {
@@ -209,7 +249,17 @@ fun MissionScreen(
                         when {
                             !hasLocation -> "Mission needs location permission."
                             !locationOn -> "Location is off."
-                            else -> statusBarText(uiState.copy(points = shown)) + if (last24h && uiState.target != null) " (last 24 h)" else ""
+                            else -> listOfNotNull(
+                                bestFix?.let { fixSummary(it.provider, it.accuracyM) } ?: "No recent fix",
+                                (statusBarText(uiState.copy(points = shown)) +
+                                    when {
+                                        uiState.target == null -> ""
+                                        latest && last24h -> " (latest session, last 24 h)"
+                                        latest -> " (latest session)"
+                                        last24h -> " (last 24 h)"
+                                        else -> ""
+                                    }).takeIf { it.isNotBlank() },
+                            ).joinToString(" · ")
                         },
                         modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.bodySmall,
@@ -239,14 +289,16 @@ fun MissionScreen(
                         },
                     )
                     Text(if (uiState.isTracking) "Tracking" else "Track", style = MaterialTheme.typography.bodyMedium)
-                    FilterChip(showAccuracy, { showAccuracy = !showAccuracy }, label = { Text("◎ Accuracy") })
-                    FilterChip(showCones, { showCones = !showCones }, label = { Text("Cones") })
-                    FilterChip(last24h, { last24h = !last24h }, label = { Text("24 h") })
-                    FilterChip(uiState.latestRecordingOnly, { missionController.setLatestRecordingOnly(!uiState.latestRecordingOnly, nearRadius) },
-                        label = { Text("Latest recording") })
-                    IconButton({ recenter++ }, modifier = Modifier.size(40.dp).semantics { contentDescription = "Recenter the map" }) {
-                        Text("⌖", style = MaterialTheme.typography.titleLarge)
-                    }
+                    // Same toggles and buttons as the USB Mission map (MapControls.kt).
+                    MapLayerChip("◎ Accuracy", showAccuracy) { showAccuracy = !showAccuracy }
+                    MapLayerChip("Cones", showCones) { showCones = !showCones }
+                    MapLayerChip("Close", showClose) { showClose = !showClose }
+                    MapLayerChip("Readings", showReadings) { showReadings = !showReadings }
+                    MapLayerChip("24 h", last24h) { last24h = !last24h }
+                    MapLayerChip("Latest", latest) { latest = !latest }
+                    MapButtons(showDetails, { showDetails = !showDetails },
+                        onRefresh = { uiState.target?.let { runTarget(it, nearRadius) } ?: recenter++ },
+                        follow = follow, onFollowChange = { on -> follow = on; recenter++ })
                 }
             }
         }
@@ -329,20 +381,28 @@ private fun MissionMap(
     estimatedApex: LatLng? = null,
     showAccuracy: Boolean = false,
     showCones: Boolean = true,
+    showClose: Boolean = true,
+    showReadings: Boolean = true,
+    rangeM: Double = DEFAULT_RANGE_M,
+    follow: Boolean = false,
     recenter: Int = 0,
 ) {
     val density = LocalDensity.current.density
-    val overlay = remember(points, livePosition, estimatedApex, here, showAccuracy, showCones) {
+    val overlay = remember(points, livePosition, estimatedApex, here, showAccuracy, showCones, showClose, showReadings) {
         if (points.isEmpty()) hereOverlay(here, density)
-        else buildOverlay(points, livePosition, density, estimatedApex, showAccuracy, showCones)
+        else buildOverlay(points, livePosition, density, estimatedApex, showAccuracy, showCones, showClose, showReadings)
     }
-    // What the camera frames: the readings (and the phone, when near them),
-    // or the phone alone while there is nothing to show — at street scale.
-    val framePoints = remember(points, estimatedApex, here != null, recenter) {
-        when {
-            points.isNotEmpty() -> points.map { LatLng(it.lat, it.lng) } + listOfNotNull(estimatedApex)
-            here != null -> listOf(here)
-            else -> emptyList()
+    // What the camera frames: the estimated position at the radio's usual
+    // range (user, 2026-11-09: "zoom in to scan width"), plus the phone
+    // when it is near; or the phone alone while there is nothing to show.
+    val camera = remember(points, estimatedApex, here != null, recenter, rangeM) {
+        val centre = when {
+            points.isNotEmpty() -> estimatedApex ?: Geo.weightedCentroid(points.map { WeightedLatLng(it.lat, it.lng, it.weight) })
+            else -> here
+        }
+        centre?.let { c ->
+            val near = here?.takeIf { points.isNotEmpty() && Geo.haversineDistanceMeters(c.lat, c.lng, it.lat, it.lng) <= MissionController.DEFAULT_NEAR_RADIUS_M }
+            Frame(c, rangeM, listOfNotNull(near))
         }
     }
     // Reframed only when that changes (new readings, first fix, ⌖), not on
@@ -384,11 +444,13 @@ private fun MissionMap(
             val mapView = frame.getChildAt(0) as MapView
             mapView.overlays.clear()
             overlay?.let { mapView.overlays.add(it) }
-            val key = listOf(framePoints, recenter)
-            if (framePoints.isNotEmpty() && framedOn[0] != key) {
+            val key = listOf(camera, recenter)
+            if (camera != null && framedOn[0] != key) {
                 framedOn[0] = key
                 // After layout: zoomToBoundingBox needs the view's size.
-                mapView.post { frameMap(mapView, framePoints) }
+                mapView.post { frameMap(mapView, camera) }
+            } else if (follow && here != null) {
+                mapView.controller.setCenter(GeoPoint(here.lat, here.lng))
             }
             mapView.invalidate()
         },
@@ -481,18 +543,32 @@ private fun EstimatorReadout(uiState: MissionUiState) {
     }
 }
 
-/** Zooms [mapView] to show [points]: a box around several, street scale
- * (zoom 18) around one or a tight cluster. */
-private fun frameMap(mapView: MapView, points: List<LatLng>) {
-    val latSpan = points.maxOf { it.lat } - points.minOf { it.lat }
-    val lngSpan = points.maxOf { it.lng } - points.minOf { it.lng }
-    if (points.size == 1 || (latSpan < 0.0004 && lngSpan < 0.0006) || mapView.width == 0) {
-        mapView.controller.setZoom(18.0)
-        mapView.controller.setCenter(GeoPoint(points.sumOf { it.lat } / points.size, points.sumOf { it.lng } / points.size))
+/** Typical range of each radio, the half-width Mission zooms to. */
+internal fun radioRangeM(kind: RadioKind?): Double = when (kind) {
+    RadioKind.BLE -> 30.0
+    RadioKind.WIFI -> 80.0
+    RadioKind.CELLULAR -> 1_000.0
+    else -> DEFAULT_RANGE_M
+}
+
+private const val DEFAULT_RANGE_M = 60.0
+
+/** A camera framing: [rangeM] around [centre], widened to keep [extra] in view. */
+private data class Frame(val centre: LatLng, val rangeM: Double, val extra: List<LatLng>)
+
+/** Zooms [mapView] to [frame]; retried until the view has a size. */
+private fun frameMap(mapView: MapView, frame: Frame, tries: Int = 0) {
+    if (mapView.width == 0 || mapView.height == 0) {
+        if (tries < 20) mapView.postDelayed({ frameMap(mapView, frame, tries + 1) }, 50)
         return
     }
-    val box = BoundingBox.fromGeoPointsSafe(points.map { GeoPoint(it.lat, it.lng) })
-    mapView.zoomToBoundingBox(box.increaseByScale(1.3f), false, (32 * mapView.resources.displayMetrics.density).toInt())
+    val c = frame.centre
+    val dLat = frame.rangeM / 111_320.0
+    val dLng = frame.rangeM / (111_320.0 * kotlin.math.max(kotlin.math.cos(Math.toRadians(c.lat)), 0.01))
+    val lats = listOf(c.lat - dLat, c.lat + dLat) + frame.extra.map { it.lat }
+    val lngs = listOf(c.lng - dLng, c.lng + dLng) + frame.extra.map { it.lng }
+    val box = BoundingBox(lats.max(), lngs.max(), lats.min(), lngs.min())
+    mapView.zoomToBoundingBox(box, false, (24 * mapView.resources.displayMetrics.density).toInt())
     if (mapView.zoomLevelDouble > 19.0) mapView.controller.setZoom(19.0)
 }
 
@@ -517,6 +593,8 @@ private fun buildOverlay(
     estimatedApex: LatLng? = null,
     showAccuracy: Boolean = false,
     showCones: Boolean = true,
+    showClose: Boolean = true,
+    showReadings: Boolean = true,
 ): ConeOverlay {
     val apex = estimatedApex ?: Geo.weightedCentroid(points.map { WeightedLatLng(it.lat, it.lng, it.weight) })
     // GPS accuracy of each reading's position, drawn under everything else.
@@ -525,16 +603,19 @@ private fun buildOverlay(
             MissionShape.Circle(Geo.smoothPolygon(Geo.circlePolygon(LatLng(point.lat, point.lng), radius), 1), ACCURACY_ARGB)
         }
     }
-    val historicalShapes = if (!showCones) emptyList() else points.map { point ->
+    // A cone per reading; a reading too close to the estimate for a cone is
+    // drawn as a round "close reading" in its signal color (the orange
+    // circles), toggled separately.
+    val historicalShapes = points.mapNotNull { point ->
         val target = LatLng(point.lat, point.lng)
         val color = SignalColor.signalStrengthColorArgb(point.weight)
         val cone = Geo.conePolygon(apex, target)
         if (cone != null) {
-            MissionShape.Cone(Geo.smoothPolygon(cone, 1), color)
-        } else {
+            if (showCones) MissionShape.Cone(Geo.smoothPolygon(cone, 1), color) else null
+        } else if (showClose) {
             val circle = Geo.circlePolygon(target, MissionController.FALLBACK_CIRCLE_RADIUS_M)
             MissionShape.Circle(Geo.smoothPolygon(circle, 1), color)
-        }
+        } else null
     }
 
     // The live "you are here" shape — always emphasized, which is also what
@@ -552,6 +633,6 @@ private fun buildOverlay(
     }
 
     val shapes = accuracyShapes + historicalShapes + listOfNotNull(liveShape)
-    val readingPoints = points.map { LatLng(it.lat, it.lng) } + listOfNotNull(livePosition)
+    val readingPoints = (if (showReadings) points.map { LatLng(it.lat, it.lng) } else emptyList()) + listOfNotNull(livePosition)
     return ConeOverlay(shapes, apex, readingPoints, fadeNonEmphasized = liveShape != null, strokeWidthPx = 3f * density)
 }

@@ -81,9 +81,6 @@ data class MissionUiState(
     val fromPhone: Boolean = false,
     /** Why the phone's scans were used although a server is set up. */
     val notice: String? = null,
-    /** Readings limited to this phone's newest recording that saw the target
-     * (MissionController.setLatestRecordingOnly). */
-    val latestRecordingOnly: Boolean = false,
     /** Advertised names of BLE favorites, by MAC (from stored scans). */
     val bleNames: Map<String, String> = emptyMap(),
 )
@@ -122,19 +119,9 @@ class MissionController(
     /** Follows the phone's position for the map while Mission is visible.
      * Null without location permission. Close it when Mission leaves the
      * screen. */
-    fun watchHere(): AutoCloseable? {
+    fun watchHere(onFix: (android.location.Location) -> Unit = {}): AutoCloseable? {
         LocationSnapshot.lastKnown(context)?.let { setHere(it.latitude, it.longitude) }
-        return LocationSnapshot.requestUpdates(context, includeFused = true) { setHere(it.latitude, it.longitude) }
-    }
-
-    /** Limits readings to the phone's newest recording of the target (its
-     * recordings are local, so this always reads the phone's scans), and
-     * reloads the current target once. Not a refresh loop: without tracking
-     * nothing reloads by itself. */
-    fun setLatestRecordingOnly(on: Boolean, radiusMeters: Double = DEFAULT_NEAR_RADIUS_M) {
-        _uiState.value = _uiState.value.copy(latestRecordingOnly = on)
-        val target = _uiState.value.target ?: return
-        if (!_uiState.value.isTracking) scope.launch { fetchOnce(target, radiusMeters) }
+        return LocationSnapshot.requestUpdates(context, includeFused = true) { setHere(it.latitude, it.longitude); onFix(it) }
     }
 
     /** Looks up names for BLE favorites in the stored scans, for the chips. */
@@ -228,7 +215,7 @@ class MissionController(
      * leaves the map showing what was last found. */
     fun clearSelection() {
         stopTrackingJobs()
-        _uiState.value = MissionUiState(here = _uiState.value.here, latestRecordingOnly = _uiState.value.latestRecordingOnly, bleNames = _uiState.value.bleNames)
+        _uiState.value = MissionUiState(here = _uiState.value.here, bleNames = _uiState.value.bleNames)
     }
 
     private fun stopTrackingJobs() {
@@ -258,7 +245,7 @@ class MissionController(
 
         val backendUrl = settingsRepository.backendUrl
         val token = settingsRepository.sensorToken
-        if (backendUrl.isNullOrBlank() || token.isNullOrBlank() || _uiState.value.latestRecordingOnly) {
+        if (backendUrl.isNullOrBlank() || token.isNullOrBlank()) {
             fetchLocal(target, location.latitude, location.longitude, radiusMeters, notice = null)
             return
         }
@@ -327,8 +314,7 @@ class MissionController(
         val result = withContext(Dispatchers.IO) {
             val passes = recordings.payloadsContaining(LocalMissionPoints.needle(target))
                 .map { LocalMissionPoints.Pass(it.payloadJson, it.recordingId, it.createdAtEpochMs) }
-            val all = LocalMissionPoints.points(passes, target, lat, lng, radiusMeters)
-            if (_uiState.value.latestRecordingOnly) all.copy(points = LocalMissionPoints.latestRecording(all.points)) else all
+            LocalMissionPoints.points(passes, target, lat, lng, radiusMeters)
         }
         _uiState.value = _uiState.value.copy(
             isLoading = false,

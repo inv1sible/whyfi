@@ -240,11 +240,13 @@ object PhoneReports {
                 (it.accuracyM?.let { a -> " · ±%.0f m · ${it.provider}".format(Locale.US, a) } ?: "") } ?: "no fix"),
             "Report generated" to generated,
         ))
-        doc.statTiles(ScanReportContent.stats(survey, state.publicIp))
+        doc.statTiles(ScanReportContent.stats(survey, state.publicIp, state.scanOptions))
 
         val path = track.ifEmpty { positions }
         val markers = positions.lastOrNull()?.let { listOf(MonitorReportContent.MapMarker(1, "Last pass", it.lat, it.lng, it.accuracyM ?: 0.0)) }.orEmpty()
-        val satellites = ScanDiff.rowsFor(RadioKind.SATELLITE, state.latestPass, state.previousPass)
+        // Only the radios picked in "What to scan" are reported.
+        val asked = state.scanOptions
+        val satellites = if (!asked.includeGnss) emptyList() else ScanDiff.rowsFor(RadioKind.SATELLITE, state.latestPass, state.previousPass)
         val sections = Sections()
         sections.add("Map", path.isNotEmpty()) {
             doc.figure(330f, "The phone's path (blue) over ${positions.size} pass positions; marker 1 is the last pass, its ring the fix accuracy.") { canvas, area ->
@@ -255,9 +257,9 @@ object PhoneReports {
             doc.statTiles(GpsReportContent.stats(path, satellites).take(5))
             doc.table(GpsReportContent.providersTable(path))
         }
-        sections.add("WiFi access points", devices.wifi.isNotEmpty()) { doc.table(ScanReportContent.sessionTable(RadioKind.WIFI, devices.wifi, state.catalogLabels)) }
-        sections.add("Cell towers", devices.cellular.isNotEmpty()) { doc.table(ScanReportContent.sessionTable(RadioKind.CELLULAR, devices.cellular)) }
-        sections.add("Bluetooth devices", devices.ble.isNotEmpty()) { doc.table(ScanReportContent.sessionTable(RadioKind.BLE, devices.ble, state.catalogLabels)) }
+        sections.add("WiFi access points", asked.includeWifi && devices.wifi.isNotEmpty()) { doc.table(ScanReportContent.sessionTable(RadioKind.WIFI, devices.wifi, state.catalogLabels)) }
+        sections.add("Cell towers", asked.includeCellular && devices.cellular.isNotEmpty()) { doc.table(ScanReportContent.sessionTable(RadioKind.CELLULAR, devices.cellular)) }
+        sections.add("Bluetooth devices", asked.includeBle && devices.ble.isNotEmpty()) { doc.table(ScanReportContent.sessionTable(RadioKind.BLE, devices.ble, state.catalogLabels)) }
         sections.add("Satellites in the last pass", satellites.isNotEmpty()) { doc.table(OverviewReportContent.passTable(RadioKind.SATELLITE, satellites)) }
         val lan = state.lanDevices.isNotEmpty()
         sections.add("LAN devices (last sweep)", lan) { doc.table(LanReportContent.devicesTable(state.lanDevices)) }
@@ -276,7 +278,7 @@ object PhoneReports {
         }
         doc.heading(notes, "Appendix $notes · Notes")
         doc.bullets(listOf(
-            "Each device is listed once with the strongest reading this session; every pass is kept in the recording on the phone (Recordings → Share) and, when uploaded, in the web app.",
+            "Each device is listed once with the strongest reading this session; every pass is kept in the mission on the phone (Missions → Share) and, when uploaded, in the web app.",
             "Bluetooth devices rotate their MAC address, so one device can appear several times.",
             "The public IP comes from ident.me and is what the internet saw at that time; it changes with the network.",
             "Positions use GPS first, then fused, then network fixes; accuracy is Android's 68 % radius.",
@@ -407,7 +409,7 @@ object PhoneReports {
             clipData = ClipData.newRawUri(file.name, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(Intent.createChooser(intent, "Share recording").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        context.startActivity(Intent.createChooser(intent, "Share mission").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         null
     } catch (e: Exception) {
         "Could not share: ${e.message}"

@@ -142,6 +142,9 @@ data class ScanUiState(
     /** The scan report written when scanning stopped, and the pass count it covers. */
     val scanReportPath: String? = null,
     val scanReportPasses: Int = 0,
+    /** The radios the last pass asked for ("What to scan"): the scan report
+     * covers only these (user, 2026-11-09). */
+    val scanOptions: ScanOptions = ScanOptions(),
     /** Where and when the last sweep finished, for the LAN report. */
     val lanLatitude: Double? = null,
     val lanLongitude: Double? = null,
@@ -1015,6 +1018,7 @@ class ScanForegroundService : Service() {
             it.copy(
                 isScanning = true, currentPhase = null, activeRadios = emptySet(),
                 wifiCount = null, cellularCount = null, bleCount = null, satelliteCount = null,
+                scanOptions = options,
             )
         }
         // One passCount bump for the whole pass — the four recordXxx calls

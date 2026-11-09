@@ -64,17 +64,17 @@ fun RecordingsScreen(uiState: ScanUiState, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text("← Back") }
-            Text("Recordings", style = MaterialTheme.typography.headlineSmall)
+            Text("🎯 Missions", style = MaterialTheme.typography.headlineSmall)
         }
         usage?.let { u ->
             Text(
-                "${RecordingFormat.bytes(u.bytes)} on this phone · ${u.recordings} recordings" +
+                "${RecordingFormat.bytes(u.bytes)} on this phone · ${u.recordings} missions" +
                     (if (u.waiting > 0) " · ${u.waiting} passes waiting to upload" else ""),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (u.overBytes > 0) Text(
-                "Over the storage limit by ${RecordingFormat.bytes(u.overBytes)} with recordings that aren't uploaded. " +
+                "Over the storage limit by ${RecordingFormat.bytes(u.overBytes)} with missions that aren't uploaded. " +
                     "Nothing is deleted automatically: delete some here or raise the limit in Settings.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
@@ -84,7 +84,7 @@ fun RecordingsScreen(uiState: ScanUiState, onBack: () -> Unit) {
         when {
             list == null -> Text("Loading…", style = MaterialTheme.typography.bodyMedium)
             list.isEmpty() -> Text(
-                "No recordings yet. Every scan, from Start to Stop, is kept here, with or without a server.",
+                "No missions yet. Every scan, from Start to Stop, is kept here as a mission, with or without a server.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -118,7 +118,7 @@ fun RecordingsScreen(uiState: ScanUiState, onBack: () -> Unit) {
     confirmDelete?.let { r ->
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
-            title = { Text("Delete recording?") },
+            title = { Text("Delete mission?") },
             text = {
                 Text(
                     "${started(r)} · ${RecordingFormat.summary(r)}." +

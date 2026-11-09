@@ -202,7 +202,9 @@ private fun WhyfiApp(
 ) {
     // rememberSaveable, not remember: rotating the phone shouldn't throw you
     // out of a results table back to the Scan tab.
-    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    // Also kept in settings: switching to the USB workspace and back (or
+    // reopening the app) returns to the tab last shown.
+    var selectedTab by rememberSaveable { mutableIntStateOf(settingsRepository.phoneTab.coerceIn(0, 3)) }
     // See Workspace.kt: phone radios and the USB adapter are separate
     // workspaces, switchable at any time (adapter or not).
     var workspace by rememberSaveable { mutableStateOf(Workspace.from(settingsRepository.workspace)) }
@@ -222,7 +224,10 @@ private fun WhyfiApp(
     // composable already has.
     val pagerState = rememberPagerState(initialPage = selectedTab.coerceAtMost(tabCount - 1)) { tabCount }
     val coroutineScope = rememberCoroutineScope()
-    LaunchedEffect(pagerState.currentPage) { selectedTab = pagerState.currentPage }
+    LaunchedEffect(pagerState.currentPage) {
+        selectedTab = pagerState.currentPage
+        settingsRepository.phoneTab = pagerState.currentPage
+    }
     val goToTab: (Int) -> Unit = { index ->
         coroutineScope.launch { pagerState.animateScrollToPage(index) }
     }

@@ -53,8 +53,7 @@ internal fun MonitorLocationMap(
     receiverPath: List<MonitorReceiverFix> = emptyList(),
     onEstimateTap: (String) -> Unit = {},
     onUserPan: () -> Unit = {},
-    showUncertainty: Boolean = true,
-    onToggleUncertainty: () -> Unit = {},
+    layers: MonitorMapLayers = MonitorMapLayers(),
 ) {
     val panAction = rememberUpdatedState(onUserPan)
     Column(modifier.clipToBounds()) {
@@ -140,21 +139,25 @@ internal fun MonitorLocationMap(
             }
             map.overlays.clear()
             map.overlays.add(MonitorLocationOverlay(receiver, estimates, selectedMac,
-                selectedSamples, labels, receiverPath.takeLast(800), onEstimateTap, showUncertainty))
+                selectedSamples, labels, if (layers.path) receiverPath.takeLast(800) else emptyList(), onEstimateTap, layers))
             map.invalidate()
         }) }
-        FilterChip(showUncertainty, onToggleUncertainty, label = { Text("±") },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp).semantics {
-                contentDescription = if (showUncertainty) "Hide uncertainty circles and RSSI cones"
-                    else "Show uncertainty circles and RSSI cones"
-            })
       }
         Text("© OpenStreetMap contributors · blue: phone fixes/measurements · teal: estimate" +
-            if (showUncertainty) " · circles: accuracy/uncertainty · cones: illustrative RSSI, not bearing"
-            else " · uncertainty hidden",
+            (if (layers.accuracy) " · circles: accuracy/uncertainty" else "") +
+            (if (layers.cones) " · cones: illustrative RSSI, not bearing" else ""),
             style = MaterialTheme.typography.bodySmall)
     }
 }
+
+/** What the USB Mission map draws; toggled from its controls bar, like
+ * the phone's Mission map (mission/MapControls.kt). */
+internal data class MonitorMapLayers(
+    val accuracy: Boolean = true,
+    val cones: Boolean = true,
+    val readings: Boolean = true,
+    val path: Boolean = true,
+)
 
 private data class MapCenterState(val initialized: Boolean = false,
                                   val centeredOnReceiver: Boolean = false, val recenterToken: String = "",
@@ -169,7 +172,7 @@ private class MonitorLocationOverlay(
     private val labels: Map<String, String>,
     private val receiverPath: List<MonitorReceiverFix>,
     private val onEstimateTap: (String) -> Unit,
-    private val showUncertainty: Boolean,
+    private val layers: MonitorMapLayers,
 ) : Overlay() {
     private val measurements = samples.groupBy { it.mac }.filterKeys { it in estimates }.mapValues { (_, readings) ->
         readings.groupBy { (it.lat / 0.00005).roundToInt() to (it.lng / 0.00005).roundToInt() }
@@ -210,12 +213,12 @@ private class MonitorLocationOverlay(
         }
         estimates.forEach { (mac, estimate) ->
             val deviceSamples = measurements[mac].orEmpty().takeLast(80)
-            if (showUncertainty) MonitorSignalCones.draw(canvas, estimate, deviceSamples) { lat, lng ->
+            if (layers.cones) MonitorSignalCones.draw(canvas, estimate, deviceSamples) { lat, lng ->
                 val p = point(lat, lng)
                 PointF(p.x.toFloat(), p.y.toFloat())
             }
-            deviceSamples.forEach { sample ->
-                if (showUncertainty) circle(sample.lat, sample.lng,
+            if (layers.readings) deviceSamples.forEach { sample ->
+                if (layers.accuracy) circle(sample.lat, sample.lng,
                     MonitorLocationPolicy.effectiveAccuracy(sample.gpsAccuracyM, sample.fixAgeMs, sample.speedMps),
                     Color.argb(65, 0, 94, 158))
                 val p = point(sample.lat, sample.lng)
@@ -225,7 +228,7 @@ private class MonitorLocationOverlay(
         }
         receiver?.let { selected ->
             val fix = selected.fix
-            if (showUncertainty) circle(fix.lat, fix.lng, selected.effectiveAccuracyM, Color.rgb(0, 94, 158))
+            if (layers.accuracy) circle(fix.lat, fix.lng, selected.effectiveAccuracyM, Color.rgb(0, 94, 158))
             val p = point(fix.lat, fix.lng)
             paint.color = Color.WHITE
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 12f, paint)
@@ -233,7 +236,7 @@ private class MonitorLocationOverlay(
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 9f, paint)
         }
         estimates.forEach { (mac, estimate) ->
-            if (showUncertainty) circle(estimate.lat, estimate.lng, estimate.uncertaintyM, Color.rgb(0, 125, 113))
+            if (layers.accuracy) circle(estimate.lat, estimate.lng, estimate.uncertaintyM, Color.rgb(0, 125, 113))
             val p = point(estimate.lat, estimate.lng)
             paint.color = Color.WHITE
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 11f, paint)
@@ -241,7 +244,7 @@ private class MonitorLocationOverlay(
             canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 8f, paint)
             val fullMac = mac.uppercase()
             val name = (labels[mac]?.removeSuffix(" · $fullMac")?.take(20) ?: "Device") +
-                if (showUncertainty) " ±${estimate.uncertaintyM.toInt()}m" else ""
+                if (layers.accuracy) " ±${estimate.uncertaintyM.toInt()}m" else ""
             paint.textSize = 27f
             paint.setShadowLayer(3f, 1f, 1f, Color.WHITE)
             val labelWidth = max(paint.measureText(name), paint.measureText(fullMac))

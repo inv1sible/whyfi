@@ -154,7 +154,7 @@ fun SettingsScreen(
         // -- Backend connection (no header — continues the flow from remote control) --
         SettingsSection(if (serverConfigured) "Server connection" else "Connect to a server (optional)", if (serverConfigured) "Connected to ${android.net.Uri.parse(backendUrl).host ?: backendUrl}" else "Not connected: whyfi works on its own") {
                 Text(
-                    "whyfi works on its own: scans, labels, reports, Mission and recordings all stay on this phone. Connecting your " +
+                    "whyfi works on its own: scans, labels, reports and missions all stay on this phone. Connecting your " +
                         "self-hosted whyfi server adds the web map, history across devices, better Mission estimates and remote control. " +
                         "Scan the setup QR code from Settings → Sensors in whyfi in your browser.",
                     style = MaterialTheme.typography.bodySmall,
@@ -315,9 +315,9 @@ fun SettingsScreen(
         // -- Offline storage --
         SettingsSection("Storage on this phone", "Using $outboxUsage") {
                 Text(
-                    "Every scan is kept on the phone as a recording (Scan → Recordings), with or without a server. " +
-                        "When this limit is reached, recordings that are already uploaded are removed first, oldest " +
-                        "first. Recordings that aren't uploaded are never removed automatically; the Recordings " +
+                    "Every scan is kept on the phone as a mission (Scan → 🎯 Missions), with or without a server. " +
+                        "When this limit is reached, missions that are already uploaded are removed first, oldest " +
+                        "first. Missions that aren't uploaded are never removed automatically; the Missions " +
                         "screen warns instead. A scan pass is roughly 5–30 KB depending on how many networks and " +
                         "devices are around.",
                 )

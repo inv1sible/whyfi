@@ -89,4 +89,11 @@ class ScanReportContentTest {
         assertEquals("Carrier", ScanReportContent.sessionTable(RadioKind.CELLULAR, emptyList()).columns[0].header)
         assertEquals("198.51.100.4", ScanReportContent.stats(SurveyStats(), "198.51.100.4").last().value)
     }
+
+    @Test
+    fun statsCoverOnlyTheRadiosThatWereScanned() {
+        val labels = ScanReportContent.stats(SurveyStats(), null,
+            com.whyfi.app.scan.ScanOptions(includeWifi = true, includeCellular = false, includeBle = false, includeGnss = true)).map { it.label }
+        assertEquals(listOf("scan passes", "WiFi access points", "satellites", "public IP"), labels)
+    }
 }

@@ -29,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.scan.SurveyTally
 import com.whyfi.app.report.PhoneReports
 import java.io.File
@@ -88,10 +89,12 @@ fun ScanScreen(
         service?.let { remoteControlOn = it.isRemoteControlEnabled() }
     }
 
-    var includeWifi by remember { mutableStateOf(true) }
-    var includeCellular by remember { mutableStateOf(true) }
-    var includeBle by remember { mutableStateOf(true) }
-    var includeGnss by remember { mutableStateOf(true) }
+    // Remembered across launches; the scan report covers the same radios.
+    val settings = remember { SettingsRepository(context.applicationContext) }
+    var includeWifi by remember { mutableStateOf(settings.scanIncludeWifi) }
+    var includeCellular by remember { mutableStateOf(settings.scanIncludeCellular) }
+    var includeBle by remember { mutableStateOf(settings.scanIncludeBle) }
+    var includeGnss by remember { mutableStateOf(settings.scanIncludeGnss) }
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         permissionsGranted = PermissionHelper.hasAllRequiredPermissions(context)
@@ -137,9 +140,9 @@ fun ScanScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("whyfi scanner", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-            // Every scan is kept on the phone (RecordingStore).
-            TextButton(onClick = onOpenRecordings) { Text("🗂️ Recordings") }
+            Text("whyfi phone", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+            // Every scan is kept on the phone as a mission (RecordingStore).
+            TextButton(onClick = onOpenRecordings) { Text("🎯 Missions") }
             // Written automatically when scanning stops (all radios, public
             // IP, location); regenerated if passes ran since.
             if (uiState.latestPass != null && !uiState.isScanning && !uiState.isContinuous) {
@@ -165,30 +168,35 @@ fun ScanScreen(
 
         if (scanning) {
             Text(phaseLabel(uiState.currentPhase))
-        } else if (uiState.completedScanCount > 0) {
+        } else if (uiState.latestPass != null) {
             Text("Last scan:")
         }
+        // Counts of the last pass. Live counts while a radio's phase runs;
+        // otherwise the stored pass, so they match what a tap shows (they
+        // were reset to "0"/"–" after a restart or between passes).
+        val pass = uiState.latestPass
+        fun count(live: Int?, last: Int?, asked: Boolean): Int? = live ?: if (asked) last else null
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             RadioStatChip(
-                "📶", "WiFi", uiState.wifiCount, scanning && ScanPhase.WIFI in uiState.activeRadios, Color(0xFF2DD4BF),
+                "📶", "WiFi", count(uiState.wifiCount, pass?.wifiObservations?.size, uiState.scanOptions.includeWifi), scanning && ScanPhase.WIFI in uiState.activeRadios, Color(0xFF2DD4BF),
                 modifier = Modifier.weight(1f),
                 onClick = if (openable) ({ onOpenDetail(RadioKind.WIFI) }) else null,
             )
             RadioStatChip(
-                "📡", "Cellular", uiState.cellularCount, scanning && ScanPhase.CELLULAR in uiState.activeRadios, Color(0xFF60A5FA),
+                "📡", "Cellular", count(uiState.cellularCount, pass?.cellObservations?.size, uiState.scanOptions.includeCellular), scanning && ScanPhase.CELLULAR in uiState.activeRadios, Color(0xFF60A5FA),
                 modifier = Modifier.weight(1f),
                 onClick = if (openable) ({ onOpenDetail(RadioKind.CELLULAR) }) else null,
             )
             RadioStatChip(
-                "🔵", "BLE", uiState.bleCount, scanning && ScanPhase.BLE in uiState.activeRadios, Color(0xFFA78BFA),
+                "🔵", "BLE", count(uiState.bleCount, pass?.bleObservations?.size, uiState.scanOptions.includeBle), scanning && ScanPhase.BLE in uiState.activeRadios, Color(0xFFA78BFA),
                 modifier = Modifier.weight(1f),
                 onClick = if (openable) ({ onOpenDetail(RadioKind.BLE) }) else null,
             )
             RadioStatChip(
-                "🛰️", "GPS", uiState.satelliteCount, scanning && ScanPhase.GNSS in uiState.activeRadios, Color(0xFFFBBF24),
+                "🛰️", "GPS", count(uiState.satelliteCount, pass?.satelliteObservations?.size, uiState.scanOptions.includeGnss), scanning && ScanPhase.GNSS in uiState.activeRadios, Color(0xFFFBBF24),
                 modifier = Modifier.weight(1f),
                 onClick = if (openable) ({ onOpenDetail(RadioKind.SATELLITE) }) else null,
             )
@@ -214,7 +222,7 @@ fun ScanScreen(
 
         Text("What to scan:")
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = includeWifi, onCheckedChange = { includeWifi = it }, enabled = !uiState.isContinuous)
+            Checkbox(checked = includeWifi, onCheckedChange = { includeWifi = it; settings.scanIncludeWifi = it }, enabled = !uiState.isContinuous)
             Text("WiFi")
         }
         if (includeWifi && uiState.wifiUnavailableReason != null) {
@@ -232,7 +240,7 @@ fun ScanScreen(
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = includeCellular, onCheckedChange = { includeCellular = it }, enabled = !uiState.isContinuous)
+            Checkbox(checked = includeCellular, onCheckedChange = { includeCellular = it; settings.scanIncludeCellular = it }, enabled = !uiState.isContinuous)
             Text("Cellular")
         }
         if (includeCellular && uiState.cellularUnavailableReason != null) {
@@ -246,7 +254,7 @@ fun ScanScreen(
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = includeBle, onCheckedChange = { includeBle = it }, enabled = !uiState.isContinuous)
+            Checkbox(checked = includeBle, onCheckedChange = { includeBle = it; settings.scanIncludeBle = it }, enabled = !uiState.isContinuous)
             Text("Bluetooth (BLE)")
         }
         if (includeBle && uiState.bleUnavailableReason != null) {
@@ -269,7 +277,7 @@ fun ScanScreen(
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = includeGnss, onCheckedChange = { includeGnss = it }, enabled = !uiState.isContinuous)
+            Checkbox(checked = includeGnss, onCheckedChange = { includeGnss = it; settings.scanIncludeGnss = it }, enabled = !uiState.isContinuous)
             Text("GNSS satellites")
         }
         if (includeGnss && uiState.gnssUnavailableReason != null) {
