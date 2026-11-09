@@ -189,7 +189,7 @@ private const val SCAN_ICON = "🔍"
 private const val LAN_ICON = "🌐"
 private const val SETTINGS_ICON = "⚙️"
 private const val MISSION_ICON = "🎯"
-private const val MISSION_TAB = 2
+private const val MISSION_TAB = 1
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -239,7 +239,7 @@ private fun WhyfiApp(
     // close it — without this it would leave the app instead, which reads as
     // a crash.
     BackHandler(enabled = detailRadio != null) { detailRadio = null }
-    BackHandler(enabled = showRecordings) { showRecordings = false }
+    BackHandler(enabled = showRecordings && selectedTab == 0) { showRecordings = false }
 
     val activeDetail = detailRadio?.let { name -> RadioKind.entries.firstOrNull { it.name == name } }
     if (activeDetail != null) {
@@ -256,11 +256,6 @@ private fun WhyfiApp(
 
     // Standalone recordings are offered for upload once a server is set up.
     ConnectUploadPrompt()
-
-    if (showRecordings) {
-        RecordingsScreen(uiState = uiState, onBack = { showRecordings = false })
-        return
-    }
 
     if (workspace == Workspace.ADAPTER) {
         MaterialTheme(colorScheme = adapterColorScheme(MaterialTheme.colorScheme)) {
@@ -282,8 +277,8 @@ private fun WhyfiApp(
         WorkspaceTabBar(workspace, switchWorkspace) {
             TabRow(selectedTabIndex = selectedTab.coerceAtMost(tabCount - 1)) {
                 WhyfiTab(SCAN_ICON, "Scan", 0, selectedTab) { goToTab(0) }
-                WhyfiTab(LAN_ICON, "LAN", 1, selectedTab) { goToTab(1) }
                 WhyfiTab(MISSION_ICON, "Mission", MISSION_TAB, selectedTab) { goToTab(MISSION_TAB) }
+                WhyfiTab(LAN_ICON, "LAN", 2, selectedTab) { goToTab(2) }
                 WhyfiTab(SETTINGS_ICON, "Settings", 3, selectedTab) { goToTab(3) }
             }
         }
@@ -292,11 +287,14 @@ private fun WhyfiApp(
         HorizontalPager(state = pagerState, modifier = Modifier.weight(1f),
             userScrollEnabled = pagerState.currentPage != MISSION_TAB) { page ->
             when (page) {
-                0 -> ScanScreen(
+                // Recordings open inside the Scan tab (tabs stay visible);
+                // back or ← Back returns to Scan.
+                0 -> if (showRecordings) RecordingsScreen(uiState = uiState, onBack = { showRecordings = false })
+                else ScanScreen(
                     service = service, uiState = uiState, onOpenDetail = openDetail,
                     onOpenRecordings = { showRecordings = true },
                 )
-                1 -> LanScreen(service = service, uiState = uiState)
+                2 -> LanScreen(service = service, uiState = uiState)
                 MISSION_TAB -> MissionScreen(
                     favoritesRepository = favoritesRepository,
                     missionController = missionController,

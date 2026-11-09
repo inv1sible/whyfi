@@ -18,7 +18,7 @@ object LocalMissionPoints {
 
     /** A cheap substring the stored JSON of every pass seeing [target]
      * contains, so the database can skip unrelated passes. JSON-escaped like
-     * Gson writes it (e.g. "<" becomes <). */
+     * Gson writes it (e.g. "<" becomes \u003c). */
     fun needle(target: MissionTarget): String = when (target.kind) {
         RadioKind.CELLULAR -> target.identifier.substringAfterLast('-')
         else -> gson.toJson(target.identifier).removeSurrounding("\"")
@@ -26,8 +26,12 @@ object LocalMissionPoints {
 
     data class Result(val points: List<MissionPoint>, val truncated: Boolean, val passes: Int)
 
+    /** A stored pass: its JSON plus the recording it belongs to and when it
+     * was kept (data.local.StoredPassRow). */
+    data class Pass(val json: String, val recordingId: String? = null, val atMs: Long? = null)
+
     fun points(
-        payloads: List<String>,
+        payloads: List<Pass>,
         target: MissionTarget,
         nearLat: Double,
         nearLng: Double,
@@ -36,8 +40,8 @@ object LocalMissionPoints {
     ): Result {
         val points = ArrayList<MissionPoint>()
         var passes = 0
-        for (json in payloads) {
-            val pass = runCatching { gson.fromJson(json, ScanSessionUploadRequest::class.java) }.getOrNull() ?: continue
+        for (stored in payloads) {
+            val pass = runCatching { gson.fromJson(stored.json, ScanSessionUploadRequest::class.java) }.getOrNull() ?: continue
             val lat = pass.latitude ?: continue
             val lng = pass.longitude ?: continue
             if (Geo.haversineDistanceMeters(nearLat, nearLng, lat, lng) > radiusM) continue
@@ -50,8 +54,22 @@ object LocalMissionPoints {
                 RadioKind.SATELLITE -> emptyList()
             }
             if (weights.isNotEmpty()) passes++
-            weights.forEach { points += MissionPoint(lat, lng, it) }
+            val accuracy = pass.locationAccuracyMeters?.toDouble()
+            weights.forEach { points += MissionPoint(lat, lng, it, accuracy, stored.atMs, stored.recordingId) }
         }
         return Result(points.take(cap), points.size > cap, passes)
+    }
+
+    /** Only the readings of the newest recording among [points] (by time). */
+    fun latestRecording(points: List<MissionPoint>): List<MissionPoint> {
+        val newest = points.filter { it.recordingId != null }.maxByOrNull { it.atMs ?: 0L }?.recordingId ?: return points
+        return points.filter { it.recordingId == newest }
+    }
+
+    /** The newest non-blank advertised name of BLE device [mac] in [payloads]. */
+    fun bleName(payloads: List<Pass>, mac: String): String? = payloads.sortedByDescending { it.atMs ?: 0L }.firstNotNullOfOrNull { stored ->
+        runCatching { gson.fromJson(stored.json, ScanSessionUploadRequest::class.java) }.getOrNull()
+            ?.bleObservations.orEmpty()
+            .firstOrNull { it.bleMac.equals(mac, ignoreCase = true) && it.deviceName.isNotBlank() }?.deviceName
     }
 }

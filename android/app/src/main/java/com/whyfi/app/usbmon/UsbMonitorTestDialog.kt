@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
@@ -31,6 +33,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -66,13 +69,25 @@ private const val MAX_LISTED = 200
  * user ticks the box.
  */
 @Composable
-fun UsbMonitorTestDialog(backendUrl: String, token: String, onDismiss: () -> Unit, onSuccessfulTest: () -> Unit = {}) {
+fun UsbMonitorTestDialog(
+    backendUrl: String,
+    token: String,
+    onDismiss: () -> Unit,
+    onSuccessfulTest: () -> Unit = {},
+    /** True: drawn in place (USB Settings card) instead of a full-screen
+     * dialog, scrolling inside a bounded height. */
+    inline: Boolean = false,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val usbManager = remember { context.getSystemService(Context.USB_SERVICE) as UsbManager }
 
     var usbDevices by remember { mutableStateOf(usbManager.deviceList.values.toList()) }
     var running by remember { mutableStateOf(false) }
+    // Inline, the card can fold or the tab change mid-test: stop the probe
+    // with the screen instead of leaving it running unseen.
+    val runningNow by rememberUpdatedState(running)
+    DisposableEffect(Unit) { onDispose { if (runningNow) UsbMonitorNative.stop() } }
     var status by remember { mutableStateOf<String?>(null) }
     var stats by remember { mutableStateOf(LongArray(0)) }
     var lastRun by remember { mutableStateOf<UsbMonitorReport.Run?>(null) }
@@ -180,13 +195,8 @@ fun UsbMonitorTestDialog(backendUrl: String, token: String, onDismiss: () -> Uni
         }
     }
 
-    Dialog(onDismissRequest = { if (!running) onDismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(modifier = Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("USB monitor test (experimental)", style = MaterialTheme.typography.headlineSmall)
+    val content: @Composable () -> Unit = {
+                if (!inline) Text("USB monitor test (experimental)", style = MaterialTheme.typography.headlineSmall)
                 Text(
                     "Puts an RTL8812AU/8821AU USB WiFi stick into monitor mode (receive only — nothing is transmitted) " +
                         "and lists the access points and clients it hears, with a guess at what each device is. " +
@@ -223,7 +233,7 @@ fun UsbMonitorTestDialog(backendUrl: String, token: String, onDismiss: () -> Uni
                     }
                     if (running) {
                         OutlinedButton(onClick = { UsbMonitorNative.stop() }) { Text("Stop early") }
-                    } else {
+                    } else if (!inline) {
                         TextButton(onClick = onDismiss) { Text("Close") }
                     }
                 }
@@ -266,7 +276,19 @@ fun UsbMonitorTestDialog(backendUrl: String, token: String, onDismiss: () -> Uni
                         Text(text, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                     }
                 }
-            }
+    }
+
+    if (inline) {
+        Column(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) { content() }
+    } else Dialog(onDismissRequest = { if (!running) onDismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) { content() }
         }
     }
 }

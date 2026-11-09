@@ -26,7 +26,6 @@ import com.whyfi.app.ui.SettingsSection
 @Composable
 fun AdapterSettings(settingsRepository: SettingsRepository) {
     var monitorTestPassed by remember { mutableStateOf(settingsRepository.monitorTestPassed) }
-    var showUsbMonitorTest by remember { mutableStateOf(false) }
     var noisePatterns by remember { mutableStateOf(settingsRepository.monitorNoisePatterns) }
     var noiseMessage by remember { mutableStateOf<String?>(null) }
 
@@ -37,18 +36,17 @@ fun AdapterSettings(settingsRepository: SettingsRepository) {
                 else "Optional: checks that a plugged-in adapter delivers frames. Capture works without it.",
                 style = MaterialTheme.typography.bodySmall,
             )
-            OutlinedButton(onClick = { showUsbMonitorTest = true }) { Text("Run USB monitor test (experimental)") }
-            if (showUsbMonitorTest) {
-                UsbMonitorTestDialog(
-                    settingsRepository.backendUrl ?: BuildConfig.DEFAULT_BACKEND_URL,
-                    settingsRepository.sensorToken ?: "",
-                    onDismiss = { showUsbMonitorTest = false },
-                    onSuccessfulTest = {
-                        settingsRepository.monitorTestPassed = true
-                        monitorTestPassed = true
-                    },
-                )
-            }
+            // In the card itself (user, 2026-11-09), scrolling inside it.
+            UsbMonitorTestDialog(
+                settingsRepository.backendUrl ?: BuildConfig.DEFAULT_BACKEND_URL,
+                settingsRepository.sensorToken ?: "",
+                onDismiss = {},
+                onSuccessfulTest = {
+                    settingsRepository.monitorTestPassed = true
+                    monitorTestPassed = true
+                },
+                inline = true,
+            )
         }
     }
 

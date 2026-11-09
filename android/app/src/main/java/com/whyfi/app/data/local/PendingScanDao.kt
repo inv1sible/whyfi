@@ -50,8 +50,8 @@ interface PendingScanDao {
 
     /** Newest stored passes whose JSON contains [needle] (Mission without a
      * server, see LocalMissionPoints). Bounded: passes can be large. */
-    @Query("SELECT payloadJson FROM pending_scans WHERE instr(payloadJson, :needle) > 0 ORDER BY createdAtEpochMs DESC LIMIT :limit")
-    suspend fun payloadsContaining(needle: String, limit: Int): List<String>
+    @Query("SELECT payloadJson, recordingId, createdAtEpochMs FROM pending_scans WHERE instr(payloadJson, :needle) > 0 ORDER BY createdAtEpochMs DESC LIMIT :limit")
+    suspend fun payloadsContaining(needle: String, limit: Int): List<StoredPassRow>
 
     @Query("SELECT COUNT(*) FROM pending_scans")
     suspend fun count(): Int
@@ -68,3 +68,6 @@ interface PendingScanDao {
     @Query("DELETE FROM pending_scans WHERE clientScanId IN (:clientScanIds)")
     suspend fun deleteAll(clientScanIds: List<String>)
 }
+
+/** A stored pass with where and when it was kept (Mission without a server). */
+data class StoredPassRow(val payloadJson: String, val recordingId: String?, val createdAtEpochMs: Long)

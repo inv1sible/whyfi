@@ -46,6 +46,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import org.osmdroid.util.BoundingBox
+import com.whyfi.app.scan.CatalogLabels
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Surface
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -132,38 +140,96 @@ fun MissionScreen(
 
     fun selectOrRetarget(target: MissionTarget) = runTarget(target, nearRadius)
 
-    // Favorites on top, the map in the middle, the status line below. The
-    // osmdroid MapView used to draw over its Compose neighbours when only
-    // clipped by clipToBounds(), so it was a full-screen background with the
-    // bars painted over it — which hid the favorites (user, 2026-11-08).
-    // MissionMap now clips at the View level as well (a clipping FrameLayout
-    // plus an outline clip on the MapView itself).
-    Column(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier.fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surface),
-        ) {
-            // As a tab, the tab row already says Mission: no title line.
-            if (onBack != null) Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 16.dp)) {
-                TextButton(onClick = onBack) { Text("← Back") }
-                Text("Mission", style = MaterialTheme.typography.titleMedium)
-            }
+    // Display options (bottom bar). Accuracy circles and cones only change
+    // the drawing; "24 h" filters what was loaded; "Latest recording"
+    // reloads from the phone's newest recording of the target.
+    var showAccuracy by rememberSaveable { mutableStateOf(false) }
+    var showCones by rememberSaveable { mutableStateOf(true) }
+    var last24h by rememberSaveable { mutableStateOf(false) }
+    var recenter by remember { mutableIntStateOf(0) }
+    val now = remember(uiState.points, last24h) { System.currentTimeMillis() }
+    val shown = remember(uiState.points, last24h, now) {
+        if (!last24h) uiState.points else uiState.points.filter { (it.atMs ?: 0L) >= now - DAY_MS }
+    }
+    // The server's estimate covers every reading; once filtered, the cone
+    // points from the filtered readings' own centroid instead.
+    val apex = if (shown.size == uiState.points.size) selectedEstimate(uiState) else null
 
-            if (targets.isEmpty()) {
-                Text(
-                    "No favorites yet. Star a WiFi network, BLE device, or cell tower from its results " +
-                        "table (Scan → WiFi/BLE/Cellular) to track it here.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
-                )
-            } else {
+    // BLE favorites by name rather than MAC: the last pass first, then the
+    // phone's stored scans, then the signature catalog label.
+    val scanState = service?.uiState?.collectAsState()?.value
+    LaunchedEffect(bleFavorites) { missionController.loadBleNames(bleFavorites) }
+    fun label(target: MissionTarget): String {
+        if (target.kind != RadioKind.BLE) return target.identifier
+        val fromPass = scanState?.latestPass?.bleObservations.orEmpty()
+            .firstOrNull { it.bleMac.equals(target.identifier, ignoreCase = true) && it.deviceName.isNotBlank() }?.deviceName
+        return fromPass ?: uiState.bleNames[target.identifier]
+            ?: scanState?.catalogLabels?.get(CatalogLabels.key(target.identifier))
+            ?: target.identifier
+    }
+
+    // Laid out like the USB adapter's Map: the map, then a bar of controls,
+    // then a bar of devices to track. The MapView is clipped at the View
+    // level (see MissionMap): as a full-screen background with the bars
+    // painted over it, it hid the favorites (user, 2026-11-08).
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (onBack != null) Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 16.dp)) {
+            TextButton(onClick = onBack) { Text("← Back") }
+            Text("Mission", style = MaterialTheme.typography.titleMedium)
+        }
+        // Which algorithm decides where the target is: the comparison comes
+        // from the server, so it's only offered for server readings.
+        if (uiState.target != null && !uiState.fromPhone && shown.size == uiState.points.size) {
+            MissionEstimatorSelector(
+                current = uiState.estimator,
+                onSelect = { selected ->
+                    missionController.setEstimator(selected)
+                    uiState.target?.let { runTarget(it, nearRadius) }
+                },
+            )
+            if (uiState.points.isNotEmpty()) EstimatorReadout(uiState)
+        }
+
+        MissionMap(
+            points = shown,
+            livePosition = uiState.livePosition,
+            here = uiState.here,
+            modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds(),
+            estimatedApex = apex,
+            showAccuracy = showAccuracy,
+            showCones = showCones,
+            recenter = recenter,
+        )
+
+        // Controls: status, Track and the display options.
+        Surface(Modifier.fillMaxWidth(), tonalElevation = 5.dp, shadowElevation = 5.dp) {
+            Column(Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        when {
+                            !hasLocation -> "Mission needs location permission."
+                            !locationOn -> "Location is off."
+                            else -> statusBarText(uiState.copy(points = shown)) + if (last24h && uiState.target != null) " (last 24 h)" else ""
+                        },
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        color = if (uiState.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (!hasLocation) TextButton({
+                        locationLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                    }) { Text("Allow") }
+                    else if (!locationOn) TextButton({
+                        runCatching { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+                    }) { Text("Turn on") }
+                }
                 Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    // Left-most, per its role as the primary on/off control
-                    // for whatever's currently selected — disabled until
-                    // something is picked, since there's nothing to track yet.
+                    // Tracking is the only thing that scans and reloads by
+                    // itself; without it a picked target loads once.
                     Switch(
                         checked = uiState.isTracking,
                         enabled = uiState.target != null,
@@ -172,117 +238,65 @@ fun MissionScreen(
                             if (tracking) missionController.start(target, service, nearRadius) else missionController.stop()
                         },
                     )
-                    Text(
-                        if (uiState.isTracking) "Tracking" else "Track",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(start = 4.dp, end = 12.dp),
-                    )
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        targets.forEach { target ->
-                            FilterChip(
-                                selected = uiState.target == target,
-                                onClick = { selectOrRetarget(target) },
-                                label = { Text("${target.kind.icon} ${target.identifier}") },
-                                trailingIcon = {
-                                    // Separate tap target: the X unfavorites
-                                    // the target instead of selecting it. If the
-                                    // removed favorite was the active target,
-                                    // clear the selection so the map doesn't
-                                    // keep showing stale data for something
-                                    // that's no longer tracked.
-                                    Text(
-                                        "×",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        modifier = Modifier
-                                            .padding(start = 4.dp)
-                                            .clickable {
-                                                favoritesRepository.toggleFavorite(target.kind, target.identifier)
-                                                if (uiState.target == target) {
-                                                    missionController.clearSelection()
-                                                }
-                                            },
-                                    )
-                                },
-                            )
-                        }
+                    Text(if (uiState.isTracking) "Tracking" else "Track", style = MaterialTheme.typography.bodyMedium)
+                    FilterChip(showAccuracy, { showAccuracy = !showAccuracy }, label = { Text("◎ Accuracy") })
+                    FilterChip(showCones, { showCones = !showCones }, label = { Text("Cones") })
+                    FilterChip(last24h, { last24h = !last24h }, label = { Text("24 h") })
+                    FilterChip(uiState.latestRecordingOnly, { missionController.setLatestRecordingOnly(!uiState.latestRecordingOnly, nearRadius) },
+                        label = { Text("Latest recording") })
+                    IconButton({ recenter++ }, modifier = Modifier.size(40.dp).semantics { contentDescription = "Recenter the map" }) {
+                        Text("⌖", style = MaterialTheme.typography.titleLarge)
                     }
                 }
-
-                // Which algorithm decides where the target is. Lives here
-                // rather than in Settings because this is the screen where
-                // the choice visibly changes something — the cone apex moves
-                // as you switch, with the readout below showing how far the
-                // others land from it.
-                // The estimator comparison comes from the server; the phone's
-                // own scans give a weighted centroid only.
-                if (uiState.target != null && !uiState.fromPhone) {
-                    MissionEstimatorSelector(
-                        current = uiState.estimator,
-                        onSelect = { selected ->
-                            missionController.setEstimator(selected)
-                            uiState.target?.let { runTarget(it, nearRadius) }
-                        },
-                    )
-                }
-
-                if (uiState.points.isNotEmpty()) {
-                    EstimatorReadout(uiState)
-                }
-
             }
         }
 
-        // The map takes the space between the favorites and the status
-        // line, clipped so it can't draw over them (see MissionMap).
-        MissionMap(
-            points = uiState.points,
-            livePosition = uiState.livePosition,
-            here = uiState.here,
-            modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds(),
-            estimatedApex = selectedEstimate(uiState),
-        )
-
-        run {
-            Row(
-                modifier = Modifier.fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface)
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    when {
-                        !hasLocation -> "Mission needs location permission."
-                        !locationOn -> "Location is off."
-                        else -> statusBarText(uiState)
-                    },
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (uiState.error != null) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
+        // Devices to track.
+        if (targets.isEmpty()) {
+            Text(
+                "No favorites yet. Star a Wi‑Fi network, BLE device or cell tower in its results (Scan → Wi‑Fi/BLE/Cellular) to track it here.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+        } else Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            targets.forEach { target ->
+                FilterChip(
+                    selected = uiState.target == target,
+                    onClick = { selectOrRetarget(target) },
+                    label = { Text("${target.kind.icon} ${label(target)}", maxLines = 1) },
+                    trailingIcon = {
+                        // Separate tap target: the × unfavorites the target;
+                        // if it was the active one, the selection is cleared
+                        // so the map doesn't keep stale data.
+                        Text(
+                            "×",
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(start = 4.dp).clickable {
+                                favoritesRepository.toggleFavorite(target.kind, target.identifier)
+                                if (uiState.target == target) missionController.clearSelection()
+                            },
+                        )
                     },
                 )
-                if (!hasLocation) TextButton({
-                    locationLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
-                }) { Text("Allow") }
-                else if (!locationOn) TextButton({
-                    runCatching { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
-                }) { Text("Turn on") }
             }
         }
     }
 }
+
+private const val DAY_MS = 24 * 60 * 60 * 1000L
+
+/** Accuracy circles: a light blue, behind the cones. */
+private const val ACCURACY_ARGB = 0x5560A5FA
 
 private fun statusBarText(uiState: MissionUiState): String {
     // Always true now that the near-filter is fixed on — see nearRadius.
     val where = "near your current location"
     return when {
         uiState.target == null && uiState.here == null -> "Waiting for a location fix…"
-        uiState.target == null -> "Pick a favorite above to locate it."
+        uiState.target == null -> "Pick a favorite below to locate it."
         uiState.isLoading -> "Locating…"
         uiState.error != null -> uiState.error
         uiState.points.isEmpty() && uiState.fromPhone ->
@@ -313,21 +327,27 @@ private fun MissionMap(
     here: LatLng?,
     modifier: Modifier = Modifier,
     estimatedApex: LatLng? = null,
+    showAccuracy: Boolean = false,
+    showCones: Boolean = true,
+    recenter: Int = 0,
 ) {
     val density = LocalDensity.current.density
-    val overlay = remember(points, livePosition, estimatedApex, here) {
-        if (points.isEmpty()) hereOverlay(here, density) else buildOverlay(points, livePosition, density, estimatedApex)
+    val overlay = remember(points, livePosition, estimatedApex, here, showAccuracy, showCones) {
+        if (points.isEmpty()) hereOverlay(here, density)
+        else buildOverlay(points, livePosition, density, estimatedApex, showAccuracy, showCones)
     }
-    // The camera looks at the same place the cone points from — the selected
-    // estimator's position, falling back to a local centroid when the backend
-    // hasn't supplied one — or at the phone while there is nothing to show.
-    val center = remember(points, estimatedApex, here != null) {
-        if (points.isEmpty()) here
-        else estimatedApex ?: Geo.weightedCentroid(points.map { WeightedLatLng(it.lat, it.lng, it.weight) })
+    // What the camera frames: the readings (and the phone, when near them),
+    // or the phone alone while there is nothing to show — at street scale.
+    val framePoints = remember(points, estimatedApex, here != null, recenter) {
+        when {
+            points.isNotEmpty() -> points.map { LatLng(it.lat, it.lng) } + listOfNotNull(estimatedApex)
+            here != null -> listOf(here)
+            else -> emptyList()
+        }
     }
-    // Recentred only when what it looks at changes (new readings, first
-    // fix), not on every location update, so the map can be panned.
-    val centeredOn = remember { arrayOfNulls<Any>(1) }
+    // Reframed only when that changes (new readings, first fix, ⌖), not on
+    // every location update, so the map can be panned.
+    val framedOn = remember { arrayOfNulls<Any>(1) }
 
     AndroidView(
         modifier = modifier,
@@ -364,11 +384,11 @@ private fun MissionMap(
             val mapView = frame.getChildAt(0) as MapView
             mapView.overlays.clear()
             overlay?.let { mapView.overlays.add(it) }
-            val key = listOf(points, estimatedApex, center == null)
-            if (center != null && centeredOn[0] != key) {
-                centeredOn[0] = key
-                mapView.controller.setZoom(18.0)
-                mapView.controller.setCenter(GeoPoint(center.lat, center.lng))
+            val key = listOf(framePoints, recenter)
+            if (framePoints.isNotEmpty() && framedOn[0] != key) {
+                framedOn[0] = key
+                // After layout: zoomToBoundingBox needs the view's size.
+                mapView.post { frameMap(mapView, framePoints) }
             }
             mapView.invalidate()
         },
@@ -461,6 +481,21 @@ private fun EstimatorReadout(uiState: MissionUiState) {
     }
 }
 
+/** Zooms [mapView] to show [points]: a box around several, street scale
+ * (zoom 18) around one or a tight cluster. */
+private fun frameMap(mapView: MapView, points: List<LatLng>) {
+    val latSpan = points.maxOf { it.lat } - points.minOf { it.lat }
+    val lngSpan = points.maxOf { it.lng } - points.minOf { it.lng }
+    if (points.size == 1 || (latSpan < 0.0004 && lngSpan < 0.0006) || mapView.width == 0) {
+        mapView.controller.setZoom(18.0)
+        mapView.controller.setCenter(GeoPoint(points.sumOf { it.lat } / points.size, points.sumOf { it.lng } / points.size))
+        return
+    }
+    val box = BoundingBox.fromGeoPointsSafe(points.map { GeoPoint(it.lat, it.lng) })
+    mapView.zoomToBoundingBox(box.increaseByScale(1.3f), false, (32 * mapView.resources.displayMetrics.density).toInt())
+    if (mapView.zoomLevelDouble > 19.0) mapView.controller.setZoom(19.0)
+}
+
 /** Just the phone's position, as a small green circle. */
 private fun hereOverlay(here: LatLng?, density: Float): ConeOverlay? = here?.let {
     val circle = Geo.circlePolygon(it, MissionController.FALLBACK_CIRCLE_RADIUS_M)
@@ -480,9 +515,17 @@ private fun buildOverlay(
     livePosition: LatLng?,
     density: Float,
     estimatedApex: LatLng? = null,
+    showAccuracy: Boolean = false,
+    showCones: Boolean = true,
 ): ConeOverlay {
     val apex = estimatedApex ?: Geo.weightedCentroid(points.map { WeightedLatLng(it.lat, it.lng, it.weight) })
-    val historicalShapes = points.map { point ->
+    // GPS accuracy of each reading's position, drawn under everything else.
+    val accuracyShapes = if (!showAccuracy) emptyList() else points.mapNotNull { point ->
+        point.accuracyM?.takeIf { it > 0 }?.let { radius ->
+            MissionShape.Circle(Geo.smoothPolygon(Geo.circlePolygon(LatLng(point.lat, point.lng), radius), 1), ACCURACY_ARGB)
+        }
+    }
+    val historicalShapes = if (!showCones) emptyList() else points.map { point ->
         val target = LatLng(point.lat, point.lng)
         val color = SignalColor.signalStrengthColorArgb(point.weight)
         val cone = Geo.conePolygon(apex, target)
@@ -508,7 +551,7 @@ private fun buildOverlay(
         }
     }
 
-    val shapes = if (liveShape != null) historicalShapes + liveShape else historicalShapes
+    val shapes = accuracyShapes + historicalShapes + listOfNotNull(liveShape)
     val readingPoints = points.map { LatLng(it.lat, it.lng) } + listOfNotNull(livePosition)
     return ConeOverlay(shapes, apex, readingPoints, fadeNonEmphasized = liveShape != null, strokeWidthPx = 3f * density)
 }

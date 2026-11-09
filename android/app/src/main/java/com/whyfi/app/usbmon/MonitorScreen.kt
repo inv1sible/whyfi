@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -65,7 +66,7 @@ fun MonitorScreen(
  * under one Devices section (chips) rather than six top-level tabs. */
 private enum class MonitorTab(val label: String) {
     MISSIONS("Missions"), NEARBY("Live"), MAPPING("Map"), ACCESS_POINTS("APs"), UNASSOCIATED("Unassociated"),
-    IOT("IoT"), CAMERAS("Cameras"), PHONES_LAPTOPS("Phones / laptops"), CLIENTS("Other clients"), SETUP("Settings"),
+    IOT("IoT"), CAMERAS("Cameras"), PHONES_LAPTOPS("Phones / laptops"), CLIENTS("Other clients"), SETUP("Settings"), NET_OPS("Net ops"),
 }
 
 private val DEVICE_CATEGORIES = listOf(
@@ -76,21 +77,35 @@ private val DEVICE_CATEGORIES = listOf(
 /** The adapter workspace's top-level tabs, with emoji icons like the phone
  * workspace's tabs (no icon library dependency). */
 private enum class MonitorSection(val label: String, val icon: String) {
-    LIVE("Live", "📡"), MAP("Map", "🗺️"), MISSIONS("Missions", "🗂️"), SETUP("Settings", "⚙️"),
+    // Same first tab as the phone workspace: Scan, 🔍. Missions are the Scan
+    // tab's Recordings (sub view), their tab slot went to Net ops (preview).
+    LIVE("Scan", "🔍"), MAP("Map", "🗺️"), NET_OPS("Net ops", "🛰️"), SETUP("Settings", "⚙️"),
 }
 
 private fun sectionOf(tab: MonitorTab): MonitorSection = when (tab) {
     MonitorTab.NEARBY -> MonitorSection.LIVE
     MonitorTab.MAPPING -> MonitorSection.MAP
-    MonitorTab.MISSIONS -> MonitorSection.MISSIONS
+    MonitorTab.MISSIONS -> MonitorSection.LIVE
+    MonitorTab.NET_OPS -> MonitorSection.NET_OPS
     MonitorTab.SETUP -> MonitorSection.SETUP
     else -> MonitorSection.LIVE
+}
+
+/** Net ops: a placeholder tab, announced as a preview (user, 2026-11-09). */
+@Composable
+private fun NetOpsPreview(modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("🛰️ Net ops", style = MaterialTheme.typography.titleLarge)
+        Text("Preview: coming soon.", style = MaterialTheme.typography.bodyMedium)
+        Text("Saved missions are now under Scan → 🗂️ Recordings.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 }
 
 private fun tabOf(section: MonitorSection): MonitorTab = when (section) {
     MonitorSection.LIVE -> MonitorTab.NEARBY
     MonitorSection.MAP -> MonitorTab.MAPPING
-    MonitorSection.MISSIONS -> MonitorTab.MISSIONS
+    MonitorSection.NET_OPS -> MonitorTab.NET_OPS
     MonitorSection.SETUP -> MonitorTab.SETUP
 }
 
@@ -444,7 +459,7 @@ private fun MonitorWorkspace(
             TabRow(section.ordinal, Modifier.weight(1f)) {
                 MonitorSection.entries.forEach { entry ->
                     Tab(entry == section, { selectTab(tabOf(entry)) }, text = {
-                        Text(if (entry == MonitorSection.MISSIONS && missions.isNotEmpty()) "${entry.label} ${missions.size}" else entry.label,
+                        Text(entry.label,
                             maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelSmall)
                     }, icon = { Text(entry.icon, fontSize = 16.sp) })
                 }
@@ -476,7 +491,9 @@ private fun MonitorWorkspace(
                 }) { Text(if (nearbySort == NearbySort.RSSI) "RSSI ↓" else "Latest ↓") }
             }
         }
-        if (selected == MonitorTab.SETUP) {
+        if (selected == MonitorTab.NET_OPS) {
+            NetOpsPreview(Modifier.weight(1f))
+        } else if (selected == MonitorTab.SETUP) {
             // Laid out like the phone's Settings tab (SettingsScreen).
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) { setup() }
@@ -488,6 +505,8 @@ private fun MonitorWorkspace(
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
               item(key = "nearby-controls") {
                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Saved missions, like the phone's Scan → Recordings.
+                OutlinedButton({ selectTab(MonitorTab.MISSIONS) }) { Text("🗂️ Recordings") }
                 if (showUsb || selectedDevice == null) {
                     UsbPanel(usbDevices, selectedDevice, state.running,
                         {
@@ -514,6 +533,11 @@ private fun MonitorWorkspace(
                     showApCards, { showApCards = !showApCards }, matchedMacs, matchesFirst, deviceStatus)
             }
         } else if (selected == MonitorTab.MISSIONS) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton({ selectTab(MonitorTab.NEARBY) }) { Text("← Back") }
+                Text("🗂️ Recordings", style = MaterialTheme.typography.titleMedium)
+            }
+            BackHandler { selectTab(MonitorTab.NEARBY) }
             MissionView(context, settingsRepository, missions, missionsLoading, { missionRevision++ }, vendorTable,
                 onOpenLocation = { path, mac ->
                     selectedMissionLogPath = path
@@ -579,7 +603,7 @@ private fun MonitorWorkspace(
                     locationRecenter++
                 })
         }
-        if (selected != MonitorTab.MISSIONS && selected != MonitorTab.SETUP) {
+        if (selected != MonitorTab.MISSIONS && selected != MonitorTab.SETUP && selected != MonitorTab.NET_OPS) {
             if (replaying && selected != MonitorTab.NEARBY && timeline.second > timeline.first) {
                 Slider(replayFraction, onValueChange = { replayPlaying = false; replayFraction = it },
                     onValueChangeFinished = { settledFraction = replayFraction },
@@ -671,7 +695,7 @@ private fun MonitorWorkspace(
                         label = { Text("${target.label} (${target.readings})") })
                 }
             }
-        } else if (selected != MonitorTab.MISSIONS && selected != MonitorTab.MAPPING && selected != MonitorTab.SETUP) {
+        } else if (selected != MonitorTab.MISSIONS && selected != MonitorTab.MAPPING && selected != MonitorTab.SETUP && selected != MonitorTab.NET_OPS) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 FilterChip(matchesFirst, { focusedKind = null; matchesFirst = !matchesFirst; recordAction("matches_first", matchesFirst.toString()) },
@@ -784,7 +808,7 @@ private fun monitorRows(
         MonitorTab.CAMERAS -> guess.kind == SniffedDevices.Kind.CAMERA
         MonitorTab.PHONES_LAPTOPS -> guess.kind == SniffedDevices.Kind.PHONE_LAPTOP
         MonitorTab.CLIENTS -> device.isClient && guess.kind == SniffedDevices.Kind.CLIENT
-        MonitorTab.NEARBY, MonitorTab.MAPPING, MonitorTab.MISSIONS, MonitorTab.SETUP -> false
+        MonitorTab.NEARBY, MonitorTab.MAPPING, MonitorTab.MISSIONS, MonitorTab.SETUP, MonitorTab.NET_OPS -> false
     } }.sortedWith(
         compareByDescending<Pair<SniffedDevices.Device, SniffedDevices.Guess>> { it.first.lastMs }
             .thenByDescending { it.first.bestRssi ?: -1000 },

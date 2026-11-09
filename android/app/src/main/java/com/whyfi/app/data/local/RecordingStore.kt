@@ -53,7 +53,7 @@ class RecordingStore(private val context: Context) {
         db.recordingDao().payloads(id).mapNotNull { runCatching { gson.fromJson(it, ScanSessionUploadRequest::class.java) }.getOrNull() }
 
     /** Newest stored passes mentioning [needle], across all recordings. */
-    suspend fun payloadsContaining(needle: String, limit: Int = 400): List<String> =
+    suspend fun payloadsContaining(needle: String, limit: Int = 400): List<StoredPassRow> =
         db.pendingScanDao().payloadsContaining(needle, limit)
 
     suspend fun rawJson(id: String): String = "[" + db.recordingDao().payloads(id).joinToString(",\n") + "]"

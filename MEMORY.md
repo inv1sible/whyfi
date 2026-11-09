@@ -185,12 +185,27 @@ stale, and don't duplicate what's already obvious from code/tests.
   status below (a Column). The MapView is wrapped in a clipping FrameLayout
   with outline clips, because as a full-screen background with bars painted
   over it the favorites ended up hidden (user, 2026-11-08). No Mission chip
-  on Scan any more (it's a tab).
+  on Scan any more (it's a tab). Since 2026-11-09 laid out like the USB
+  Map: map, a controls bar (status, Track switch, ◎ Accuracy, Cones, 24 h,
+  Latest recording, ⌖), then the devices-to-track chips. Without Track only
+  the phone's position updates (user's choice); a picked target loads once.
+  BLE favorites show their advertised name (last pass, stored scans via
+  `MissionController.loadBleNames`, then catalog label). The map frames the
+  readings (`frameMap`, street scale for one point). "Latest recording"
+  always reads the phone's recordings (the server has no recording concept);
+  filtered views use the local centroid, not the server's estimate.
 - **Radio chips on Scan open the results whenever a pass exists**, also
   while scanning (before, a running continuous scan made them untappable,
   which read as broken).
-- **USB adapter tabs: Live, Map, Missions, Settings** (was "Setup": both
-  workspaces say Settings, ⚙️). Adapter settings use the phone's collapsible
+- **Tabs (2026-11-09): phone Scan · Mission · LAN · Settings; USB Scan ·
+  Map · Net ops · Settings.** Both first tabs are "Scan" 🔍, the map sits at
+  place 2 in both. Saved USB missions are the USB Scan tab's 🗂️ Recordings
+  (sub view, MonitorTab.MISSIONS, like the phone's Recordings which also
+  open inside the Scan tab now). Net ops is a placeholder ("preview, coming
+  soon"; user wants it implemented soon — ask what it should do). The USB
+  monitor test runs inline in its Settings card (bounded height, scrolls;
+  stops the probe when the card leaves composition). Earlier: USB "Setup"
+  was renamed Settings (both workspaces say Settings, ⚙️). Adapter settings use the phone's collapsible
   `SettingsSection` (ui/SettingsScreen.kt). Swiping switches USB tabs too
   (`pointerInput` drag on the workspace, not on Map). The workspace switch
   shows the phone's teal track in the phone position instead of grey.
@@ -975,7 +990,7 @@ the thumb) left of each workspace's tab row (`ui/Workspace.kt`,
 `WorkspaceToggle`; maintainer asked for a smaller control, then for one
 toggle rather than two buttons in one): **Phone
 radios** (Scan, LAN, Mission, Settings; teal) and **USB adapter**
-(Live, Map, Missions, Settings; amber). They are different jobs (periodic passes
+(Scan, Map, Net ops, Settings; amber). They are different jobs (periodic passes
 uploaded as sessions vs a live channel-tuned capture saved as missions), so
 they don't share a tab bar. The Devices tab (category chips) was removed
 2026-11-08 at the user's request; Live lists every device. Adapter-only settings (USB monitor test, noise

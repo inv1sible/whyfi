@@ -28,10 +28,11 @@ class LocalMissionPointsTest {
     private fun pass(
         lat: Double? = this.lat, lng: Double? = this.lng,
         wifi: List<WifiObservationDto> = emptyList(), ble: List<BleObservationDto> = emptyList(), cells: List<CellObservationDto> = emptyList(),
-    ): String = gson.toJson(ScanSessionUploadRequest(
-        clientScanId = "x", startedAt = "", completedAt = "", latitude = lat, longitude = lng, locationAccuracyMeters = null,
+        recording: String? = null, atMs: Long? = null, accuracy: Float? = null,
+    ) = LocalMissionPoints.Pass(gson.toJson(ScanSessionUploadRequest(
+        clientScanId = "x", startedAt = "", completedAt = "", latitude = lat, longitude = lng, locationAccuracyMeters = accuracy,
         wifiObservations = wifi, bleObservations = ble, cellObservations = cells,
-    ))
+    )), recording, atMs)
 
     @Test
     fun wifiBySsidNearbyOnly() {
@@ -47,7 +48,7 @@ class LocalMissionPointsTest {
         assertEquals(2, result.passes)
         assertFalse(result.truncated)
         // The database prefilter must find the SSID the way Gson stored it.
-        assertTrue(payloads.all { it.contains(LocalMissionPoints.needle(target)) })
+        assertTrue(payloads.all { it.json.contains(LocalMissionPoints.needle(target)) })
     }
 
     @Test
@@ -63,7 +64,7 @@ class LocalMissionPointsTest {
         val payloads = listOf(pass(cells = listOf(cell("1234567", -95), cell("1234567", null), cell("7654321", -80))))
         val result = LocalMissionPoints.points(payloads, target, lat, lng, 250.0)
         assertEquals(listOf(-95.0), result.points.map { it.weight })
-        assertTrue(payloads[0].contains(LocalMissionPoints.needle(target)))
+        assertTrue(payloads[0].json.contains(LocalMissionPoints.needle(target)))
     }
 
     @Test
@@ -78,7 +79,48 @@ class LocalMissionPointsTest {
     @Test
     fun brokenJsonIsSkipped() {
         val target = MissionTarget(RadioKind.WIFI, "Net")
-        val result = LocalMissionPoints.points(listOf("{not json", pass(wifi = listOf(wifi("Net", -50)))), target, lat, lng, 250.0)
+        val result = LocalMissionPoints.points(listOf(LocalMissionPoints.Pass("{not json"), pass(wifi = listOf(wifi("Net", -50)))), target, lat, lng, 250.0)
         assertEquals(1, result.points.size)
+    }
+
+    @Test
+    fun carriesAccuracyTimeAndRecording() {
+        val target = MissionTarget(RadioKind.WIFI, "Net")
+        val point = LocalMissionPoints.points(listOf(pass(wifi = listOf(wifi("Net", -50)), recording = "r1", atMs = 42L, accuracy = 8f)), target, lat, lng, 250.0).points.single()
+        assertEquals(8.0, point.accuracyM!!, 0.0)
+        assertEquals(42L, point.atMs)
+        assertEquals("r1", point.recordingId)
+    }
+
+    @Test
+    fun latestRecordingKeepsTheNewestOnly() {
+        val points = listOf(
+            MissionPoint(lat, lng, -50.0, atMs = 10, recordingId = "old"),
+            MissionPoint(lat, lng, -60.0, atMs = 30, recordingId = "new"),
+            MissionPoint(lat, lng, -70.0, atMs = 20, recordingId = "new"),
+        )
+        assertEquals(listOf(-60.0, -70.0), LocalMissionPoints.latestRecording(points).map { it.weight })
+        // Without recordings (server readings) nothing is dropped.
+        val server = listOf(MissionPoint(lat, lng, -50.0))
+        assertEquals(server, LocalMissionPoints.latestRecording(server))
+    }
+
+    @Test
+    fun bleNameIsTheNewestAdvertisedOne() {
+        fun named(name: String) = ble("AA:BB:CC:00:11:22", -60).copy(deviceName = name)
+        val passes = listOf(
+            pass(ble = listOf(named("Old name")), atMs = 1),
+            pass(ble = listOf(named("")), atMs = 3),
+            pass(ble = listOf(named("Nespresso")), atMs = 2),
+        )
+        assertEquals("Nespresso", LocalMissionPoints.bleName(passes, "aa:bb:cc:00:11:22"))
+        assertEquals(null, LocalMissionPoints.bleName(passes, "11:22:33:44:55:66"))
+    }
+
+    @Test
+    fun serverTimestampsParse() {
+        assertEquals(1_762_646_400_000L, isoToEpochMs("2025-11-09T00:00:00Z"))
+        assertEquals(1_762_646_400_000L, isoToEpochMs("2025-11-09T01:00:00+01:00"))
+        assertEquals(null, isoToEpochMs("yesterday"))
     }
 }
