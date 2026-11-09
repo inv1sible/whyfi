@@ -25,7 +25,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * not worth EncryptedSharedPreferences' crash history (see
  * SettingsRepository's KDoc).
  */
-class FavoritesRepository(context: Context) {
+class FavoritesRepository(context: Context, private val settings: SettingsRepository = SettingsRepository(context)) {
 
     private val prefs = context.applicationContext.getSharedPreferences("whyfi_favorites", Context.MODE_PRIVATE)
 
@@ -37,24 +37,60 @@ class FavoritesRepository(context: Context) {
 
     fun favorites(kind: RadioKind): StateFlow<Set<String>> = flowFor(kind).asStateFlow()
 
-    /** Hidden ("blacklisted") identifiers per radio, same identifiers as the
-     * favorites: rows the Scan results tables leave out, like the USB
-     * adapter's ⊘ hidden APs (user, 2026-11-09). Kept until shown again. */
-    private val hiddenFlows: Map<RadioKind, MutableStateFlow<Set<String>>> = listOf(RadioKind.WIFI, RadioKind.BLE, RadioKind.CELLULAR)
+    /** Hidden ("blacklisted") rows per radio, like the USB adapter's ⊘.
+     * Wi‑Fi uses the hidden-AP list shared with the USB adapter
+     * ([SettingsRepository.hiddenApKeys]: "ssid:<name>" or a lowercase
+     * BSSID, see [wifiHiddenKey]); BLE and cells keep their own list of the
+     * favorite identifiers. Kept until shown again. */
+    private val hiddenFlows: Map<RadioKind, MutableStateFlow<Set<String>>> = listOf(RadioKind.BLE, RadioKind.CELLULAR)
         .associateWith { MutableStateFlow(prefs.getStringSet(hiddenKey(it), emptySet())?.toSet() ?: emptySet()) }
 
-    fun hidden(kind: RadioKind): StateFlow<Set<String>> =
-        (hiddenFlows[kind] ?: error("$kind has no hidden list — this is a caller bug, not a real state.")).asStateFlow()
+    init {
+        // v106 kept hidden Wi‑Fi names on their own; they join the shared list.
+        val old = prefs.getStringSet(hiddenKey(RadioKind.WIFI), emptySet()).orEmpty()
+        if (old.isNotEmpty()) {
+            settings.monitorHiddenApMacs = settings.monitorHiddenApMacs + old.map { wifiHiddenKey(it, "") }
+            prefs.edit { remove(hiddenKey(RadioKind.WIFI)) }
+        }
+    }
 
-    fun toggleHidden(kind: RadioKind, id: String) {
+    fun hidden(kind: RadioKind): StateFlow<Set<String>> =
+        if (kind == RadioKind.WIFI) settings.hiddenApKeys
+        else (hiddenFlows[kind] ?: error("$kind has no hidden list — this is a caller bug, not a real state.")).asStateFlow()
+
+    /** Hides [key] if shown, shows it if hidden. Wi‑Fi keys come from [wifiHiddenKey]. */
+    fun toggleHidden(kind: RadioKind, key: String) {
+        if (kind == RadioKind.WIFI) {
+            val keys = settings.monitorHiddenApMacs
+            settings.monitorHiddenApMacs = if (key in keys) keys - key else keys + key
+            return
+        }
         val flow = hiddenFlows[kind] ?: return
         val updated = flow.value.toMutableSet()
-        if (!updated.add(id)) updated.remove(id)
+        if (!updated.add(key)) updated.remove(key)
         prefs.edit { putStringSet(hiddenKey(kind), updated) }
         flow.value = updated
     }
 
     private fun hiddenKey(kind: RadioKind): String = "hidden_" + prefsKey(kind)
+
+    companion object {
+        /** The shared hidden-AP key of a Wi‑Fi row: its name, or its BSSID
+         * when it has none (same as usbmon.MonitorApVisibility.key). */
+        fun wifiHiddenKey(ssid: String?, bssid: String): String =
+            ssid?.takeIf { it.isNotBlank() }?.let { "ssid:$it" } ?: bssid.lowercase()
+
+        /** Is the Wi‑Fi row [ssid]/[bssid] hidden by [keys]? */
+        fun wifiHidden(keys: Set<String>, ssid: String?, bssid: String): Boolean =
+            wifiHiddenKey(ssid, bssid) in keys || bssid.lowercase() in keys
+
+        /** How a hidden key reads in the Hidden list. */
+        fun hiddenLabel(kind: RadioKind, key: String): String = when {
+            kind != RadioKind.WIFI -> key
+            key.startsWith("ssid:") -> key.removePrefix("ssid:")
+            else -> "SSID not recorded · $key"
+        }
+    }
 
     fun isFavorite(kind: RadioKind, id: String): Boolean = flowFor(kind).value.contains(id)
 

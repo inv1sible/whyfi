@@ -113,9 +113,21 @@ class SettingsRepository(context: Context) {
         get() = prefs.getStringSet(KEY_MONITOR_FAVORITES, emptySet()).orEmpty().toSet()
         set(value) = prefs.edit { putStringSet(KEY_MONITOR_FAVORITES, value) }
 
+    /** Hidden APs, shared by the USB adapter's ⊘ and the phone's Wi‑Fi
+     * results (user, 2026-11-09): "ssid:<name>" hides every AP with that
+     * name, a lowercase BSSID one unnamed AP (usbmon.MonitorApVisibility). */
     var monitorHiddenApMacs: Set<String>
         get() = prefs.getStringSet("monitor_hidden_ap_macs", emptySet()).orEmpty().toSet()
-        set(value) = prefs.edit { putStringSet("monitor_hidden_ap_macs", value) }
+        set(value) {
+            prefs.edit { putStringSet("monitor_hidden_ap_macs", value) }
+            hiddenApFlow?.value = value
+        }
+
+    /** [monitorHiddenApMacs] as it changes, from either workspace. */
+    val hiddenApKeys: kotlinx.coroutines.flow.StateFlow<Set<String>>
+        get() = synchronized(HIDDEN_LOCK) {
+            hiddenApFlow ?: kotlinx.coroutines.flow.MutableStateFlow(monitorHiddenApMacs).also { hiddenApFlow = it }
+        }
 
     var monitorRecordPcap: Boolean
         get() = prefs.getBoolean("monitor_record_pcap", true)
@@ -199,6 +211,9 @@ class SettingsRepository(context: Context) {
     }
 
     companion object {
+        private val HIDDEN_LOCK = Any()
+        // One per process: every SettingsRepository instance shares it.
+        @Volatile private var hiddenApFlow: kotlinx.coroutines.flow.MutableStateFlow<Set<String>>? = null
         const val DEFAULT_OUTBOX_QUOTA_MB = 500
         const val MIN_OUTBOX_QUOTA_MB = 5
         const val MAX_OUTBOX_QUOTA_MB = 10_000

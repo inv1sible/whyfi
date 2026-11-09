@@ -152,7 +152,13 @@ fun ScanDetailScreen(
         favoritesRepository.hidden(kind).collectAsState()
     }
     var showHidden by rememberSaveable(kind) { mutableStateOf(false) }
-    val shownRows = rows.filter { it.favoriteId == null || it.favoriteId !in hidden }
+    // Wi‑Fi shares its hidden list with the USB adapter: by name, or by
+    // BSSID for an unnamed AP (FavoritesRepository.wifiHiddenKey).
+    fun hideKey(row: DeviceRow): String? =
+        if (kind == RadioKind.WIFI) FavoritesRepository.wifiHiddenKey(row.favoriteId, row.key) else row.favoriteId
+    fun isHidden(row: DeviceRow): Boolean =
+        if (kind == RadioKind.WIFI) FavoritesRepository.wifiHidden(hidden, row.favoriteId, row.key) else row.favoriteId in hidden
+    val shownRows = rows.filterNot(::isHidden)
 
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -188,22 +194,24 @@ fun ScanDetailScreen(
             if (kind != RadioKind.SATELLITE) FilterChip(
                 selected = showHidden,
                 onClick = { showHidden = !showHidden },
-                label = { Text("⊘ Hidden (${hidden.size})") },
+                label = { Text("${hiddenTitle(kind)} (${hidden.size})") },
             )
         }
 
         if (showHidden) {
             // Same as the USB adapter's "Hidden APs" list: one line per
             // hidden identifier with Show to bring it back.
-            Text("Hidden ${kind.label} (${hidden.size})", style = MaterialTheme.typography.titleMedium,
+            Text("${hiddenTitle(kind).removePrefix("⊘ ")} (${hidden.size})", style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(vertical = 8.dp))
-            if (hidden.isEmpty()) Text("Nothing hidden. Tap ⊘ on a row to hide it from these results.",
-                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (hidden.isEmpty()) Text(if (kind == RadioKind.WIFI) "No APs hidden. Tap ⊘ on an access point to hide it, here or in whyfi USB."
+                else "Nothing hidden. Tap ⊘ on a row to hide it from these results.")
             LazyColumn(Modifier.fillMaxWidth()) {
-                items(hidden.sorted(), key = { it }) { id ->
+                items(hidden.sorted(), key = { it }) { key ->
+                    val count = rows.count { hideKey(it) == key || (kind == RadioKind.WIFI && it.key.lowercase() == key) }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(id, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                        TextButton({ favoritesRepository.toggleHidden(kind, id) }) { Text("Show") }
+                        Text(FavoritesRepository.hiddenLabel(kind, key) + if (count > 0) " · $count in this scan" else "",
+                            modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton({ favoritesRepository.toggleHidden(kind, key) }) { Text("Show") }
                     }
                 }
             }
@@ -283,7 +291,7 @@ fun ScanDetailScreen(
                         rangeStatus = rangeStatus[row.key],
                     ).copy(
                         onLocate = if (id != null && onLocate != null) ({ onLocate(MissionTarget(kind, id)) }) else null,
-                        onHideToggle = if (id != null) ({ favoritesRepository.toggleHidden(kind, id) }) else null,
+                        onHideToggle = hideKey(raw)?.let { key -> { favoritesRepository.toggleHidden(kind, key) } },
                     )
                 }.sortedByDescending { it.isFavorite }, // favorites to top; stable within each group
                 showBadgeColumn = summary.comparable,
@@ -321,6 +329,13 @@ private fun rangeStatusLabel(result: FtmObservationDto): String =
     } else {
         "✗ ${result.status.ifBlank { "failed" }}"
     }
+
+/** The Hidden chip, the same words as whyfi USB's for Wi‑Fi. */
+private fun hiddenTitle(kind: RadioKind): String = when (kind) {
+    RadioKind.WIFI -> "⊘ Hidden APs"
+    RadioKind.BLE -> "⊘ Hidden BLE"
+    else -> "⊘ Hidden cells"
+}
 
 private fun summaryLine(total: Int, new: Int, gone: Int, comparable: Boolean): String {
     val devices = "$total device${if (total == 1) "" else "s"}"

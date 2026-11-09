@@ -148,7 +148,8 @@ private fun MonitorWorkspace(
     var showUnassociatedCards by rememberSaveable { mutableStateOf(true) }
     var showApCards by rememberSaveable { mutableStateOf(true) }
     var favorites by remember { mutableStateOf(settingsRepository.monitorFavoriteMacs) }
-    var hiddenAps by remember { mutableStateOf(settingsRepository.monitorHiddenApMacs) }
+    // Shared with whyfi phone's Wi‑Fi results (SettingsRepository.hiddenApKeys).
+    val hiddenAps by settingsRepository.hiddenApKeys.collectAsState()
     var showHiddenAps by rememberSaveable { mutableStateOf(false) }
     var hideNoise by remember { mutableStateOf(settingsRepository.monitorHideNoise) }
     val noisePatterns = remember { MonitorNoiseFilter.compile(settingsRepository.monitorNoisePatterns).patterns }
@@ -319,7 +320,6 @@ private fun MonitorWorkspace(
     }
     val setHiddenAps: (Set<String>) -> Unit = { next ->
         val previous = hiddenAps
-        hiddenAps = next
         settingsRepository.monitorHiddenApMacs = next
         (previous - next).forEach { recordAction("ap_hidden", "$it:false") }
         (next - previous).forEach { recordAction("ap_hidden", "$it:true") }
@@ -349,8 +349,8 @@ private fun MonitorWorkspace(
                     settingsRepository.activeMonitorMissionId = continued.directory.name
                     favorites = selectedFavorites
                     settingsRepository.monitorFavoriteMacs = selectedFavorites
-                    hiddenAps = selectedHidden
-                    settingsRepository.monitorHiddenApMacs = selectedHidden
+                    // Shared list: the mission's hidden APs join it.
+                    settingsRepository.monitorHiddenApMacs = hiddenAps + selectedHidden
                     showHiddenAps = false
                     service?.clearFinishedMonitor()
                     recordedDevices = inventory
@@ -578,8 +578,6 @@ private fun MonitorWorkspace(
                         settingsRepository.activeMonitorMissionId = null
                         favorites = emptySet()
                         settingsRepository.monitorFavoriteMacs = emptySet()
-                        hiddenAps = emptySet()
-                        settingsRepository.monitorHiddenApMacs = emptySet()
                         showHiddenAps = false
                         recordedDevices = emptyList()
                         displayDevices = emptyList()
@@ -756,7 +754,7 @@ private fun MonitorWorkspace(
                 FilterChip(matchesFirst, { focusedKind = null; matchesFirst = !matchesFirst; recordAction("matches_first", matchesFirst.toString()) },
                     label = { Text("Matches first (${matchedMacs.size})") })
                 if (selected == MonitorTab.NEARBY) FilterChip(showHiddenAps,
-                    { focusedKind = null; showHiddenAps = !showHiddenAps }, label = { Text("Hidden APs (${resolvedHiddenAps.size})") })
+                    { focusedKind = null; showHiddenAps = !showHiddenAps }, label = { Text("⊘ Hidden APs (${resolvedHiddenAps.size})") })
                 if (selected == MonitorTab.NEARBY) FilterChip(hideNoise, {
                     hideNoise = !hideNoise
                     settingsRepository.monitorHideNoise = hideNoise
@@ -786,8 +784,6 @@ private fun MonitorWorkspace(
                 settingsRepository.activeMonitorMissionId = null
                 favorites = emptySet()
                 settingsRepository.monitorFavoriteMacs = emptySet()
-                hiddenAps = emptySet()
-                settingsRepository.monitorHiddenApMacs = emptySet()
                 showHiddenAps = false
                 recordedDevices = emptyList()
                 displayDevices = emptyList()
@@ -967,8 +963,8 @@ private fun LazyListScope.nearbyItems(
     val order = if (matchesFirst) MonitorInventory.matchOrder(matches) else nearbyOrder(sort)
     if (showHiddenAps) {
         val groups = MonitorApVisibility.groups(hiddenAps, devices.map { it.first })
-        item(key = "hidden-title") { Text("Hidden AP groups (${groups.size})", style = MaterialTheme.typography.titleMedium) }
-        if (groups.isEmpty()) item(key = "hidden-empty") { Text("No APs hidden in this mission.") }
+        item(key = "hidden-title") { Text("Hidden APs (${groups.size})", style = MaterialTheme.typography.titleMedium) }
+        if (groups.isEmpty()) item(key = "hidden-empty") { Text("No APs hidden. Tap ⊘ on an access point to hide it, here or in whyfi phone.") }
         items(groups.distinctBy { it.key }, key = { "hidden:" + it.key }) { group ->
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(group.label + if (group.count > 0) " · ${group.count} APs" else "",

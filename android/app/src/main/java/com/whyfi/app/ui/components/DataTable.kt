@@ -267,8 +267,8 @@ private fun ActionGlyph(glyph: String, description: String, onClick: () -> Unit)
         glyph,
         modifier = Modifier.clickable(onClick = onClick).padding(4.dp)
             .semantics { contentDescription = description },
-        fontSize = 16.sp,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        // Same glyph style as whyfi USB's card buttons (📍 ⊘ ★).
+        style = MaterialTheme.typography.titleMedium,
     )
 }
 

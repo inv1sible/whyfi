@@ -222,8 +222,13 @@ stale, and don't duplicate what's already obvious from code/tests.
 - **Phone sub views stay inside the tab frame** (v106): radio results
   (`ScanDetailScreen`) and Missions render as page 0 of the pager, under
   the tab bar; back closes them. Phone hide list ("blacklist") lives in
-  `FavoritesRepository.hidden(kind)` (same identifiers as favorites; view
-  only, reports unchanged, like USB's ⊘ hidden APs). 📍 on a phone results
+  `FavoritesRepository.hidden(kind)` (view only, reports unchanged).
+  **Hidden APs are shared phone ↔ USB** (v107, user's request): one store,
+  `SettingsRepository.monitorHiddenApMacs` / `hiddenApKeys` flow, keys
+  "ssid:<name>" or lowercase BSSID; phone Wi‑Fi uses
+  `FavoritesRepository.wifiHiddenKey`. Mission reset/delete no longer clears
+  it; continuing a mission merges its hidden APs in. Missions still log
+  `ap_hidden` events. BLE/cell hidden lists stay phone-only. 📍 on a phone results
   row or a USB Scan card opens that device on its Mission map; a located
   non-favorite gets its own chip on phone Mission (☆ stars it).
 - **Both maps share controls** (`mission/MapControls.kt`): `MapLayerChip`,
