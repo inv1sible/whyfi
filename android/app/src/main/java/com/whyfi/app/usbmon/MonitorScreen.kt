@@ -93,15 +93,6 @@ private fun sectionOf(tab: MonitorTab): MonitorSection = when (tab) {
     else -> MonitorSection.LIVE
 }
 
-/** Net ops (preview): for now the device lists by category, as the old
- * Devices tab had them (user, 2026-11-09). */
-@Composable
-private fun NetOpsHeader() {
-    Text("🛰️ Net ops preview: devices by category. More is coming here.",
-        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-}
-
 private fun tabOf(section: MonitorSection): MonitorTab = when (section) {
     MonitorSection.LIVE -> MonitorTab.NEARBY
     MonitorSection.MAP -> MonitorTab.MAPPING
@@ -207,6 +198,8 @@ private fun MonitorWorkspace(
     val activeId = settingsRepository.activeMonitorMissionId
     LaunchedEffect(Unit) {
         vendorTable = withContext(Dispatchers.IO) {
+            // Loaded first: it also sets SniffedDevices.catalog for the guesses.
+            com.whyfi.app.signatures.LocalSignatures.catalog(context)
             runCatching { context.assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
         }
     }
@@ -294,7 +287,7 @@ private fun MonitorWorkspace(
     val replaying = selectedMissionLogPath != null
     // Net ops shows the device category tables.
     val selected = MonitorTab.entries.firstOrNull { it.name == selectedName }
-        ?.let { if (it == MonitorTab.NET_OPS) MonitorTab.entries.firstOrNull { c -> c.name == lastCategoryName } ?: MonitorTab.ACCESS_POINTS else it }
+        ?.let { if (it == MonitorTab.NET_OPS) DEVICE_CATEGORIES.firstOrNull { c -> c.name == lastCategoryName } ?: MonitorTab.NET_OPS else it }
         ?: MonitorTab.NEARBY
     val nearbyDevices = displayDevices.filter {
         (focusedKind == null || it.second.kind == focusedKind) || (showHiddenAps && MonitorApVisibility.isHidden(it.first, resolvedHiddenAps))
@@ -304,7 +297,7 @@ private fun MonitorWorkspace(
             MonitorNoiseFilter.matches(row, noisePatterns)
     }
     val categoryDevices = (if (replaying) replayDevices else displayDevices)
-        .filter { (focusedKind == null || it.second.kind == focusedKind) && (replaying || !MonitorApVisibility.isHidden(it.first, resolvedHiddenAps)) }
+        .filter { (focusedKind == null || sectionOf(selected) == MonitorSection.NET_OPS || it.second.kind == focusedKind) && (replaying || !MonitorApVisibility.isHidden(it.first, resolvedHiddenAps)) }
     val newDevices = state.devices.count { incoming -> displayDevices.none { it.first.mac == incoming.first.mac } }
 
     val recordAction: (String, String) -> Unit = { event, details ->
@@ -433,11 +426,11 @@ private fun MonitorWorkspace(
 
     val section = sectionOf(selected)
     val selectTab: (MonitorTab) -> Unit = { picked ->
-        val tab = if (picked == MonitorTab.NET_OPS) MonitorTab.entries.firstOrNull { it.name == lastCategoryName } ?: MonitorTab.ACCESS_POINTS else picked
+        val tab = if (picked == MonitorTab.NET_OPS) DEVICE_CATEGORIES.firstOrNull { it.name == lastCategoryName } ?: MonitorTab.NET_OPS else picked
         settingsRepository.monitorTab = tab.name
         if (tab != MonitorTab.MAPPING) showLocationDetails = false
         if (tab == MonitorTab.MISSIONS || tab == MonitorTab.NEARBY || tab == MonitorTab.SETUP) replayPlaying = false
-        if (tab in DEVICE_CATEGORIES) lastCategoryName = tab.name
+        if (tab in DEVICE_CATEGORIES || tab == MonitorTab.NET_OPS) lastCategoryName = tab.name
         selectedName = tab.name
     }
     val currentSelectTab by rememberUpdatedState(selectTab)
@@ -472,16 +465,6 @@ private fun MonitorWorkspace(
                         Text(entry.label,
                             maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelSmall)
                     }, icon = { Text(entry.icon, fontSize = 16.sp) })
-                }
-            }
-        }
-        if (section == MonitorSection.NET_OPS) {
-            NetOpsHeader()
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                DEVICE_CATEGORIES.forEach { tab ->
-                    FilterChip(tab == selected, { selectTab(tab) },
-                        label = { Text("${tab.label} (${monitorRows(tab, categoryDevices).size})") })
                 }
             }
         }
@@ -636,7 +619,7 @@ private fun MonitorWorkspace(
                     locationRecenter++
                 })
         }
-        if (selected != MonitorTab.MISSIONS && selected != MonitorTab.SETUP && selected != MonitorTab.NET_OPS) {
+        if (selected != MonitorTab.MISSIONS && selected != MonitorTab.SETUP) {
             if (replaying && selected != MonitorTab.NEARBY && timeline.second > timeline.first) {
                 Slider(replayFraction, onValueChange = { replayPlaying = false; replayFraction = it },
                     onValueChangeFinished = { settledFraction = replayFraction },
@@ -644,8 +627,8 @@ private fun MonitorWorkspace(
             }
             Surface(Modifier.fillMaxWidth(), tonalElevation = 5.dp, shadowElevation = 5.dp) {
                 Column(Modifier.padding(horizontal = 10.dp, vertical = 5.dp)) {
-                    // Layer toggles, like the phone's Mission map.
-                    if (selected == MonitorTab.MAPPING) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    // Layer toggles while replaying (live: in the controls row below).
+                    if (selected == MonitorTab.MAPPING && replaying) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         com.whyfi.app.mission.MapLayerChip("◎ Accuracy", mapAccuracy) { mapAccuracy = !mapAccuracy }
                         com.whyfi.app.mission.MapLayerChip("Cones", mapCones) { mapCones = !mapCones }
@@ -678,6 +661,30 @@ private fun MonitorWorkspace(
                                         if (enabled) { selectedLocationMac = null; locationRecenter++ }
                                     })
                             }
+                        }
+                    } else if (selected == MonitorTab.MAPPING) {
+                        // Laid out like the phone's Mission controls bar:
+                        // status, then one row with Start/Stop, the layer
+                        // toggles and ⓘ ⟳ ⌖ (PCAP stays on the Scan tab).
+                        Text(locationSummary, modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (state.running) Button({ service?.stopMonitor() },
+                                enabled = state.status != "Starting…" && state.status != "Stopping…" &&
+                                    state.status != "Saving capture…") { Text("Stop") }
+                            else Button(startMonitor, enabled = !starting && continuingMissionId == null && selectedDevice != null) {
+                                Text(if (starting) "Starting…" else "Start")
+                            }
+                            com.whyfi.app.mission.MapLayerChip("◎ Accuracy", mapAccuracy) { mapAccuracy = !mapAccuracy }
+                            com.whyfi.app.mission.MapLayerChip("Cones", mapCones) { mapCones = !mapCones }
+                            com.whyfi.app.mission.MapLayerChip("Readings", mapReadings) { mapReadings = !mapReadings }
+                            com.whyfi.app.mission.MapLayerChip("Path", mapPath) { mapPath = !mapPath }
+                            com.whyfi.app.mission.MapButtons(showLocationDetails, { showLocationDetails = !showLocationDetails },
+                                { locationRefresh++ }, followMe, { enabled ->
+                                    followMe = enabled
+                                    if (enabled) { selectedLocationMac = null; locationRecenter++ }
+                                })
                         }
                     } else {
                         Text(if (selected == MonitorTab.MAPPING) locationSummary
@@ -726,17 +733,17 @@ private fun MonitorWorkspace(
         }
         if (selected == MonitorTab.MAPPING) {
             val selectedTarget = selectedLocationMac?.takeIf { mac -> locationTargets.any { it.mac == mac } }
+            // Devices to focus, condensed into one bar at the very bottom
+            // like the phone's Mission favorites. "All" clears the focus.
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterChip(false, { selectedLocationMac = null; focusedKind = null }, label = { Text("All device estimates") })
-                FilterChip(false, { selectedLocationMac = null; focusedKind = null },
-                    label = { Text("Clear focus") })
+                FilterChip(selectedTarget == null, { selectedLocationMac = null; focusedKind = null }, label = { Text("All") })
                 locationTargets.forEach { target ->
                     FilterChip(selectedTarget == target.mac, { selectedLocationMac = if (selectedTarget == target.mac) null else target.mac; followMe = false },
-                        label = { Text("${target.label} (${target.readings})") })
+                        label = { Text("${target.label} (${target.readings})", maxLines = 1) })
                 }
             }
-        } else if (selected != MonitorTab.MISSIONS && selected != MonitorTab.MAPPING && selected != MonitorTab.SETUP && selected != MonitorTab.NET_OPS) {
+        } else if (selected != MonitorTab.MISSIONS && selected != MonitorTab.MAPPING && selected != MonitorTab.SETUP) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 FilterChip(matchesFirst, { focusedKind = null; matchesFirst = !matchesFirst; recordAction("matches_first", matchesFirst.toString()) },
@@ -748,7 +755,13 @@ private fun MonitorWorkspace(
                     settingsRepository.monitorHideNoise = hideNoise
                     recordAction("noise_filter", if (hideNoise) "on" else "off")
                 }, label = { Text("Hide noise ($noiseCount)") })
-                SniffedDevices.Kind.entries.forEach { kind ->
+                // Net ops: the device categories, in this one bar (the old
+                // top bar is gone). Tap again to show every device.
+                if (section == MonitorSection.NET_OPS) DEVICE_CATEGORIES.forEach { tab ->
+                    FilterChip(tab == selected, {
+                        if (tab == selected) selectTab(MonitorTab.NET_OPS.also { lastCategoryName = it.name }) else selectTab(tab)
+                    }, label = { Text("${tab.label} (${monitorRows(tab, categoryDevices).size})") })
+                } else SniffedDevices.Kind.entries.forEach { kind ->
                     FilterChip(kind == focusedKind, {
                         focusedKind = if (focusedKind == kind) null else kind
                         if (!replaying) recordAction("filter_focus", focusedKind?.name.orEmpty())
@@ -830,7 +843,8 @@ private fun monitorRows(
         MonitorTab.CAMERAS -> guess.kind == SniffedDevices.Kind.CAMERA
         MonitorTab.PHONES_LAPTOPS -> guess.kind == SniffedDevices.Kind.PHONE_LAPTOP
         MonitorTab.CLIENTS -> device.isClient && guess.kind == SniffedDevices.Kind.CLIENT
-        MonitorTab.NEARBY, MonitorTab.MAPPING, MonitorTab.MISSIONS, MonitorTab.SETUP, MonitorTab.NET_OPS -> false
+        MonitorTab.NET_OPS -> true
+        MonitorTab.NEARBY, MonitorTab.MAPPING, MonitorTab.MISSIONS, MonitorTab.SETUP -> false
     } }.sortedWith(
         compareByDescending<Pair<SniffedDevices.Device, SniffedDevices.Guess>> { it.first.lastMs }
             .thenByDescending { it.first.bestRssi ?: -1000 },

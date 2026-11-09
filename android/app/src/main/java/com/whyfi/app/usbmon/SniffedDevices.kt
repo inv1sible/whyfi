@@ -6,6 +6,37 @@ package com.whyfi.app.usbmon
  * is JVM-testable. Every guess carries its reasons; none is authoritative.
  */
 object SniffedDevices {
+    /** The bundled Fieldwatch signature catalog, set once it's loaded
+     * (signatures/LocalSignatures). Null (tests, before loading): guesses
+     * use the built-in vendor and name lists only. */
+    @Volatile var catalog: com.whyfi.app.signatures.SignatureCatalog? = null
+
+    /** Catalog fleet kinds that mean a camera, and ones that mean a smart-home device. */
+    private val CATALOG_CAMERA_KINDS = setOf("CAMERA", "SURVEILLANCE")
+    private val CATALOG_IOT_KINDS = setOf("HOME", "LOCK", "THERMOSTAT", "AUDIO", "SIGNAGE")
+    private val fleetCache = object : LinkedHashMap<String, List<com.whyfi.app.signatures.SignatureCatalog.Fleet>>(512, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<com.whyfi.app.signatures.SignatureCatalog.Fleet>>?) = size > 4096
+    }
+
+    /** Catalog fleets matching [d]: its MAC prefix (not for randomized MACs)
+     * and its advertised names (SSID, WPS name/model). Pattern matches,
+     * not identifications. */
+    fun catalogFleets(d: Device, catalog: com.whyfi.app.signatures.SignatureCatalog?): List<com.whyfi.app.signatures.SignatureCatalog.Fleet> {
+        catalog ?: return emptyList()
+        val names = listOf(d.ssid, d.wpsName, d.wpsModel, d.wpsManufacturer).filter { it.isNotBlank() }.distinct()
+        val key = "${catalog.version}|${d.mac}|${names.joinToString("|")}"
+        synchronized(fleetCache) { fleetCache[key]?.let { return it } }
+        val bssid = if (d.randomized) "" else d.mac
+        val ids = LinkedHashSet<String>()
+        (names.ifEmpty { listOf("") }).forEach { name ->
+            com.whyfi.app.signatures.WifiMatcher.match(com.whyfi.app.signatures.WifiMatcher.parse(bssid, name, emptyList()), catalog)
+                .forEach { ids += it.id }
+        }
+        val fleets = ids.mapNotNull { catalog.get(it) }
+        synchronized(fleetCache) { fleetCache[key] = fleets }
+        return fleets
+    }
+
 
     const val ROLE_AP = 1
     const val ROLE_CLIENT = 2
@@ -152,10 +183,22 @@ object SniffedDevices {
     /** Uploads at least this much and ~4× more than it downloads: video-like. */
     private const val STREAM_UP_BYTES = 256L * 1024
 
-    fun guess(d: Device, vendorOf: (String) -> String?): Guess {
+    fun guess(d: Device, vendorOf: (String) -> String?): Guess = guess(d, vendorOf, catalog)
+
+    fun guess(d: Device, vendorOf: (String) -> String?, catalog: com.whyfi.app.signatures.SignatureCatalog?): Guess {
         val vendor = if (d.randomized) null else vendorOf(d.mac)
         val reasons = mutableListOf<String>()
         vendor?.let { reasons += "vendor: $it" }
+        // Fieldwatch signature catalog (camera boards, Ring/Arlo/Tapo/eufy
+        // setup names, …): a camera fleet decides, a smart-home one hints.
+        val fleets = catalogFleets(d, catalog)
+        val cameraFleet = fleets.firstOrNull { it.kind in CATALOG_CAMERA_KINDS }
+        val iotFleet = fleets.firstOrNull { it.kind in CATALOG_IOT_KINDS }
+        if (cameraFleet != null) {
+            reasons += "Fieldwatch catalog: ${cameraFleet.name} (camera pattern)"
+            return Guess(Kind.CAMERA, vendor ?: cameraFleet.name, reasons)
+        }
+        iotFleet?.let { reasons += "Fieldwatch catalog: ${it.name}" }
         if (d.wps.isNotEmpty()) reasons += "announces itself as: ${d.wps}"
         if (d.wpsPrimaryType.startsWith("4:")) {
             reasons += "WPS primary device type: camera"
@@ -172,18 +215,22 @@ object SniffedDevices {
         if (d.isAp && !d.isClient) {
             if (camera) return Guess(Kind.CAMERA, vendor, reasons)
             if (d.ssid.isNotEmpty() &&
-                (IOT_HOTSPOT.containsMatchIn(d.ssid) || (vendor != null && IOT_VENDORS.containsMatchIn(vendor)))) {
+                (IOT_HOTSPOT.containsMatchIn(d.ssid) || (vendor != null && IOT_VENDORS.containsMatchIn(vendor)) || iotFleet != null)) {
                 reasons += "network name/vendor looks like a device's own setup hotspot"
                 return Guess(Kind.IOT, vendor, reasons)
             }
             return Guess(Kind.ACCESS_POINT, vendor, reasons)
         }
 
-        val iot = vendor != null && IOT_VENDORS.containsMatchIn(vendor)
+        val iot = (vendor != null && IOT_VENDORS.containsMatchIn(vendor)) || iotFleet != null
         val chip = vendor != null && CHIP_MAKERS.containsMatchIn(vendor)
         if (chip) reasons += "Wi-Fi chip maker's address — typical for embedded devices"
         if (only24 && d.frames >= 20) reasons += "only seen on 2.4 GHz"
-        if (camera || (streaming && (iot || chip))) return Guess(Kind.CAMERA, vendor, reasons)
+        // A client that keeps uploading (video-like) and isn't a phone or
+        // laptop by vendor or randomized MAC: likely a camera, whatever chip
+        // it uses (Tapo, for one, uses TP-Link's own addresses).
+        val phoneVendor = vendor != null && PHONE_LAPTOP_VENDORS.containsMatchIn(vendor)
+        if (camera || (streaming && (iot || chip || (!d.randomized && !phoneVendor)))) return Guess(Kind.CAMERA, vendor, reasons)
         if (iot) return Guess(Kind.IOT, vendor, reasons)
         if (d.randomized) {
             reasons += "randomized MAC — often used by phones and laptops; locally administered addresses can also be fixed"

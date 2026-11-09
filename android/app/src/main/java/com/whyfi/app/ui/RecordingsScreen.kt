@@ -43,7 +43,7 @@ import kotlinx.coroutines.withContext
  * report, a raw JSON share and delete. Works with or without a server.
  */
 @Composable
-fun RecordingsScreen(uiState: ScanUiState, onBack: () -> Unit) {
+fun RecordingsScreen(uiState: ScanUiState, onBack: () -> Unit, track: List<com.whyfi.app.scan.TrackPoint> = emptyList()) {
     val context = LocalContext.current
     val serverConfigured = rememberServerConfigured()
     val store = remember { RecordingStore(context.applicationContext) }
@@ -93,7 +93,12 @@ fun RecordingsScreen(uiState: ScanUiState, onBack: () -> Unit) {
                     RecordingRow(
                         r,
                         onReport = {
-                            PhoneReports.recording(context, r, store.passes(r.id), uiState.catalogLabels)
+                            // The newest mission also gets the running app's
+                            // location path, LAN sweep and public IP (the same
+                            // report as Scan's report button).
+                            if (r.id == list.first().id) PhoneReports.recording(context, r, store.passes(r.id), uiState.catalogLabels,
+                                track = track, live = uiState)
+                            else PhoneReports.recording(context, r, store.passes(r.id), uiState.catalogLabels)
                         },
                         onShare = {
                             scope.launch {

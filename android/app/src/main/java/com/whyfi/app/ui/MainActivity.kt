@@ -294,7 +294,8 @@ private fun WhyfiApp(
             when (page) {
                 // Recordings open inside the Scan tab (tabs stay visible);
                 // back or ← Back returns to Scan.
-                0 -> if (showRecordings) RecordingsScreen(uiState = uiState, onBack = { showRecordings = false })
+                0 -> if (showRecordings) RecordingsScreen(uiState = uiState, onBack = { showRecordings = false },
+                    track = service?.locationTrack?.value.orEmpty())
                 else ScanScreen(
                     service = service, uiState = uiState, onOpenDetail = openDetail,
                     onOpenRecordings = { showRecordings = true },

@@ -198,6 +198,27 @@ stale, and don't duplicate what's already obvious from code/tests.
   (`LocalMissionPoints.latestSession`), on server or phone data alike; the
   old phone-only "Latest recording" showed nothing while 24 h had server
   data. Filtered views use the local centroid, not the server's estimate.
+- **Reports (v105, 2026-11-09):** Scan's report button builds the newest
+  scan mission's report from its stored passes (`PhoneReports.recording`),
+  with the live location path, LAN sweep and public IP added, and only the
+  radios ticked under "What to scan". Before, it used the in-memory session
+  tally, which is empty after a restart ("GPS only" report), and mission
+  reports lacked the path map. Missions → Report on the newest mission gets
+  the same extras.
+- **USB camera recognition uses the Fieldwatch catalog** (v105):
+  `SniffedDevices.catalog` (set when `LocalSignatures.catalog` loads)
+  matches MAC prefix (not randomized MACs) and SSID/WPS names; CAMERA and
+  SURVEILLANCE fleets make a device a camera, HOME/LOCK/THERMOSTAT/AUDIO
+  hint IoT. A client that keeps uploading (video-like) and isn't a phone
+  vendor or randomized now counts as a camera too (Tapo uses TP-Link
+  addresses). The user has at least two cameras at home that were never
+  listed: check on their next capture.
+- **USB Mission tab looks like the phone's** (v105): map edge to edge,
+  controls bar (status; Start/Stop, toggles, ⓘ ⟳ ⌖), then one condensed
+  device bar ("All" + targets). Path is drawn as a line. The legend moved
+  into ⓘ. Net ops has a single bottom bar with the categories (tap the
+  selected one again for all devices); the Live tab keeps its kind chips.
+  The inline USB test shows a ⌄ button while there's more to scroll.
 - **Both maps share controls** (`mission/MapControls.kt`): `MapLayerChip`,
   `MapButtons` (ⓘ ⟳ ⌖), `LocationFixList`/`MapDetailsPanel` (permission,
   providers, each provider's fix) and the "gps ±8 m" status prefix

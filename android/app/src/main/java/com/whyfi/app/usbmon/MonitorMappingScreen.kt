@@ -225,7 +225,8 @@ internal fun MonitorMappingView(
     }
     LaunchedEffect(summary) { onSummaryChanged(summary) }
 
-    Column(modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+    // Edge to edge, like the phone's Mission map.
+    Column(modifier.fillMaxSize()) {
         Box(Modifier.weight(1f)) {
             if (mapReceiver != null || estimates.isNotEmpty() || receiverPath.isNotEmpty()) {
                 MonitorLocationMap(mapReceiver, visibleEstimates, mac, route, displayLabels, Modifier.fillMaxSize(),
@@ -287,6 +288,8 @@ private fun GeoDetailsContent(
             }, { requestPermission(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) },
                 staleAfterMs = MonitorLocationPolicy.MAX_FIX_AGE_MS)
             Text("app v${BuildConfig.VERSION_CODE}", style = MaterialTheme.typography.bodySmall)
+            Text("Legend: blue = phone fixes, its path and measurements · teal = estimated device position · " +
+                "circles = accuracy/uncertainty · cones = illustrative RSSI, not a bearing.", style = MaterialTheme.typography.bodySmall)
             if (!replay && (state.running || state.receiverFixCount > 0 || state.geoDiagnostics.radioReadings > 0)) {
                 val diagnostics = state.geoDiagnostics
                 Text("Capture location updates: ${if (state.locationUpdatesRegistered) "registered" else "unavailable"}",

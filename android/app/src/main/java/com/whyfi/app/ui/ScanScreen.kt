@@ -30,6 +30,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.whyfi.app.data.SettingsRepository
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import com.whyfi.app.data.local.RecordingEntity
+import com.whyfi.app.data.local.RecordingStore
 import com.whyfi.app.scan.SurveyTally
 import com.whyfi.app.report.PhoneReports
 import java.io.File
@@ -135,26 +139,31 @@ fun ScanScreen(
 
     fun canScanNow() = permissionsGranted && service != null && service.canScanNow(includeWifi)
 
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("whyfi phone", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-            // Every scan is kept on the phone as a mission (RecordingStore).
-            TextButton(onClick = onOpenRecordings) { Text("🎯 Missions") }
-            // Written automatically when scanning stops (all radios, public
-            // IP, location); regenerated if passes ran since.
-            if (uiState.latestPass != null && !uiState.isScanning && !uiState.isContinuous) {
-                ReportButton(enabled = true) {
-                    uiState.scanReportPath?.let(::File)
-                        ?.takeIf { it.isFile && uiState.scanReportPasses == uiState.completedScanCount }
-                        ?: PhoneReports.scan(context, uiState, service?.locationTrack?.value.orEmpty(),
-                            service?.sessionDevices() ?: SurveyTally().devices())
-                }
+    // Top line placed and sized exactly like the USB workspace's "whyfi USB"
+    // (usbmon/MonitorScreen.kt), outside the scrolling content.
+    Column(Modifier.fillMaxSize()) {
+    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("whyfi phone", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+        // Every scan is kept on the phone as a mission (RecordingStore).
+        TextButton(onClick = onOpenRecordings) { Text("🎯 Missions") }
+        // The newest mission's report, the same one Missions → Report gives,
+        // limited to the radios ticked under "What to scan". Built from the
+        // stored passes, so it still has every device after a restart.
+        if (uiState.latestPass != null && !uiState.isScanning && !uiState.isContinuous) {
+            ReportButton(enabled = true) {
+                val store = RecordingStore(context.applicationContext)
+                val newest = withContext(Dispatchers.IO) { store.summaries().firstOrNull { it.kind == RecordingEntity.KIND_SCAN && it.passes > 0 } }
+                if (newest == null) PhoneReports.scan(context, uiState.copy(scanOptions = scanOptions()), service?.locationTrack?.value.orEmpty(),
+                    service?.sessionDevices() ?: SurveyTally().devices())
+                else PhoneReports.recording(context, newest, withContext(Dispatchers.IO) { store.passes(newest.id) }, uiState.catalogLabels,
+                    track = service?.locationTrack?.value.orEmpty(), live = uiState, asked = scanOptions())
             }
         }
-
+    }
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 16.dp, top = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
         // One row, always — not three separate fragments that only
         // sometimes render. Before any scan it shows zeros/dashes and
         // untappable chips; mid-scan it shows live counts with a spinner on
@@ -367,5 +376,6 @@ fun ScanScreen(
                 style = MaterialTheme.typography.bodySmall,
             )
         }
+    }
     }
 }

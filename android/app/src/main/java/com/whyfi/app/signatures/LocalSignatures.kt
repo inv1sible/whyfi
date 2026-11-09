@@ -15,7 +15,7 @@ object LocalSignatures {
     fun catalog(context: Context): SignatureCatalog? = loaded ?: synchronized(this) {
         loaded ?: runCatching {
             context.assets.open(SignatureCatalog.ASSET).reader(Charsets.UTF_8).use { SignatureCatalog.read(it) }
-        }.getOrNull()?.also { loaded = it }
+        }.getOrNull()?.also { loaded = it; com.whyfi.app.usbmon.SniffedDevices.catalog = it }
     }
 
     /** Every MAC/BSSID in [passes] mapped to its label, or to null when nothing matched. */

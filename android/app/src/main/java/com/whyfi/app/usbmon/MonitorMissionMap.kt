@@ -21,6 +21,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.background
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -142,11 +143,12 @@ internal fun MonitorLocationMap(
                 selectedSamples, labels, if (layers.path) receiverPath.takeLast(800) else emptyList(), onEstimateTap, layers))
             map.invalidate()
         }) }
+        // Legend in the ⓘ panel; only the required attribution stays on the map.
+        Text("© OpenStreetMap contributors", modifier = Modifier.align(Alignment.BottomStart)
+            .background(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.7f)).padding(horizontal = 4.dp),
+            style = MaterialTheme.typography.labelSmall, color = androidx.compose.ui.graphics.Color.DarkGray)
       }
-        Text("© OpenStreetMap contributors · blue: phone fixes/measurements · teal: estimate" +
-            (if (layers.accuracy) " · circles: accuracy/uncertainty" else "") +
-            (if (layers.cones) " · cones: illustrative RSSI, not bearing" else ""),
-            style = MaterialTheme.typography.bodySmall)
+
     }
 }
 
@@ -205,7 +207,22 @@ private class MonitorLocationOverlay(
             canvas.drawCircle(center.x.toFloat(), center.y.toFloat(), abs(edge.x - center.x).toFloat(), paint)
             paint.style = Paint.Style.FILL
         }
-        // Fixes are recorded as independent observations; joining them implied a continuous track.
+        // The receiver's path: a line through its fixes in time order (the
+        // user asked for a path, not just points), plus a dot per fix.
+        if (receiverPath.size > 1) {
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 4f
+            paint.strokeJoin = Paint.Join.ROUND
+            paint.strokeCap = Paint.Cap.ROUND
+            paint.color = Color.argb(150, 0, 94, 158)
+            val line = android.graphics.Path()
+            receiverPath.forEachIndexed { i, fix ->
+                val p = point(fix.lat, fix.lng)
+                if (i == 0) line.moveTo(p.x.toFloat(), p.y.toFloat()) else line.lineTo(p.x.toFloat(), p.y.toFloat())
+            }
+            canvas.drawPath(line, paint)
+            paint.style = Paint.Style.FILL
+        }
         receiverPath.forEach { fix ->
             val p = point(fix.lat, fix.lng)
             paint.color = Color.argb(170, 0, 94, 158)

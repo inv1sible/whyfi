@@ -783,6 +783,8 @@ class ScanForegroundService : Service() {
             val vendorTable = withContext(Dispatchers.IO) {
                 runCatching { assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
             }
+            // Camera/smart-home patterns for the device guesses (SniffedDevices.catalog).
+            withContext(Dispatchers.IO) { com.whyfi.app.signatures.LocalSignatures.catalog(applicationContext) }
             suspend fun snapshot(forceSave: Boolean = false) = snapshotMutex.withLock {
                 if (locationSubscription == null) {
                     locationSubscription = LocationSnapshot.requestUpdates(applicationContext, minDistanceM = 0f,

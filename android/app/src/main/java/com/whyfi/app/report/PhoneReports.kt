@@ -363,12 +363,21 @@ object PhoneReports {
     }
 
     /** Opens [file] in the default PDF viewer; returns an error message, or null. */
-    /** The scan report for a stored recording, rebuilt from its passes. */
+    /** The scan report for a stored mission, rebuilt from its passes. The
+     * Scan tab's report button uses this too (for the newest mission), so
+     * both give the same report and it survives an app restart (the live
+     * session tally doesn't). [live] and [track] add what only the running
+     * app has for the current mission: the phone's location path, the LAN
+     * sweep and the public IP. [asked] limits it to the radios ticked in
+     * "What to scan"; null: the radios the passes actually contain. */
     suspend fun recording(
         context: Context,
         recording: com.whyfi.app.data.local.RecordingSummary,
         passes: List<com.whyfi.app.data.remote.ScanSessionUploadRequest>,
         catalogLabels: Map<String, String>,
+        track: List<TrackPoint> = emptyList(),
+        live: ScanUiState? = null,
+        asked: com.whyfi.app.scan.ScanOptions? = null,
     ): File = withContext(Dispatchers.IO) {
         val radioPasses = passes.filter { it.lanObservations.isEmpty() && it.ftmObservations.isEmpty() }
         val tally = com.whyfi.app.scan.SurveyTally()
@@ -383,21 +392,31 @@ object PhoneReports {
             TrackPoint(com.whyfi.app.scan.RecordingFormat.epochMs(p.completedAt) ?: recording.startedAtMs, lat, lng,
                 p.locationAccuracyMeters?.toDouble(), p.locationProvider.ifBlank { "unknown" })
         }
+        val until = recording.endedAtMs ?: Long.MAX_VALUE
+        val path = track.filter { it.atMs in recording.startedAtMs..until }
+        val radios = asked ?: com.whyfi.app.scan.ScanOptions(
+            includeWifi = radioPasses.any { it.wifiObservations.isNotEmpty() },
+            includeCellular = radioPasses.any { it.cellObservations.isNotEmpty() },
+            includeBle = radioPasses.any { it.bleObservations.isNotEmpty() },
+            includeGnss = radioPasses.any { it.satelliteObservations.isNotEmpty() },
+        )
         val state = ScanUiState(
+            scanOptions = radios,
             latestPass = radioPasses.lastOrNull(),
             previousPass = radioPasses.dropLast(1).lastOrNull(),
             completedScanCount = radioPasses.size,
             survey = tally.snapshot().copy(startedAtMs = recording.startedAtMs),
             passPositions = positions,
-            publicIp = recording.publicIp,
-            publicIpAtMs = recording.endedAtMs ?: recording.startedAtMs,
-            lanDevices = passes.lastOrNull { it.lanObservations.isNotEmpty() }?.lanObservations.orEmpty(),
+            publicIp = recording.publicIp ?: live?.publicIp,
+            publicIpAtMs = if (recording.publicIp == null && live?.publicIp != null) live.publicIpAtMs else recording.endedAtMs ?: recording.startedAtMs,
+            lanDevices = passes.lastOrNull { it.lanObservations.isNotEmpty() }?.lanObservations
+                ?: live?.lanDevices.orEmpty(),
             // From the recording's own passes, so old recordings get labels too.
             catalogLabels = catalogLabels + (com.whyfi.app.signatures.LocalSignatures.catalog(context)
                 ?.let { cat -> com.whyfi.app.signatures.LocalSignatures.labels(cat, passes).mapNotNull { (k, v) -> v?.let { k to it } }.toMap() }
                 .orEmpty()),
         )
-        scan(context, state, emptyList(), tally.devices(), endedAtMs = recording.endedAtMs, fileKind = "recording")
+        scan(context, state, path, tally.devices(), endedAtMs = recording.endedAtMs, fileKind = "recording")
     }
 
     /** Shares a file (PDF report or a recording's raw JSON) through the chooser. */

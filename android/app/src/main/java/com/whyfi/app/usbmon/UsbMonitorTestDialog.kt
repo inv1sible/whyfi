@@ -38,6 +38,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
@@ -279,10 +282,22 @@ fun UsbMonitorTestDialog(
     }
 
     if (inline) {
-        Column(
-            modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) { content() }
+        // Bounded height inside the Settings card; a small ⌄ in the lower
+        // right says there's more below (tap scrolls down a page) and goes
+        // away at the end.
+        val scroll = rememberScrollState()
+        val scrollScope = rememberCoroutineScope()
+        androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp).verticalScroll(scroll),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) { content() }
+            if (scroll.canScrollForward) androidx.compose.material3.SmallFloatingActionButton(
+                onClick = { scrollScope.launch { scroll.animateScrollBy(300f * context.resources.displayMetrics.density) } },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)
+                    .semantics { contentDescription = "Scroll down for more" },
+            ) { Text("⌄", style = MaterialTheme.typography.titleLarge) }
+        }
     } else Dialog(onDismissRequest = { if (!running) onDismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(modifier = Modifier.fillMaxSize()) {
             Column(
