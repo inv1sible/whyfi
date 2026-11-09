@@ -25,6 +25,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.whyfi.app.data.FavoritesRepository
+import com.whyfi.app.mission.MissionTarget
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import com.whyfi.app.data.remote.FtmObservationDto
 import com.whyfi.app.scan.DeviceChange
 import com.whyfi.app.scan.DeviceRow
@@ -100,11 +105,14 @@ fun ScanDetailScreen(
     onBack: () -> Unit,
     favoritesRepository: FavoritesRepository,
     service: ScanForegroundService? = null,
+    /** 📍 on a row: show that device on the Mission tab's map. */
+    onLocate: ((MissionTarget) -> Unit)? = null,
 ) {
     val rows = remember(kind, uiState.latestPass, uiState.previousPass) {
         ScanDiff.rowsFor(kind, uiState.latestPass, uiState.previousPass)
     }
     val summary = remember(rows) { ScanDiff.summarize(rows) }
+
     val bleInfo = rememberBleInfo(uiState, enabled = kind == RadioKind.BLE)
 
     // A ranging measurement doesn't need the foreground service running —
@@ -136,6 +144,15 @@ fun ScanDetailScreen(
     } else {
         favoritesRepository.favorites(kind).collectAsState()
     }
+    // Hidden ("blacklisted") rows, like the USB adapter's ⊘: left out of the
+    // table until shown again from the "Hidden" list.
+    val hidden by if (kind == RadioKind.SATELLITE) {
+        remember { mutableStateOf(emptySet<String>()) }
+    } else {
+        favoritesRepository.hidden(kind).collectAsState()
+    }
+    var showHidden by rememberSaveable(kind) { mutableStateOf(false) }
+    val shownRows = rows.filter { it.favoriteId == null || it.favoriteId !in hidden }
 
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -168,12 +185,36 @@ fun ScanDetailScreen(
                     label = { Text("${option.icon} ${option.label}") },
                 )
             }
+            if (kind != RadioKind.SATELLITE) FilterChip(
+                selected = showHidden,
+                onClick = { showHidden = !showHidden },
+                label = { Text("⊘ Hidden (${hidden.size})") },
+            )
+        }
+
+        if (showHidden) {
+            // Same as the USB adapter's "Hidden APs" list: one line per
+            // hidden identifier with Show to bring it back.
+            Text("Hidden ${kind.label} (${hidden.size})", style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(vertical = 8.dp))
+            if (hidden.isEmpty()) Text("Nothing hidden. Tap ⊘ on a row to hide it from these results.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            LazyColumn(Modifier.fillMaxWidth()) {
+                items(hidden.sorted(), key = { it }) { id ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(id, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton({ favoritesRepository.toggleHidden(kind, id) }) { Text("Show") }
+                    }
+                }
+            }
+            return@Column
         }
 
         if (kind == RadioKind.SATELLITE) GpsPanel(service, uiState)
 
         Text(
-            summaryLine(summary.total, summary.new, summary.gone, summary.comparable),
+            summaryLine(summary.total, summary.new, summary.gone, summary.comparable) +
+                (rows.size - shownRows.size).takeIf { it > 0 }?.let { " · $it hidden" }.orEmpty(),
             modifier = Modifier.padding(vertical = 8.dp),
             style = MaterialTheme.typography.bodyMedium,
         )
@@ -212,16 +253,17 @@ fun ScanDetailScreen(
             )
         }
 
-        if (rows.isEmpty()) {
+        if (shownRows.isEmpty()) {
             Text(
-                "Nothing was recorded for ${kind.label} in the last scan.",
+                if (rows.isEmpty()) "Nothing was recorded for ${kind.label} in the last scan."
+                else "Every ${kind.label} row of the last scan is hidden. See ⊘ Hidden above.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
             DataTable(
                 columns = columnsFor(kind),
-                rows = rows.map { raw ->
+                rows = shownRows.map { raw ->
                     val row = when (kind) {
                         RadioKind.BLE -> raw.copy(columns = raw.columns +
                             (bleInfo[raw.key]?.let { BleDeviceInfo.columns(it) } ?: BleDeviceInfo.HEADERS.map { "–" }))
@@ -239,6 +281,9 @@ fun ScanDetailScreen(
                         },
                         onRange = if (canRange) ({ onRange(row.key) }) else null,
                         rangeStatus = rangeStatus[row.key],
+                    ).copy(
+                        onLocate = if (id != null && onLocate != null) ({ onLocate(MissionTarget(kind, id)) }) else null,
+                        onHideToggle = if (id != null) ({ favoritesRepository.toggleHidden(kind, id) }) else null,
                     )
                 }.sortedByDescending { it.isFavorite }, // favorites to top; stable within each group
                 showBadgeColumn = summary.comparable,

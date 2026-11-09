@@ -37,6 +37,25 @@ class FavoritesRepository(context: Context) {
 
     fun favorites(kind: RadioKind): StateFlow<Set<String>> = flowFor(kind).asStateFlow()
 
+    /** Hidden ("blacklisted") identifiers per radio, same identifiers as the
+     * favorites: rows the Scan results tables leave out, like the USB
+     * adapter's ⊘ hidden APs (user, 2026-11-09). Kept until shown again. */
+    private val hiddenFlows: Map<RadioKind, MutableStateFlow<Set<String>>> = listOf(RadioKind.WIFI, RadioKind.BLE, RadioKind.CELLULAR)
+        .associateWith { MutableStateFlow(prefs.getStringSet(hiddenKey(it), emptySet())?.toSet() ?: emptySet()) }
+
+    fun hidden(kind: RadioKind): StateFlow<Set<String>> =
+        (hiddenFlows[kind] ?: error("$kind has no hidden list — this is a caller bug, not a real state.")).asStateFlow()
+
+    fun toggleHidden(kind: RadioKind, id: String) {
+        val flow = hiddenFlows[kind] ?: return
+        val updated = flow.value.toMutableSet()
+        if (!updated.add(id)) updated.remove(id)
+        prefs.edit { putStringSet(hiddenKey(kind), updated) }
+        flow.value = updated
+    }
+
+    private fun hiddenKey(kind: RadioKind): String = "hidden_" + prefsKey(kind)
+
     fun isFavorite(kind: RadioKind, id: String): Boolean = flowFor(kind).value.contains(id)
 
     fun toggleFavorite(kind: RadioKind, id: String) {

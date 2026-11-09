@@ -546,7 +546,14 @@ private fun MonitorWorkspace(
                     showHiddenAps, hideNoise, noisePatterns, nearbySort,
                     showFavoriteCards, { showFavoriteCards = !showFavoriteCards },
                     showUnassociatedCards, { showUnassociatedCards = !showUnassociatedCards },
-                    showApCards, { showApCards = !showApCards }, matchedMacs, matchesFirst, deviceStatus)
+                    showApCards, { showApCards = !showApCards }, matchedMacs, matchesFirst, deviceStatus,
+                    onLocate = { mac ->
+                        // 📍 on a card: the Mission map, focused on that device.
+                        selectedLocationMac = mac
+                        followMe = false
+                        selectTab(MonitorTab.MAPPING)
+                        locationRecenter++
+                    })
             }
         } else if (selected == MonitorTab.MISSIONS) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -955,6 +962,7 @@ private fun LazyListScope.nearbyItems(
     matches: Set<String>,
     matchesFirst: Boolean,
     deviceStatus: Map<String, String>,
+    onLocate: ((String) -> Unit)? = null,
 ) {
     val order = if (matchesFirst) MonitorInventory.matchOrder(matches) else nearbyOrder(sort)
     if (showHiddenAps) {
@@ -988,7 +996,7 @@ private fun LazyListScope.nearbyItems(
         if (showFavorites) items(pinned.distinctBy { it.first.mac }, key = { "fav:" + it.first.mac }) { row ->
             DeviceCard(row, newest, true, onFavorite,
                 if (row.first.isAp) byBssid[row.first.mac].orEmpty() else emptyList(), favorites, sort,
-                onHideAp = onHideAp, deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst)
+                onHideAp = onHideAp, deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst, onLocate = onLocate)
         }
         item(key = "div-favorites") { HorizontalDivider() }
     }
@@ -997,7 +1005,7 @@ private fun LazyListScope.nearbyItems(
         if (unassociated.isEmpty()) item(key = "unassociated-empty") { Text("No probing stations without an observed AP association.") }
         items(unassociated.distinctBy { it.first.mac }, key = { "una:" + it.first.mac }) {
             DeviceCard(it, newest, false, onFavorite, sort = sort, showActivity = true,
-                deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst)
+                deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst, onLocate = onLocate)
         }
     }
     item(key = "div-unassociated") { HorizontalDivider() }
@@ -1006,7 +1014,7 @@ private fun LazyListScope.nearbyItems(
         if (aps.isEmpty()) item(key = "aps-empty") { Text("No access points received yet.") }
         items(aps.distinctBy { it.first.mac }, key = { "ap:" + it.first.mac }) { ap ->
             DeviceCard(ap, newest, false, onFavorite, byBssid[ap.first.mac].orEmpty(), favorites, sort,
-                onHideAp = onHideAp, deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst)
+                onHideAp = onHideAp, deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst, onLocate = onLocate)
         }
     }
 }
@@ -1045,6 +1053,7 @@ private fun DeviceCard(
     deviceStatus: Map<String, String> = emptyMap(),
     matches: Set<String> = emptySet(),
     matchesFirst: Boolean = false,
+    onLocate: ((String) -> Unit)? = null,
 ) {
     var expanded by rememberSaveable(row.first.mac) { mutableStateOf(false) }
     val (device, guess) = row
@@ -1061,6 +1070,10 @@ private fun DeviceCard(
                     Text("${(device.lastRssi ?: device.bestRssi)?.let { "$it dBm" } ?: "RSSI ?"} · ch ${channel.ifBlank { "?" }} · " +
                         (deviceStatus[device.mac] ?: relativeSeen((newest - device.lastMs).coerceAtLeast(0))),
                         style = MaterialTheme.typography.bodySmall)
+                }
+                if (onLocate != null) IconButton({ onLocate(device.mac) },
+                    modifier = Modifier.size(40.dp).semantics { contentDescription = "Show on Mission map" }) {
+                    Text("📍", style = MaterialTheme.typography.titleMedium)
                 }
                 if (device.isAp && onHideAp != null) IconButton({ onHideAp(device) },
                     modifier = Modifier.size(40.dp).semantics {
@@ -1106,7 +1119,7 @@ private fun DeviceCard(
                     Text("Associated stations (${stations.size})", style = MaterialTheme.typography.labelLarge)
                     stations.sortedWith(if (matchesFirst) MonitorInventory.matchOrder(matches) else nearbyOrder(sort)).forEach {
                         DeviceCard(it, newest, it.first.mac in favorites, onFavorite, sort = sort,
-                            onHideAp = onHideAp, deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst)
+                            onHideAp = onHideAp, deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst, onLocate = onLocate)
                     }
                 }
             } else if (stations.isNotEmpty()) {

@@ -33,6 +33,7 @@ import com.whyfi.app.data.SettingsRepository
 import com.whyfi.app.data.ThemePreference
 import com.whyfi.app.mission.MissionController
 import com.whyfi.app.mission.MissionScreen
+import com.whyfi.app.mission.MissionTarget
 import com.whyfi.app.scan.RadioKind
 import com.whyfi.app.usbmon.MonitorScreen
 import com.whyfi.app.usbmon.AdapterSettings
@@ -239,24 +240,20 @@ private fun WhyfiApp(
 
     val openDetail: (RadioKind) -> Unit = { detailRadio = it.name }
 
-    // One level of drill-down over the tabs, rather than pulling in
-    // Navigation Compose for a single route. The system back button has to
-    // close it — without this it would leave the app instead, which reads as
-    // a crash.
-    BackHandler(enabled = detailRadio != null) { detailRadio = null }
-    BackHandler(enabled = showRecordings && selectedTab == 0) { showRecordings = false }
-
+    // Radio results and Missions open inside the Scan tab, under the tab
+    // bar like every other sub view (user, 2026-11-09). The system back
+    // button closes them; without this it would leave the app instead,
+    // which reads as a crash.
+    BackHandler(enabled = detailRadio != null && selectedTab == 0) { detailRadio = null }
+    BackHandler(enabled = showRecordings && detailRadio == null && selectedTab == 0) { showRecordings = false }
     val activeDetail = detailRadio?.let { name -> RadioKind.entries.firstOrNull { it.name == name } }
-    if (activeDetail != null) {
-        ScanDetailScreen(
-            uiState = uiState,
-            kind = activeDetail,
-            onKindChange = { detailRadio = it.name },
-            onBack = { detailRadio = null },
-            favoritesRepository = favoritesRepository,
-            service = service,
-        )
-        return
+
+    // 📍 on a results row: pick that device on the Mission map and go there.
+    // The results stay open on the Scan tab for coming back.
+    val locate: (MissionTarget) -> Unit = { target ->
+        if (missionController.uiState.value.isTracking) missionController.start(target, service)
+        else coroutineScope.launch { missionController.selectTarget(target) }
+        goToTab(MISSION_TAB)
     }
 
     // Standalone recordings are offered for upload once a server is set up.
@@ -294,7 +291,16 @@ private fun WhyfiApp(
             when (page) {
                 // Recordings open inside the Scan tab (tabs stay visible);
                 // back or ← Back returns to Scan.
-                0 -> if (showRecordings) RecordingsScreen(uiState = uiState, onBack = { showRecordings = false },
+                0 -> if (activeDetail != null) ScanDetailScreen(
+                    uiState = uiState,
+                    kind = activeDetail,
+                    onKindChange = { detailRadio = it.name },
+                    onBack = { detailRadio = null },
+                    favoritesRepository = favoritesRepository,
+                    service = service,
+                    onLocate = locate,
+                )
+                else if (showRecordings) RecordingsScreen(uiState = uiState, onBack = { showRecordings = false },
                     track = service?.locationTrack?.value.orEmpty())
                 else ScanScreen(
                     service = service, uiState = uiState, onOpenDetail = openDetail,

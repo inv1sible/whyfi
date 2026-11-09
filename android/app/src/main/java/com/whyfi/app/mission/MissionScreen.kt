@@ -95,6 +95,10 @@ fun MissionScreen(
             cellFavorites.map { MissionTarget(RadioKind.CELLULAR, it) })
             .sortedBy { it.identifier }
     }
+    // A device located from the Scan results (📍) needn't be a favorite:
+    // it gets a chip of its own in front while it is the one shown.
+    val chips = uiState.target?.takeIf { it.kind != RadioKind.SATELLITE && it !in targets }
+        ?.let { listOf(it) + targets } ?: targets
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -304,7 +308,7 @@ fun MissionScreen(
         }
 
         // Devices to track.
-        if (targets.isEmpty()) {
+        if (chips.isEmpty()) {
             Text(
                 "No favorites yet. Star a Wi‑Fi network, BLE device or cell tower in its results (Scan → Wi‑Fi/BLE/Cellular) to track it here.",
                 style = MaterialTheme.typography.bodySmall,
@@ -314,7 +318,8 @@ fun MissionScreen(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            targets.forEach { target ->
+            chips.forEach { target ->
+                val favorite = target in targets
                 FilterChip(
                     selected = uiState.target == target,
                     onClick = { selectOrRetarget(target) },
@@ -323,12 +328,13 @@ fun MissionScreen(
                         // Separate tap target: the × unfavorites the target;
                         // if it was the active one, the selection is cleared
                         // so the map doesn't keep stale data.
+                        // ☆ on a located non-favorite stars it instead.
                         Text(
-                            "×",
+                            if (favorite) "×" else "☆",
                             style = MaterialTheme.typography.labelLarge,
                             modifier = Modifier.padding(start = 4.dp).clickable {
                                 favoritesRepository.toggleFavorite(target.kind, target.identifier)
-                                if (uiState.target == target) missionController.clearSelection()
+                                if (favorite && uiState.target == target) missionController.clearSelection()
                             },
                         )
                     },

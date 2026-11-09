@@ -32,6 +32,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 
 data class TableColumn(val label: String, val width: Dp)
 
@@ -58,10 +60,16 @@ data class DataTableRow(
     val rangeStatus: String? = null,
     /** Optional row action, used to open an observed AP on the mission map. */
     val onClick: (() -> Unit)? = null,
+    /** 📍 show this row's device on the Mission map; null renders nothing. */
+    val onLocate: (() -> Unit)? = null,
+    /** ⊘ hide the row (blacklist); see FavoritesRepository.hidden. */
+    val isHidden: Boolean = false,
+    val onHideToggle: (() -> Unit)? = null,
 )
 
 private val BADGE_COLUMN_WIDTH = 62.dp
 private val FAVORITE_COLUMN_WIDTH = 36.dp
+private val ACTION_COLUMN_WIDTH = 34.dp
 private val RANGE_COLUMN_WIDTH = 56.dp
 
 /** First number found anywhere in a cell — "Ch 6 (2.4GHz)" -> 6, "-72 dBm"
@@ -111,6 +119,10 @@ fun DataTable(
     // decides if the column exists at all, same reasoning as showBadgeColumn.
     val showFavoriteColumn = rows.any { it.onFavoriteToggle != null }
     val favoriteWidth = if (showFavoriteColumn) FAVORITE_COLUMN_WIDTH else 0.dp
+    // Locate and hide sit left of the star, the same order as the USB
+    // adapter's device cards (📍 ⊘ ★).
+    val showLocateColumn = rows.any { it.onLocate != null }
+    val showHideColumn = rows.any { it.onHideToggle != null }
     val showRangeColumn = rows.any { it.onRange != null }
     val rangeWidth = if (showRangeColumn) RANGE_COLUMN_WIDTH else 0.dp
 
@@ -148,6 +160,8 @@ fun DataTable(
                 .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (showLocateColumn) Box(Modifier.width(ACTION_COLUMN_WIDTH))
+            if (showHideColumn) Box(Modifier.width(ACTION_COLUMN_WIDTH))
             if (showFavoriteColumn) Box(Modifier.width(favoriteWidth))
             if (showRangeColumn) Box(Modifier.width(rangeWidth))
             if (showBadgeColumn) Box(Modifier.width(leadingWidth))
@@ -197,6 +211,16 @@ fun DataTable(
                         .padding(vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    if (showLocateColumn) {
+                        Box(Modifier.width(ACTION_COLUMN_WIDTH), contentAlignment = Alignment.Center) {
+                            row.onLocate?.let { ActionGlyph("📍", "Show on Mission map", it) }
+                        }
+                    }
+                    if (showHideColumn) {
+                        Box(Modifier.width(ACTION_COLUMN_WIDTH), contentAlignment = Alignment.Center) {
+                            row.onHideToggle?.let { ActionGlyph(if (row.isHidden) "↩" else "⊘", if (row.isHidden) "Show again" else "Hide", it) }
+                        }
+                    }
                     if (showFavoriteColumn) {
                         Box(Modifier.width(favoriteWidth), contentAlignment = Alignment.Center) {
                             row.onFavoriteToggle?.let { toggle -> FavoriteStar(row.isFavorite, toggle) }
@@ -235,6 +259,17 @@ fun DataTable(
             }
         }
     }
+}
+
+@Composable
+private fun ActionGlyph(glyph: String, description: String, onClick: () -> Unit) {
+    Text(
+        glyph,
+        modifier = Modifier.clickable(onClick = onClick).padding(4.dp)
+            .semantics { contentDescription = description },
+        fontSize = 16.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable

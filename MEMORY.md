@@ -219,6 +219,13 @@ stale, and don't duplicate what's already obvious from code/tests.
   into ⓘ. Net ops has a single bottom bar with the categories (tap the
   selected one again for all devices); the Live tab keeps its kind chips.
   The inline USB test shows a ⌄ button while there's more to scroll.
+- **Phone sub views stay inside the tab frame** (v106): radio results
+  (`ScanDetailScreen`) and Missions render as page 0 of the pager, under
+  the tab bar; back closes them. Phone hide list ("blacklist") lives in
+  `FavoritesRepository.hidden(kind)` (same identifiers as favorites; view
+  only, reports unchanged, like USB's ⊘ hidden APs). 📍 on a phone results
+  row or a USB Scan card opens that device on its Mission map; a located
+  non-favorite gets its own chip on phone Mission (☆ stars it).
 - **Both maps share controls** (`mission/MapControls.kt`): `MapLayerChip`,
   `MapButtons` (ⓘ ⟳ ⌖), `LocationFixList`/`MapDetailsPanel` (permission,
   providers, each provider's fix) and the "gps ±8 m" status prefix
