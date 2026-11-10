@@ -153,6 +153,8 @@ private fun MonitorWorkspace(
     var showHiddenAps by rememberSaveable { mutableStateOf(false) }
     var hideNoise by remember { mutableStateOf(settingsRepository.monitorHideNoise) }
     var seenWithinMin by remember { mutableIntStateOf(settingsRepository.monitorSeenWithinMin) }
+    // 🔍 one query for Live, Net ops and the Mission map.
+    var searchQuery by rememberSaveable { mutableStateOf("") }
     val noisePatterns = remember { MonitorNoiseFilter.compile(settingsRepository.monitorNoisePatterns).patterns }
     var focusedKind by remember { mutableStateOf<SniffedDevices.Kind?>(null) }
     var autoUpdate by rememberSaveable { mutableStateOf(true) }
@@ -292,8 +294,14 @@ private fun MonitorWorkspace(
         ?.let { if (it == MonitorTab.NET_OPS) DEVICE_CATEGORIES.firstOrNull { c -> c.name == lastCategoryName } ?: MonitorTab.NET_OPS else it }
         ?: MonitorTab.NEARBY
     val newestHeardMs = displayDevices.maxOfOrNull { it.first.lastMs } ?: 0L
+    val searchKeep = remember(displayDevices, replayDevices, searchQuery, favorites, resolvedHiddenAps, deviceStatus) {
+        MonitorSearch.keep((displayDevices + replayDevices).distinctBy { it.first.mac }, searchQuery, deviceStatus, favorites) {
+            MonitorApVisibility.isHidden(it, resolvedHiddenAps)
+        }
+    }
     val recentDevices = displayDevices.filter {
-        MonitorAgeFilter.keep(it.first, newestHeardMs, seenWithinMin, it.first.mac in favorites)
+        MonitorAgeFilter.keep(it.first, newestHeardMs, seenWithinMin, it.first.mac in favorites) &&
+            (searchKeep == null || it.first.mac in searchKeep)
     }
     val nearbyDevices = (if (showHiddenAps) displayDevices else recentDevices).filter {
         (focusedKind == null || it.second.kind == focusedKind) || (showHiddenAps && MonitorApVisibility.isHidden(it.first, resolvedHiddenAps))
@@ -306,7 +314,7 @@ private fun MonitorWorkspace(
     val ageBase = if (replaying) replayDevices else displayDevices
     val staleMacs = remember(ageBase, seenWithinMin, favorites) { MonitorAgeFilter.staleMacs(ageBase, seenWithinMin, favorites) }
     val categoryDevices = (if (replaying) replayDevices else displayDevices)
-        .filter { it.first.mac !in staleMacs }
+        .filter { it.first.mac !in staleMacs && (searchKeep == null || it.first.mac in searchKeep) }
         .filter { (focusedKind == null || sectionOf(selected) == MonitorSection.NET_OPS || it.second.kind == focusedKind) && (replaying || !MonitorApVisibility.isHidden(it.first, resolvedHiddenAps)) }
     val newDevices = state.devices.count { incoming -> displayDevices.none { it.first.mac == incoming.first.mac } }
 
@@ -545,6 +553,8 @@ private fun MonitorWorkspace(
                     { allMode = it; recordAction("channel_mode", if (it) "all" else "selected") },
                     setChannels)
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                if (searchKeep != null && nearbyDevices.isEmpty()) Text("Nothing matches “${searchQuery.trim()}”. ✕ clears the search.",
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (state.moveSuggested) Text("No new AP or distinct receiver position for 2 minutes. Try another spot.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 if (!state.running && state.missionLogPath != null) Text("Capture saved. PDF on request in Missions. Start continues; Reset closes this mission.",
@@ -610,7 +620,8 @@ private fun MonitorWorkspace(
                 modifier = Modifier.weight(1f))
         } else if (selected == MonitorTab.MAPPING) {
           Box(Modifier.weight(1f).fillMaxWidth()) {
-            MonitorMappingView(context, state, favorites, staleMacs + if (replaying) emptySet() else
+            MonitorMappingView(context, state, favorites, staleMacs +
+                (searchKeep?.let { keep -> ageBase.map { it.first.mac }.filterNot { it in keep } } ?: emptyList()) + if (replaying) emptySet() else
                 resolvedHiddenAps.filterNot { it.startsWith("ssid:") }.toSet() +
                     displayDevices.filter { MonitorApVisibility.isHidden(it.first, resolvedHiddenAps) }.map { it.first.mac },
                 settingsRepository.activeMonitorMissionId,
@@ -738,6 +749,8 @@ private fun MonitorWorkspace(
                 }
             }
         }
+        if (selected != MonitorTab.MISSIONS && selected != MonitorTab.SETUP) MonitorSearchBar(searchQuery,
+            searchKeep?.let { keep -> "${ageBase.count { it.first.mac in keep }}/${ageBase.size}" }) { searchQuery = it }
         if (selected == MonitorTab.MAPPING) {
             val selectedTarget = selectedLocationMac?.takeIf { mac -> locationTargets.any { it.mac == mac } }
             // Devices to focus, condensed into one bar at the very bottom
@@ -746,7 +759,7 @@ private fun MonitorWorkspace(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 com.whyfi.app.mission.SeenFilterChip(seenWithinMin, null, setSeenWithin)
                 FilterChip(selectedTarget == null, { selectedLocationMac = null; focusedKind = null }, label = { Text("All") })
-                locationTargets.forEach { target ->
+                locationTargets.filter { searchKeep == null || it.mac in searchKeep }.forEach { target ->
                     FilterChip(selectedTarget == target.mac, { selectedLocationMac = if (selectedTarget == target.mac) null else target.mac; followMe = false },
                         label = { Text("${target.label} (${target.readings})", maxLines = 1) })
                 }
@@ -1128,4 +1141,20 @@ private fun DeviceCard(
             }
         }
     }
+}
+
+/** 🔍 above the bottom chips; ✕ clears. [counts] is "matches/all" while searching. */
+@Composable
+private fun MonitorSearchBar(query: String, counts: String?, onChange: (String) -> Unit) {
+    OutlinedTextField(query, onChange,
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
+        singleLine = true, textStyle = MaterialTheme.typography.bodyMedium,
+        placeholder = { Text("🔍 Search MAC, vendor, SSID, probes, WPS, security, ch6 …", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        leadingIcon = if (query.isEmpty()) null else ({ Text("🔍") }),
+        trailingIcon = if (query.isEmpty()) null else ({
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                counts?.let { Text(it, style = MaterialTheme.typography.labelMedium) }
+                TextButton({ onChange("") }) { Text("✕") }
+            }
+        }))
 }

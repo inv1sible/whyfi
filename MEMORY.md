@@ -239,6 +239,12 @@ stale, and don't duplicate what's already obvious from code/tests.
   exclusion set), and first in the phone Mission device bar (readings by
   age, `missionSeenWithinMin`). Phone Mission Track is a Start/Stop button
   like USB. USB replay already has a time slider.
+- **USB 🔍 search** (v111, 2026-11-10): one field above the bottom chips on
+  Live, Net ops and Map (`MonitorSearchBar`, not persisted). `MonitorSearch`
+  ANDs words, substring over MAC (± separators), vendor, kind, names, SSID,
+  probes, associated BSSID+SSID, WPS, security, chN, catalog reasons,
+  status, favorite/hidden; a matching client keeps its AP. Applies on top of
+  ⏱ Seen; the hidden-AP list is not filtered.
 - **Map controls float on the map** (v109, 2026-11-10, user: recentering
   was hard to find while driving): `MapOverlayControls` (MapControls.kt) at
   the map's lower right on both maps, bottom up ⌖ follow, ⟳, ⓘ, ◧ layers
