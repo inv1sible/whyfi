@@ -245,6 +245,16 @@ stale, and don't duplicate what's already obvious from code/tests.
   probes, associated BSSID+SSID, WPS, security, chN, catalog reasons,
   status, favorite/hidden; a matching client keeps its AP. Applies on top of
   ⏱ Seen; the hidden-AP list is not filtered.
+- **USB wall-clock first/last seen** (v112, 2026-11-10): native
+  `firstMs/lastMs` are ms since that capture started (steady_clock − start),
+  NOT wall time; `lastRssiBootMs` is elapsedRealtime. `MonitorSeenClock`
+  takes capture start = max(lastRssiBootMs − lastMs), then snapshot
+  at_ms/clock_ms → wall (fallback: newest device ≈ snapshot time); folds
+  snapshots earliest-first/latest-last (continue restarts the clock). Net ops
+  tables: "Last seen" (clock · ago, 3rd column) + "First seen"; replay spans
+  follow the slider (`MonitorReplayMission.seenSpans`). PDF §4 adds First/
+  Last seen and sorts by wall last seen. "Recorded" devices from earlier
+  sessions keep that label live.
 - **Map controls float on the map** (v109, 2026-11-10, user: recentering
   was hard to find while driving): `MapOverlayControls` (MapControls.kt) at
   the map's lower right on both maps, bottom up ⌖ follow, ⟳, ⓘ, ◧ layers

@@ -466,7 +466,16 @@ object MonitorMission {
             doc.table(MonitorReportContent.observationsTable(deviceSamplesByMac, names))
 
             doc.heading("4", "Observed devices")
-            doc.table(MonitorReportContent.devicesTable(reportDevices))
+            val seen = if (savedDevices.isNotEmpty()) MonitorSeenClock.fromSnapshots(evidence.parsedSnapshots)
+                else MonitorSeenClock.spans(allDevices, System.currentTimeMillis(), SystemClock.elapsedRealtime())
+            val seenDays = seen.values.flatMap { listOf(it.firstMs, it.lastMs) }
+                .map { it / 86_400_000 }.distinct().size
+            val seenFormat = if (seenDays > 1) DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM) else timeFormat
+            val seenDay = seen.values.firstOrNull()?.lastMs?.takeIf { seenDays == 1 }
+            doc.paragraph("Most recently heard first; first and last seen in the phone's local time" +
+                (seenDay?.let { " on " + DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(it)) } ?: "") + ".",
+                muted = true)
+            doc.table(MonitorReportContent.devicesTable(reportDevices, seen) { seenFormat.format(Date(it)) })
 
             doc.heading("5", "Channels")
             doc.paragraph("Frames received per channel in the latest capture.", muted = true)

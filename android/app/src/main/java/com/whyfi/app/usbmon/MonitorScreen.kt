@@ -282,11 +282,19 @@ private fun MonitorWorkspace(
         snapshot.clockMs.takeIf { it > 0 }?.plus((replayCutoffMs - snapshot.atMs).coerceAtLeast(0))
     } ?: replayCutoffMs
     var replayDevices by remember { mutableStateOf<List<Pair<SniffedDevices.Device, SniffedDevices.Guess>>>(emptyList()) }
+    var replaySeen by remember { mutableStateOf<Map<String, MonitorSeenClock.Span>>(emptyMap()) }
     LaunchedEffect(activeReplay, replayCutoffMs) {
-        replayDevices = withContext(Dispatchers.Default) {
-            activeReplay?.takeIf { it.snapshots.isNotEmpty() }?.devicesAt(replayCutoffMs)
-                ?: activeReplay?.legacyDevicesAt(replayCutoffMs).orEmpty()
+        val (devices, seen) = withContext(Dispatchers.Default) {
+            val replay = activeReplay
+            if (replay != null && replay.snapshots.isNotEmpty()) replay.devicesAt(replayCutoffMs) to replay.seenSpans()
+            else replay?.legacyDevicesAt(replayCutoffMs).orEmpty() to replay?.legacySeenAt(replayCutoffMs).orEmpty()
         }
+        replayDevices = devices
+        replaySeen = seen
+    }
+    // Live: wall-clock first/last seen of this capture's devices.
+    val liveSeen = remember(state.devices) {
+        MonitorSeenClock.spans(state.devices.map { it.first }, System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime())
     }
     val replaying = selectedMissionLogPath != null
     // Net ops shows the device category tables.
@@ -660,6 +668,8 @@ private fun MonitorWorkspace(
                 referenceMs = replayReferenceMs.takeIf { replaying },
                 matches = if (replaying) emptySet() else matchedMacs, matchesFirst = matchesFirst,
                 deviceStatus = if (replaying) emptyMap() else deviceStatus,
+                seen = if (replaying) replaySeen else liveSeen,
+                nowWallMs = if (replaying) replayCutoffMs else System.currentTimeMillis(),
                 onOpenApLocation = { mac ->
                     selectedLocationMac = mac
                     followMe = false
@@ -881,7 +891,12 @@ private fun MonitorTable(
     matchesFirst: Boolean = false,
     deviceStatus: Map<String, String> = emptyMap(),
     onOpenApLocation: (String) -> Unit = {},
+    seen: Map<String, MonitorSeenClock.Span> = emptyMap(),
+    nowWallMs: Long = System.currentTimeMillis(),
 ) {
+    val clock = remember { DateFormat.getTimeInstance(DateFormat.MEDIUM) }
+    val day = remember { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT) }
+    fun wall(ms: Long) = (if (nowWallMs - ms > 86_400_000) day else clock).format(Date(ms))
     val rows = monitorRows(tab, devices).let { if (matchesFirst) it.sortedWith(MonitorInventory.matchOrder(matches)) else it }
     val newest = referenceMs ?: rows.filter { deviceStatus[it.first.mac] != "Recorded" }.maxOfOrNull { it.first.lastMs } ?: 0
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -897,13 +912,14 @@ private fun MonitorTable(
             columns = listOf(
                 TableColumn("Device", 150.dp),
                 TableColumn("MAC", 150.dp),
+                TableColumn("Last seen", 150.dp),
                 TableColumn("Manufacturer", 180.dp),
                 TableColumn("History", 100.dp),
                 TableColumn("RSSI", 70.dp),
                 TableColumn("Channel", 80.dp),
                 TableColumn("Security", 170.dp),
                 TableColumn("WPS", 180.dp),
-                TableColumn("Seen", 76.dp),
+                TableColumn("First seen", 110.dp),
                 TableColumn("Activity", 190.dp),
                 TableColumn("Classification evidence", 240.dp),
             ),
@@ -914,13 +930,16 @@ private fun MonitorTable(
                     cells = listOf(
                         SniffedDevices.displayName(device, guess) + "  ↗ map",
                         device.mac,
+                        seen[device.mac]?.let { "${wall(it.lastMs)} · ${MonitorSeenClock.ago((nowWallMs - it.lastMs).coerceAtLeast(0))}" }
+                            ?: if (deviceStatus[device.mac] == "Recorded") "Recorded"
+                            else MonitorSeenClock.ago((newest - device.lastMs).coerceAtLeast(0)),
                         guess.vendor ?: "—",
                         deviceStatus[device.mac] ?: if (referenceMs == null) "New" else "Replay",
                         device.bestRssi?.let { "$it dBm" } ?: "—",
                         device.channels.joinToString().ifBlank { "—" },
                         device.securityDetails.ifBlank { "—" },
                         device.wpsDetails.ifBlank { "—" },
-                        if (deviceStatus[device.mac] == "Recorded") "Recorded" else relativeSeen((newest - device.lastMs).coerceAtLeast(0)),
+                        seen[device.mac]?.let { wall(it.firstMs) } ?: "—",
                         SniffedDevices.activity(device).ifBlank { guess.kind.label },
                         guess.reasons.joinToString("; ").ifBlank { "No identifying evidence" },
                     ),

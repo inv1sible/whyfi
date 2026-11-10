@@ -93,15 +93,24 @@ internal object MonitorReportContent {
     }
 
     /** Section 4: every device in the inventory, most recently heard first. */
-    fun devicesTable(devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>>): ReportTable = ReportTable(
+    fun devicesTable(
+        devices: List<Pair<SniffedDevices.Device, SniffedDevices.Guess>>,
+        seen: Map<String, MonitorSeenClock.Span> = emptyMap(),
+        time: (Long) -> String = { it.toString() },
+    ): ReportTable = ReportTable(
         columns = listOf(
-            ReportColumn("MAC", 1.45f, CellKind.MONO), ReportColumn("Name / vendor", 1.9f), ReportColumn("Type", 1.15f),
-            ReportColumn("Best RSSI", 0.7f, CellKind.NUMBER), ReportColumn("Channels", 0.85f),
-            ReportColumn("Frames", 0.75f, CellKind.NUMBER), ReportColumn("Probes", 0.6f, CellKind.NUMBER),
+            ReportColumn("MAC", 1.45f, CellKind.MONO), ReportColumn("Name / vendor", 1.75f), ReportColumn("Type", 1.05f),
+            ReportColumn("First seen", 0.95f, CellKind.MONO), ReportColumn("Last seen", 0.95f, CellKind.MONO),
+            ReportColumn("Best RSSI", 0.7f, CellKind.NUMBER), ReportColumn("Channels", 0.8f),
+            ReportColumn("Frames", 0.7f, CellKind.NUMBER), ReportColumn("Probes", 0.6f, CellKind.NUMBER),
         ),
-        rows = devices.sortedByDescending { it.first.lastMs }.map { (d, g) ->
+        rows = devices.sortedWith(compareByDescending<Pair<SniffedDevices.Device, SniffedDevices.Guess>> {
+            seen[it.first.mac]?.lastMs ?: Long.MIN_VALUE
+        }.thenByDescending { it.first.lastMs }).map { (d, g) ->
+            val span = seen[d.mac]
             listOf(
                 d.mac, SniffedDevices.displayName(d, g), g.kind.label,
+                span?.let { time(it.firstMs) } ?: "–", span?.let { time(it.lastMs) } ?: "–",
                 d.bestRssi?.let { "$it dBm" } ?: "?", d.channels.sorted().joinToString(", ").ifBlank { "–" },
                 number(d.frames), number(d.probeRequests),
             )

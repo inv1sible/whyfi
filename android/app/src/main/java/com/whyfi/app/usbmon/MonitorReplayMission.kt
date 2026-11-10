@@ -22,15 +22,27 @@ internal data class MonitorReplayMission(
     private var inventory = emptyList<SniffedDevices.Device>()
     private var nextSnapshot = 0
     private var previousCutoff = Long.MIN_VALUE
+    private val seen = HashMap<String, MonitorSeenClock.Span>()
     @Synchronized
     fun devicesAt(cutoffMs: Long): List<Pair<SniffedDevices.Device, SniffedDevices.Guess>> {
-        if (cutoffMs < previousCutoff) { inventory = emptyList(); nextSnapshot = 0 }
+        if (cutoffMs < previousCutoff) { inventory = emptyList(); nextSnapshot = 0; seen.clear() }
         while (nextSnapshot < parsedSnapshots.size && parsedSnapshots[nextSnapshot].first.atMs <= cutoffMs) {
-            inventory = MonitorInventory.merge(inventory, parsedSnapshots[nextSnapshot++].second)
+            val (snapshot, devices) = parsedSnapshots[nextSnapshot++]
+            inventory = MonitorInventory.merge(inventory, devices)
+            MonitorSeenClock.merge(seen, MonitorSeenClock.spans(devices, snapshot.atMs, snapshot.clockMs))
         }
         previousCutoff = cutoffMs
         return inventory.map { d -> d to SniffedDevices.guess(d) { vendors?.vendorOf(it) } }
     }
+    /** Wall-clock first/last seen up to the last [devicesAt] cutoff. */
+    @Synchronized
+    fun seenSpans(): Map<String, MonitorSeenClock.Span> = HashMap(seen)
+
+    /** Legacy devices carry wall times already. */
+    fun legacySeenAt(cutoffMs: Long): Map<String, MonitorSeenClock.Span> =
+        samples.filter { it.atMs <= cutoffMs }.groupBy { it.mac }
+            .mapValues { (_, r) -> MonitorSeenClock.Span(r.minOf { it.atMs }, r.maxOf { it.atMs }) }
+
     val timeline: Pair<Long, Long> by lazy {
         val times = samples.map { it.atMs } + events.map { it.atMs } + snapshots.map { it.atMs } +
             receiverFixes.map { it.atMs } + deviceSamples.map { it.atMs }

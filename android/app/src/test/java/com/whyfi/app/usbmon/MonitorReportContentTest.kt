@@ -39,7 +39,22 @@ class MonitorReportContentTest {
             device("00:00:00:00:00:01", "Old", lastMs = 1) to guess,
             device("00:00:00:00:00:02", "New", lastMs = 9) to guess,
         ))
-        assertEquals(listOf("00:00:00:00:00:02", "New", "Access point", "-55 dBm", "1, 11", "1,234", "3"), table.rows[0])
+        assertEquals(listOf("00:00:00:00:00:02", "New", "Access point", "–", "–", "-55 dBm", "1, 11", "1,234", "3"), table.rows[0])
+    }
+
+    @Test
+    fun devicesShowWallClockSeenAndSortByIt() {
+        // A continued mission: capture-relative lastMs no longer orders devices.
+        val seen = mapOf(
+            "00:00:00:00:00:01" to MonitorSeenClock.Span(100, 5_000),
+            "00:00:00:00:00:02" to MonitorSeenClock.Span(200, 900),
+        )
+        val table = MonitorReportContent.devicesTable(listOf(
+            device("00:00:00:00:00:01", "Old", lastMs = 1) to guess,
+            device("00:00:00:00:00:02", "New", lastMs = 9) to guess,
+        ), seen) { "t$it" }
+        assertEquals(listOf("00:00:00:00:00:01", "t100", "t5000"), table.rows[0].let { listOf(it[0], it[3], it[4]) })
+        assertEquals(table.columns.size, table.rows[0].size)
     }
 
     @Test
