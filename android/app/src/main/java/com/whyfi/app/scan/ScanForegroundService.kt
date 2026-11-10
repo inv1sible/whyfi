@@ -942,7 +942,16 @@ class ScanForegroundService : Service() {
                 }
             }
             val poller = launch {
+                var ticks = 0
                 while (isActive) {
+                    // Once a minute: memory, heat and battery (DeviceHealth).
+                    if (ticks++ % 30 == 0) runCatching {
+                        val health = com.whyfi.app.diagnostics.DeviceHealth.line(applicationContext)
+                        withContext(Dispatchers.IO) {
+                            MonitorMission.append(mission, "health", health)
+                            com.whyfi.app.diagnostics.DiagnosticTrace.log(applicationContext, "USB capture health: $health")
+                        }
+                    }
                     delay(2_000)
                     snapshot()
                 }

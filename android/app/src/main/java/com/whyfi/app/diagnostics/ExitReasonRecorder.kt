@@ -42,6 +42,9 @@ object ExitReasonRecorder {
             val kind = when (exit.reason) {
                 ApplicationExitInfo.REASON_CRASH_NATIVE -> "Native crash"
                 ApplicationExitInfo.REASON_ANR -> "App not responding (ANR)"
+                // Not crashes, but Android ending a long capture: say so.
+                ApplicationExitInfo.REASON_LOW_MEMORY -> "Stopped by Android: low memory"
+                ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "Stopped by Android: excessive resource use"
                 else -> null
             } ?: continue
             val body = ExitReportFormatter.format(

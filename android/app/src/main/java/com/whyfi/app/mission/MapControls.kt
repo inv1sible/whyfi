@@ -11,6 +11,15 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -19,8 +28,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -44,24 +51,48 @@ fun MapLayerChip(label: String, selected: Boolean, onClick: () -> Unit) {
     FilterChip(selected, onClick, label = { Text(label, maxLines = 1) })
 }
 
-/** ⓘ location details, ⟳ reload, ⌖ follow my position. */
+/**
+ * The map buttons, floating on the map itself at its lower right, the same
+ * on both maps (user, 2026-11-10: recentering was hard to find while
+ * driving). Bottom up, so the most used is nearest the thumb: ⌖ follow my
+ * position (tap to recenter and follow, again to stop), ⟳ reload,
+ * ⓘ location details, ◧ map layers ([layers] in a panel above the buttons).
+ */
 @Composable
-fun MapButtons(
+fun MapOverlayControls(
+    modifier: Modifier = Modifier,
     detailsOpen: Boolean, onDetails: () -> Unit,
     onRefresh: () -> Unit,
     follow: Boolean, onFollowChange: (Boolean) -> Unit,
+    layers: @Composable ColumnScope.() -> Unit,
 ) {
-    IconButton(onDetails, modifier = Modifier.size(40.dp).semantics {
-        contentDescription = if (detailsOpen) "Hide location details" else "Show location details"
-    }) { Text("ⓘ", style = MaterialTheme.typography.titleLarge) }
-    IconButton(onRefresh, modifier = Modifier.size(40.dp).semantics {
-        contentDescription = "Reload readings"
-    }) { Text("⟳", style = MaterialTheme.typography.titleLarge) }
-    IconToggleButton(follow, onFollowChange, modifier = Modifier.size(40.dp).semantics {
-        contentDescription = if (follow) "Stop following my position" else "Follow my position"
-    }) {
-        Text("⌖", style = MaterialTheme.typography.titleLarge,
-            color = if (follow) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+    var layersOpen by rememberSaveable { mutableStateOf(false) }
+    Column(modifier.padding(10.dp), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        AnimatedVisibility(layersOpen) {
+            Surface(shape = RoundedCornerShape(12.dp), tonalElevation = 6.dp, shadowElevation = 6.dp) {
+                Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), content = layers)
+            }
+        }
+        OverlayButton("◧", layersOpen, if (layersOpen) "Hide map layers" else "Show map layers") { layersOpen = !layersOpen }
+        OverlayButton("ⓘ", detailsOpen, if (detailsOpen) "Hide location details" else "Show location details", onDetails)
+        OverlayButton("⟳", false, "Reload readings", onRefresh)
+        OverlayButton("⌖", follow, if (follow) "Stop following my position" else "Center on my position and follow") { onFollowChange(!follow) }
+    }
+}
+
+/** One round button over the map, highlighted while [active]. 48 dp so it
+ * can be hit in a car mount. */
+@Composable
+private fun OverlayButton(glyph: String, active: Boolean, description: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+        contentColor = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+        shadowElevation = 4.dp,
+        modifier = Modifier.size(48.dp).semantics { contentDescription = description },
+    ) {
+        Box(contentAlignment = Alignment.Center) { Text(glyph, style = MaterialTheme.typography.titleLarge) }
     }
 }
 

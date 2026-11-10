@@ -601,6 +601,7 @@ private fun MonitorWorkspace(
                 }, activeLogPath = state.missionLogPath.takeIf { state.running },
                 modifier = Modifier.weight(1f))
         } else if (selected == MonitorTab.MAPPING) {
+          Box(Modifier.weight(1f).fillMaxWidth()) {
             MonitorMappingView(context, state, favorites, if (replaying) emptySet() else
                 resolvedHiddenAps.filterNot { it.startsWith("ssid:") }.toSet() +
                     displayDevices.filter { MonitorApVisibility.isHidden(it.first, resolvedHiddenAps) }.map { it.first.mac },
@@ -612,9 +613,26 @@ private fun MonitorWorkspace(
                     selectedLocationMac = mac
                     followMe = false
                 }, onFavoriteAp = toggleFavorite,
-                Modifier.weight(1f), onUserPan = { followMe = false }, liveLocations = liveLocations.values.toList(),
+                Modifier.fillMaxSize(), onUserPan = { followMe = false }, liveLocations = liveLocations.values.toList(),
                 onLocationPermissionChanged = { locationPermissionRevision++ },
                 layers = MonitorMapLayers(mapAccuracy, mapCones, mapReadings, mapPath))
+            // Same buttons and layers as the phone's Mission map, on the map
+            // itself, live and in replay (mission.MapOverlayControls).
+            com.whyfi.app.mission.MapOverlayControls(
+                Modifier.align(Alignment.BottomEnd),
+                detailsOpen = showLocationDetails, onDetails = { showLocationDetails = !showLocationDetails },
+                onRefresh = { locationRefresh++ },
+                follow = followMe, onFollowChange = { enabled ->
+                    followMe = enabled
+                    if (enabled) { selectedLocationMac = null; locationRecenter++ }
+                },
+            ) {
+                com.whyfi.app.mission.MapLayerChip("◎ Accuracy", mapAccuracy) { mapAccuracy = !mapAccuracy }
+                com.whyfi.app.mission.MapLayerChip("Cones", mapCones) { mapCones = !mapCones }
+                com.whyfi.app.mission.MapLayerChip("Readings", mapReadings) { mapReadings = !mapReadings }
+                com.whyfi.app.mission.MapLayerChip("Path", mapPath) { mapPath = !mapPath }
+            }
+          }
         } else {
             if (replaying && activeReplay?.snapshots?.isEmpty() == true) Text(
                 "This older mission did not save device roles or category snapshots.",
@@ -638,14 +656,6 @@ private fun MonitorWorkspace(
             }
             Surface(Modifier.fillMaxWidth(), tonalElevation = 5.dp, shadowElevation = 5.dp) {
                 Column(Modifier.padding(horizontal = 10.dp, vertical = 5.dp)) {
-                    // Layer toggles while replaying (live: in the controls row below).
-                    if (selected == MonitorTab.MAPPING && replaying) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        com.whyfi.app.mission.MapLayerChip("◎ Accuracy", mapAccuracy) { mapAccuracy = !mapAccuracy }
-                        com.whyfi.app.mission.MapLayerChip("Cones", mapCones) { mapCones = !mapCones }
-                        com.whyfi.app.mission.MapLayerChip("Readings", mapReadings) { mapReadings = !mapReadings }
-                        com.whyfi.app.mission.MapLayerChip("Path", mapPath) { mapPath = !mapPath }
-                    }
                     if (replaying && selected != MonitorTab.NEARBY) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton({
@@ -665,37 +675,21 @@ private fun MonitorWorkspace(
                                 selectedLocationMac = null
                                 locationTargets = emptyList()
                             }) { Text("Live") }
-                            if (selected == MonitorTab.MAPPING) {
-                                com.whyfi.app.mission.MapButtons(showLocationDetails, { showLocationDetails = !showLocationDetails },
-                                    { locationRefresh++ }, followMe, { enabled ->
-                                        followMe = enabled
-                                        if (enabled) { selectedLocationMac = null; locationRecenter++ }
-                                    })
-                            }
                         }
                     } else if (selected == MonitorTab.MAPPING) {
-                        // Laid out like the phone's Mission controls bar:
-                        // status, then one row with Start/Stop, the layer
-                        // toggles and ⓘ ⟳ ⌖ (PCAP stays on the Scan tab).
-                        Text(locationSummary, modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                            style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        // Like the phone's Mission bar: Start/Stop and the
+                        // status; the map's buttons and layers float on the
+                        // map (PCAP stays on the Scan tab).
+                        Row(Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             if (state.running) Button({ service?.stopMonitor() },
                                 enabled = state.status != "Starting…" && state.status != "Stopping…" &&
                                     state.status != "Saving capture…") { Text("Stop") }
                             else Button(startMonitor, enabled = !starting && continuingMissionId == null && selectedDevice != null) {
                                 Text(if (starting) "Starting…" else "Start")
                             }
-                            com.whyfi.app.mission.MapLayerChip("◎ Accuracy", mapAccuracy) { mapAccuracy = !mapAccuracy }
-                            com.whyfi.app.mission.MapLayerChip("Cones", mapCones) { mapCones = !mapCones }
-                            com.whyfi.app.mission.MapLayerChip("Readings", mapReadings) { mapReadings = !mapReadings }
-                            com.whyfi.app.mission.MapLayerChip("Path", mapPath) { mapPath = !mapPath }
-                            com.whyfi.app.mission.MapButtons(showLocationDetails, { showLocationDetails = !showLocationDetails },
-                                { locationRefresh++ }, followMe, { enabled ->
-                                    followMe = enabled
-                                    if (enabled) { selectedLocationMac = null; locationRecenter++ }
-                                })
+                            Text(locationSummary, modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall, maxLines = 2)
                         }
                     } else {
                         Text(if (selected == MonitorTab.MAPPING) locationSummary
@@ -726,13 +720,7 @@ private fun MonitorWorkspace(
                             }, enabled = !state.running)
                             Text(if (recordPcap) "PCAP on" else "PCAP off", style = MaterialTheme.typography.bodySmall)
                             Spacer(Modifier.weight(1f))
-                            if (selected == MonitorTab.MAPPING) {
-                                com.whyfi.app.mission.MapButtons(showLocationDetails, { showLocationDetails = !showLocationDetails },
-                                    { locationRefresh++ }, followMe, { enabled ->
-                                        followMe = enabled
-                                        if (enabled) { selectedLocationMac = null; locationRecenter++ }
-                                    })
-                            } else if (selected == MonitorTab.NEARBY) {
+                            if (selected == MonitorTab.NEARBY) {
                                 TextButton({ showChannels = !showChannels }) {
                                     Text(if (showChannels) "Channels ▼" else "Channels ▲")
                                 }

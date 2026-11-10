@@ -243,6 +243,20 @@ fun MissionScreen(
                 Text("Close readings (round shapes) are readings taken too near the estimated position to draw a cone.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            // Same buttons and layers as the USB Mission map (MapControls.kt).
+            MapOverlayControls(
+                Modifier.align(Alignment.BottomEnd),
+                detailsOpen = showDetails, onDetails = { showDetails = !showDetails },
+                onRefresh = { uiState.target?.let { runTarget(it, nearRadius) } ?: recenter++ },
+                follow = follow, onFollowChange = { on -> follow = on; recenter++ },
+            ) {
+                MapLayerChip("◎ Accuracy", showAccuracy) { showAccuracy = !showAccuracy }
+                MapLayerChip("Cones", showCones) { showCones = !showCones }
+                MapLayerChip("Close", showClose) { showClose = !showClose }
+                MapLayerChip("Readings", showReadings) { showReadings = !showReadings }
+                MapLayerChip("24 h", last24h) { last24h = !last24h }
+                MapLayerChip("Latest", latest) { latest = !latest }
+            }
         }
 
         // Controls: status, Track and the display options.
@@ -276,14 +290,11 @@ fun MissionScreen(
                     else if (!locationOn) TextButton({
                         runCatching { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
                     }) { Text("Turn on") }
-                }
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
                     // Tracking is the only thing that scans and reloads by
-                    // itself; without it a picked target loads once.
+                    // itself; without it a picked target loads once. The
+                    // map's own buttons and layers float on the map.
+                    Text(if (uiState.isTracking) "Tracking" else "Track", style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(horizontal = 6.dp))
                     Switch(
                         checked = uiState.isTracking,
                         enabled = uiState.target != null,
@@ -292,17 +303,6 @@ fun MissionScreen(
                             if (tracking) missionController.start(target, service, nearRadius) else missionController.stop()
                         },
                     )
-                    Text(if (uiState.isTracking) "Tracking" else "Track", style = MaterialTheme.typography.bodyMedium)
-                    // Same toggles and buttons as the USB Mission map (MapControls.kt).
-                    MapLayerChip("◎ Accuracy", showAccuracy) { showAccuracy = !showAccuracy }
-                    MapLayerChip("Cones", showCones) { showCones = !showCones }
-                    MapLayerChip("Close", showClose) { showClose = !showClose }
-                    MapLayerChip("Readings", showReadings) { showReadings = !showReadings }
-                    MapLayerChip("24 h", last24h) { last24h = !last24h }
-                    MapLayerChip("Latest", latest) { latest = !latest }
-                    MapButtons(showDetails, { showDetails = !showDetails },
-                        onRefresh = { uiState.target?.let { runTarget(it, nearRadius) } ?: recenter++ },
-                        follow = follow, onFollowChange = { on -> follow = on; recenter++ })
                 }
             }
         }

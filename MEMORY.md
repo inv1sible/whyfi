@@ -232,7 +232,18 @@ stale, and don't duplicate what's already obvious from code/tests.
 - **USB Scan tab "⏱ Seen" filter** (v108, 2026-11-10): All / 1 / 2 / 5 /
   10 / 60 min (`usbmon/MonitorAgeFilter.kt`, `monitorSeenWithinMin`),
   measured from the newest device heard; favorites always shown. Phone
-  results need none (they show the last pass only). 📍 on a phone results
+  results need none (they show the last pass only).
+- **Map controls float on the map** (v109, 2026-11-10, user: recentering
+  was hard to find while driving): `MapOverlayControls` (MapControls.kt) at
+  the map's lower right on both maps, bottom up ⌖ follow, ⟳, ⓘ, ◧ layers
+  (panel with the layer chips). Bars below keep status + Track (phone) or
+  Start/Stop (USB). `MapButtons` is gone.
+- **Capture health logging** (v109): USB capture writes a `health` event
+  (heap, native heap, thermal status, battery) to the mission log and the
+  diagnostic trace once a minute; ExitReasonRecorder also records
+  LOW_MEMORY and EXCESSIVE_RESOURCE_USAGE exits. Investigating: capture
+  stopped after 5–6 min while driving and the phone UI froze (earlier, a
+  2026-11-07 OOM crash at the 256 MB heap limit is on the server). 📍 on a phone results
   row or a USB Scan card opens that device on its Mission map; a located
   non-favorite gets its own chip on phone Mission (☆ stars it).
 - **Both maps share controls** (`mission/MapControls.kt`): `MapLayerChip`,
