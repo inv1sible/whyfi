@@ -152,6 +152,8 @@ private fun MonitorWorkspace(
     val hiddenAps by settingsRepository.hiddenApKeys.collectAsState()
     var showHiddenAps by rememberSaveable { mutableStateOf(false) }
     var hideNoise by remember { mutableStateOf(settingsRepository.monitorHideNoise) }
+    var seenWithinMin by remember { mutableIntStateOf(settingsRepository.monitorSeenWithinMin) }
+    var seenMenu by remember { mutableStateOf(false) }
     val noisePatterns = remember { MonitorNoiseFilter.compile(settingsRepository.monitorNoisePatterns).patterns }
     var focusedKind by remember { mutableStateOf<SniffedDevices.Kind?>(null) }
     var autoUpdate by rememberSaveable { mutableStateOf(true) }
@@ -290,7 +292,11 @@ private fun MonitorWorkspace(
     val selected = MonitorTab.entries.firstOrNull { it.name == selectedName }
         ?.let { if (it == MonitorTab.NET_OPS) DEVICE_CATEGORIES.firstOrNull { c -> c.name == lastCategoryName } ?: MonitorTab.NET_OPS else it }
         ?: MonitorTab.NEARBY
-    val nearbyDevices = displayDevices.filter {
+    val newestHeardMs = displayDevices.maxOfOrNull { it.first.lastMs } ?: 0L
+    val recentDevices = displayDevices.filter {
+        MonitorAgeFilter.keep(it.first, newestHeardMs, seenWithinMin, it.first.mac in favorites)
+    }
+    val nearbyDevices = (if (showHiddenAps) displayDevices else recentDevices).filter {
         (focusedKind == null || it.second.kind == focusedKind) || (showHiddenAps && MonitorApVisibility.isHidden(it.first, resolvedHiddenAps))
     }
     val noiseCount = nearbyDevices.count { row ->
@@ -753,6 +759,23 @@ private fun MonitorWorkspace(
                 horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 FilterChip(matchesFirst, { focusedKind = null; matchesFirst = !matchesFirst; recordAction("matches_first", matchesFirst.toString()) },
                     label = { Text("Matches first (${matchedMacs.size})") })
+                if (selected == MonitorTab.NEARBY) Box {
+                    FilterChip(seenWithinMin > 0, { seenMenu = true },
+                        label = { Text(MonitorAgeFilter.label(seenWithinMin) +
+                            if (seenWithinMin > 0) " (${recentDevices.size}/${displayDevices.size})" else "") })
+                    DropdownMenu(seenMenu, { seenMenu = false }) {
+                        MonitorAgeFilter.OPTIONS.forEach { minutes ->
+                            DropdownMenuItem(
+                                text = { Text(if (minutes == 0) "All devices" else "Seen in the last $minutes min") },
+                                onClick = {
+                                    seenMenu = false
+                                    seenWithinMin = minutes
+                                    settingsRepository.monitorSeenWithinMin = minutes
+                                    recordAction("seen_filter", minutes.toString())
+                                })
+                        }
+                    }
+                }
                 if (selected == MonitorTab.NEARBY) FilterChip(showHiddenAps,
                     { focusedKind = null; showHiddenAps = !showHiddenAps }, label = { Text("⊘ Hidden APs (${resolvedHiddenAps.size})") })
                 if (selected == MonitorTab.NEARBY) FilterChip(hideNoise, {

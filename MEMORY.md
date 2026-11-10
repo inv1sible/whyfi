@@ -228,7 +228,11 @@ stale, and don't duplicate what's already obvious from code/tests.
   "ssid:<name>" or lowercase BSSID; phone Wi‑Fi uses
   `FavoritesRepository.wifiHiddenKey`. Mission reset/delete no longer clears
   it; continuing a mission merges its hidden APs in. Missions still log
-  `ap_hidden` events. BLE/cell hidden lists stay phone-only. 📍 on a phone results
+  `ap_hidden` events. BLE/cell hidden lists stay phone-only.
+- **USB Scan tab "⏱ Seen" filter** (v108, 2026-11-10): All / 1 / 2 / 5 /
+  10 / 60 min (`usbmon/MonitorAgeFilter.kt`, `monitorSeenWithinMin`),
+  measured from the newest device heard; favorites always shown. Phone
+  results need none (they show the last pass only). 📍 on a phone results
   row or a USB Scan card opens that device on its Mission map; a located
   non-favorite gets its own chip on phone Mission (☆ stars it).
 - **Both maps share controls** (`mission/MapControls.kt`): `MapLayerChip`,

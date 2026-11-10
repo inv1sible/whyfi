@@ -160,6 +160,11 @@ class SettingsRepository(context: Context) {
         get() = prefs.getString("monitor_tab", null)
         set(value) = prefs.edit { putString("monitor_tab", value) }
 
+    /** USB Scan tab "⏱ Seen" filter in minutes, 0 = all (MonitorAgeFilter). */
+    var monitorSeenWithinMin: Int
+        get() = prefs.getInt("monitor_seen_within_min", 0)
+        set(value) = prefs.edit { putInt("monitor_seen_within_min", value) }
+
     var monitorHideNoise: Boolean
         get() = prefs.getBoolean("monitor_hide_noise", false)
         set(value) = prefs.edit { putBoolean("monitor_hide_noise", value) }
