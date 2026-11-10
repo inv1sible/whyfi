@@ -16,6 +16,9 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -44,6 +47,27 @@ import androidx.core.content.ContextCompat
  * Mission tab, so both look and work the same (user, 2026-11-09): layer
  * toggles, the ⓘ ⟳ ⌖ buttons and the location stats.
  */
+
+/** The "⏱ Seen" time filter, the same chip and choices everywhere (USB
+ * Scan, Net ops and Mission map; phone Mission map): any time, or only the
+ * last 1, 2, 5, 10 or 60 minutes. [counts] e.g. "12/40" while filtering. */
+@Composable
+fun SeenFilterChip(minutes: Int, counts: String?, onChange: (Int) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        FilterChip(minutes > 0, { open = true }, label = {
+            Text(com.whyfi.app.usbmon.MonitorAgeFilter.label(minutes) + (counts?.takeIf { minutes > 0 }?.let { " ($it)" } ?: ""), maxLines = 1)
+        })
+        DropdownMenu(open, { open = false }) {
+            com.whyfi.app.usbmon.MonitorAgeFilter.OPTIONS.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(if (option == 0) "Any time" else "Seen in the last $option min") },
+                    onClick = { open = false; onChange(option) },
+                )
+            }
+        }
+    }
+}
 
 /** One layer toggle in a map's controls bar. */
 @Composable

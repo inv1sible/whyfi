@@ -165,6 +165,11 @@ class SettingsRepository(context: Context) {
         get() = prefs.getInt("monitor_seen_within_min", 0)
         set(value) = prefs.edit { putInt("monitor_seen_within_min", value) }
 
+    /** Phone Mission map "⏱ Seen" filter in minutes, 0 = any time. */
+    var missionSeenWithinMin: Int
+        get() = prefs.getInt("mission_seen_within_min", 0)
+        set(value) = prefs.edit { putInt("mission_seen_within_min", value) }
+
     var monitorHideNoise: Boolean
         get() = prefs.getBoolean("monitor_hide_noise", false)
         set(value) = prefs.edit { putBoolean("monitor_hide_noise", value) }

@@ -232,7 +232,13 @@ stale, and don't duplicate what's already obvious from code/tests.
 - **USB Scan tab "⏱ Seen" filter** (v108, 2026-11-10): All / 1 / 2 / 5 /
   10 / 60 min (`usbmon/MonitorAgeFilter.kt`, `monitorSeenWithinMin`),
   measured from the newest device heard; favorites always shown. Phone
-  results need none (they show the last pass only).
+  results need none (they show the last pass only). v110: one shared chip
+  `SeenFilterChip` (MapControls.kt), labelled "⏱ Seen: any time" / "⏱ Seen
+  ≤ N min" (the user didn't recognise "⏱ All"), first in the USB Scan and
+  Net ops bars and the USB Mission device bar (stale MACs join the map's
+  exclusion set), and first in the phone Mission device bar (readings by
+  age, `missionSeenWithinMin`). Phone Mission Track is a Start/Stop button
+  like USB. USB replay already has a time slider.
 - **Map controls float on the map** (v109, 2026-11-10, user: recentering
   was hard to find while driving): `MapOverlayControls` (MapControls.kt) at
   the map's lower right on both maps, bottom up ⌖ follow, ⟳, ⓘ, ◧ layers

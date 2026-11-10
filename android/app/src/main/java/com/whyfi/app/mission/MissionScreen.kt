@@ -35,6 +35,8 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Button
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -162,13 +164,19 @@ fun MissionScreen(
     var showReadings by rememberSaveable { mutableStateOf(true) }
     var last24h by rememberSaveable { mutableStateOf(false) }
     var latest by rememberSaveable { mutableStateOf(false) }
+    // ⏱ Seen: only readings from the last few minutes (same chip as USB).
+    val settings = remember { com.whyfi.app.data.SettingsRepository(context) }
+    var seenWithinMin by remember { mutableIntStateOf(settings.missionSeenWithinMin) }
+    var wallNow by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(seenWithinMin) { while (seenWithinMin > 0) { wallNow = System.currentTimeMillis(); kotlinx.coroutines.delay(5_000) } }
     var follow by rememberSaveable { mutableStateOf(false) }
     var showDetails by rememberSaveable { mutableStateOf(false) }
     var recenter by remember { mutableIntStateOf(0) }
     val now = remember(uiState.points, last24h) { System.currentTimeMillis() }
-    val shown = remember(uiState.points, last24h, latest, now) {
+    val shown = remember(uiState.points, last24h, latest, now, seenWithinMin, wallNow) {
         val day = if (!last24h) uiState.points else uiState.points.filter { (it.atMs ?: 0L) >= now - DAY_MS }
-        if (latest) LocalMissionPoints.latestSession(day) else day
+        val session = if (latest) LocalMissionPoints.latestSession(day) else day
+        if (seenWithinMin <= 0) session else session.filter { (it.atMs ?: 0L) >= wallNow - seenWithinMin * 60_000L }
     }
     // The server's estimate covers every reading; once filtered, the cone
     // points from the filtered readings' own centroid instead.
@@ -262,7 +270,14 @@ fun MissionScreen(
         // Controls: status, Track and the display options.
         Surface(Modifier.fillMaxWidth(), tonalElevation = 5.dp, shadowElevation = 5.dp) {
             Column(Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Start/Stop tracking, like whyfi USB's Start/Stop:
+                    // tracking scans and reloads by itself; without it a
+                    // picked target loads once. The map's own buttons and
+                    // layers float on the map.
+                    if (uiState.isTracking) Button({ missionController.stop() }) { Text("Stop") }
+                    else Button({ uiState.target?.let { missionController.start(it, service, nearRadius) } },
+                        enabled = uiState.target != null) { Text("Start") }
                     Text(
                         when {
                             !hasLocation -> "Mission needs location permission."
@@ -272,6 +287,7 @@ fun MissionScreen(
                                 (statusBarText(uiState.copy(points = shown)) +
                                     when {
                                         uiState.target == null -> ""
+                                        seenWithinMin > 0 -> " (last $seenWithinMin min)"
                                         latest && last24h -> " (latest session, last 24 h)"
                                         latest -> " (latest session)"
                                         last24h -> " (last 24 h)"
@@ -290,34 +306,25 @@ fun MissionScreen(
                     else if (!locationOn) TextButton({
                         runCatching { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
                     }) { Text("Turn on") }
-                    // Tracking is the only thing that scans and reloads by
-                    // itself; without it a picked target loads once. The
-                    // map's own buttons and layers float on the map.
-                    Text(if (uiState.isTracking) "Tracking" else "Track", style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(horizontal = 6.dp))
-                    Switch(
-                        checked = uiState.isTracking,
-                        enabled = uiState.target != null,
-                        onCheckedChange = { tracking ->
-                            val target = uiState.target ?: return@Switch
-                            if (tracking) missionController.start(target, service, nearRadius) else missionController.stop()
-                        },
-                    )
                 }
             }
         }
 
-        // Devices to track.
-        if (chips.isEmpty()) {
-            Text(
-                "No favorites yet. Star a Wi‑Fi network, BLE device or cell tower in its results (Scan → Wi‑Fi/BLE/Cellular) to track it here.",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            )
-        } else Row(
+        // Devices to track, after the ⏱ Seen filter (as on whyfi USB).
+        Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+            SeenFilterChip(seenWithinMin, uiState.target?.let { "${shown.size}/${uiState.points.size}" }) { minutes ->
+                seenWithinMin = minutes
+                settings.missionSeenWithinMin = minutes
+            }
+            if (chips.isEmpty()) Text(
+                "No favorites yet. Star a Wi‑Fi network, BLE device or cell tower in its results (Scan → Wi‑Fi/BLE/Cellular) to track it here.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.widthIn(max = 300.dp).padding(horizontal = 4.dp, vertical = 8.dp),
+            )
             chips.forEach { target ->
                 val favorite = target in targets
                 FilterChip(

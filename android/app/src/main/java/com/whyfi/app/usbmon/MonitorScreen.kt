@@ -153,7 +153,6 @@ private fun MonitorWorkspace(
     var showHiddenAps by rememberSaveable { mutableStateOf(false) }
     var hideNoise by remember { mutableStateOf(settingsRepository.monitorHideNoise) }
     var seenWithinMin by remember { mutableIntStateOf(settingsRepository.monitorSeenWithinMin) }
-    var seenMenu by remember { mutableStateOf(false) }
     val noisePatterns = remember { MonitorNoiseFilter.compile(settingsRepository.monitorNoisePatterns).patterns }
     var focusedKind by remember { mutableStateOf<SniffedDevices.Kind?>(null) }
     var autoUpdate by rememberSaveable { mutableStateOf(true) }
@@ -303,7 +302,11 @@ private fun MonitorWorkspace(
         row.first.mac !in favorites && !MonitorApVisibility.isHidden(row.first, resolvedHiddenAps) &&
             MonitorNoiseFilter.matches(row, noisePatterns)
     }
+    // ⏱ Seen: one setting for Scan, Net ops and the Mission map.
+    val ageBase = if (replaying) replayDevices else displayDevices
+    val staleMacs = remember(ageBase, seenWithinMin, favorites) { MonitorAgeFilter.staleMacs(ageBase, seenWithinMin, favorites) }
     val categoryDevices = (if (replaying) replayDevices else displayDevices)
+        .filter { it.first.mac !in staleMacs }
         .filter { (focusedKind == null || sectionOf(selected) == MonitorSection.NET_OPS || it.second.kind == focusedKind) && (replaying || !MonitorApVisibility.isHidden(it.first, resolvedHiddenAps)) }
     val newDevices = state.devices.count { incoming -> displayDevices.none { it.first.mac == incoming.first.mac } }
 
@@ -312,6 +315,11 @@ private fun MonitorWorkspace(
         else MonitorMission.resume(context, settingsRepository.activeMonitorMissionId, false)?.let {
             MonitorMission.append(it, event, details)
         }
+    }
+    val setSeenWithin: (Int) -> Unit = { minutes ->
+        seenWithinMin = minutes
+        settingsRepository.monitorSeenWithinMin = minutes
+        if (!replaying) recordAction("seen_filter", minutes.toString())
     }
 
     val setChannels: (Set<Int>) -> Unit = {
@@ -602,7 +610,7 @@ private fun MonitorWorkspace(
                 modifier = Modifier.weight(1f))
         } else if (selected == MonitorTab.MAPPING) {
           Box(Modifier.weight(1f).fillMaxWidth()) {
-            MonitorMappingView(context, state, favorites, if (replaying) emptySet() else
+            MonitorMappingView(context, state, favorites, staleMacs + if (replaying) emptySet() else
                 resolvedHiddenAps.filterNot { it.startsWith("ssid:") }.toSet() +
                     displayDevices.filter { MonitorApVisibility.isHidden(it.first, resolvedHiddenAps) }.map { it.first.mac },
                 settingsRepository.activeMonitorMissionId,
@@ -736,6 +744,7 @@ private fun MonitorWorkspace(
             // like the phone's Mission favorites. "All" clears the focus.
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                com.whyfi.app.mission.SeenFilterChip(seenWithinMin, null, setSeenWithin)
                 FilterChip(selectedTarget == null, { selectedLocationMac = null; focusedKind = null }, label = { Text("All") })
                 locationTargets.forEach { target ->
                     FilterChip(selectedTarget == target.mac, { selectedLocationMac = if (selectedTarget == target.mac) null else target.mac; followMe = false },
@@ -745,25 +754,10 @@ private fun MonitorWorkspace(
         } else if (selected != MonitorTab.MISSIONS && selected != MonitorTab.MAPPING && selected != MonitorTab.SETUP) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                com.whyfi.app.mission.SeenFilterChip(seenWithinMin,
+                    "${ageBase.size - staleMacs.size}/${ageBase.size}", setSeenWithin)
                 FilterChip(matchesFirst, { focusedKind = null; matchesFirst = !matchesFirst; recordAction("matches_first", matchesFirst.toString()) },
                     label = { Text("Matches first (${matchedMacs.size})") })
-                if (selected == MonitorTab.NEARBY) Box {
-                    FilterChip(seenWithinMin > 0, { seenMenu = true },
-                        label = { Text(MonitorAgeFilter.label(seenWithinMin) +
-                            if (seenWithinMin > 0) " (${recentDevices.size}/${displayDevices.size})" else "") })
-                    DropdownMenu(seenMenu, { seenMenu = false }) {
-                        MonitorAgeFilter.OPTIONS.forEach { minutes ->
-                            DropdownMenuItem(
-                                text = { Text(if (minutes == 0) "All devices" else "Seen in the last $minutes min") },
-                                onClick = {
-                                    seenMenu = false
-                                    seenWithinMin = minutes
-                                    settingsRepository.monitorSeenWithinMin = minutes
-                                    recordAction("seen_filter", minutes.toString())
-                                })
-                        }
-                    }
-                }
                 if (selected == MonitorTab.NEARBY) FilterChip(showHiddenAps,
                     { focusedKind = null; showHiddenAps = !showHiddenAps }, label = { Text("⊘ Hidden APs (${resolvedHiddenAps.size})") })
                 if (selected == MonitorTab.NEARBY) FilterChip(hideNoise, {
