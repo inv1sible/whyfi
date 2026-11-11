@@ -172,7 +172,20 @@ def _dt(ms: int) -> datetime:
 
 
 def import_mission(mission: MonitorMission, force: bool = False) -> dict:
-    """Imports one mission; returns (and stores) a summary. Safe to re-run."""
+    """Imports one mission; returns (and stores) a summary. Safe to re-run.
+
+    Serialized per mission: two uploads of the same mission at the same time
+    (seen 2026-11-11: the app's log-only and log+PCAP jobs ran together on
+    Wi-Fi) must import one after the other, or the second collides on
+    client_scan_id. The lock on the mission row also makes the second import
+    see the first upload's files.
+    """
+    with transaction.atomic():
+        mission = MonitorMission.objects.select_for_update().get(pk=mission.pk)
+        return _import_locked(mission, force)
+
+
+def _import_locked(mission: MonitorMission, force: bool) -> dict:
     if mission.imported_at and not force:
         return mission.import_summary
     if mission.sensor is None:

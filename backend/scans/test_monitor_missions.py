@@ -74,13 +74,23 @@ class MonitorMissionTests(TestCase):
         self.assertIn(self.upload(self.operator).status_code, (401, 403))
         self.assertEqual(MonitorMission.objects.count(), 0)
 
-    def test_rejects_invalid_pdf_and_oversized_pcap(self):
+    def test_rejects_invalid_pdf_and_oversized_files(self):
         self.assertEqual(self.upload(pdf=b"bad").status_code, 400)
         self.assertEqual(MonitorMission.objects.count(), 0)
-        # No 200 MB allocation: lower the limit for this validation path.
+        # No 200 MB allocation: lower the limits for this validation path.
         from unittest.mock import patch
         with patch("scans.monitor_missions.MAX_PCAP_BYTES", 2):
             self.assertEqual(self.upload().status_code, 413)
+        with patch("scans.monitor_missions.MAX_LOG_BYTES", 2):
+            response = self.upload()
+            self.assertEqual(response.status_code, 413)
+            self.assertIn("mission log is larger", response.json()["detail"])
+        self.assertEqual(MonitorMission.objects.count(), 0)
+        # A log between the old 10 MiB limit and the new one is accepted (2026-11-11: 13.5 MiB got 413).
+        big_log = b'{"event":"monitor_finished"}\n' * (11 * 1024 * 1024 // 29)
+        data = {"id": str(self.mission_id),
+                "log": SimpleUploadedFile("mission.jsonl", big_log, content_type="application/x-ndjson")}
+        self.assertEqual(self.phone.post("/api/v1/monitor-missions/upload/", data, format="multipart").status_code, 201)
 
     def test_list_is_authenticated_and_sensor_scoped(self):
         self.upload()

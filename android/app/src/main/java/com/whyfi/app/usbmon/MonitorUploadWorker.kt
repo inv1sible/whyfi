@@ -41,7 +41,12 @@ class MonitorUploadWorker(context: Context, params: WorkerParameters) : Coroutin
         private const val KEY_ID = "mission_id"
         private const val KEY_PCAP = "include_pcap"
 
-        /** Queues the log now (any network) and, if there is a PCAP, log + PCAP on Wi‑Fi. */
+        /**
+         * Queues the log now (any network) and, if there is a PCAP, log + PCAP on
+         * Wi‑Fi *afterwards*: one chain per mission, so the two never run at the
+         * same time (on Wi‑Fi both were ready at once and the server imported the
+         * same mission twice in parallel, 2026-11-11).
+         */
         fun enqueue(context: Context, missionId: String, hasPcap: Boolean) {
             val work = WorkManager.getInstance(context)
             fun request(pcap: Boolean, network: NetworkType) = OneTimeWorkRequestBuilder<MonitorUploadWorker>()
@@ -49,9 +54,9 @@ class MonitorUploadWorker(context: Context, params: WorkerParameters) : Coroutin
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(network).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
                 .build()
-            work.enqueueUniqueWork("monitor-upload-$missionId", ExistingWorkPolicy.REPLACE, request(false, NetworkType.CONNECTED))
-            if (hasPcap) work.enqueueUniqueWork("monitor-upload-pcap-$missionId", ExistingWorkPolicy.REPLACE,
-                request(true, NetworkType.UNMETERED))
+            work.cancelUniqueWork("monitor-upload-pcap-$missionId") // queued by builds before v120
+            val chain = work.beginUniqueWork("monitor-upload-$missionId", ExistingWorkPolicy.REPLACE, request(false, NetworkType.CONNECTED))
+            (if (hasPcap) chain.then(request(true, NetworkType.UNMETERED)) else chain).enqueue()
         }
     }
 }

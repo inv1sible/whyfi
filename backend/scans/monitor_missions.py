@@ -14,8 +14,11 @@ from sensors.models import Sensor
 from .models import MonitorMission
 from .monitor_import import import_safely
 
+# A long mission writes a log of tens of MiB (13.5 MiB seen on 2026-11-11,
+# which the earlier 10 MiB limit refused with 413).
+MAX_LOG_BYTES = 200 * 1024 * 1024
+MAX_REPORT_BYTES = 25 * 1024 * 1024
 MAX_PCAP_BYTES = 200 * 1024 * 1024
-MAX_SMALL_FILE_BYTES = 10 * 1024 * 1024
 
 
 def mission_data(mission):
@@ -67,8 +70,10 @@ def upload_monitor_mission(request):
     pcap = request.FILES.get("pcap")
     if not log:
         return Response({"detail": "The mission log is required."}, status=status.HTTP_400_BAD_REQUEST)
-    if log.size > MAX_SMALL_FILE_BYTES or (report and report.size > MAX_SMALL_FILE_BYTES) or (pcap and pcap.size > MAX_PCAP_BYTES):
-        return Response({"detail": "Mission file exceeds the size limit."}, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+    for name, upload, limit in (("log", log, MAX_LOG_BYTES), ("report", report, MAX_REPORT_BYTES), ("PCAP", pcap, MAX_PCAP_BYTES)):
+        if upload and upload.size > limit:
+            return Response({"detail": f"The mission {name} is larger than the server accepts ({limit // (1024 * 1024)} MiB)."},
+                            status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
     if report:
         if report.read(4) != b"%PDF":
             return Response({"detail": "Invalid PDF report."}, status=status.HTTP_400_BAD_REQUEST)

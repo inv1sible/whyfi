@@ -36,6 +36,12 @@ private interface MonitorUploadApi {
  * missions too; uploading again replaces the server copy. Local files stay.
  */
 object MonitorMissionUploader {
+    /** The server's one-sentence reason, e.g. which file is too large (413). */
+    fun serverDetail(response: Response<*>): String? = runCatching {
+        val text = response.errorBody()?.string().orEmpty().take(2_000)
+        com.google.gson.JsonParser.parseString(text).asJsonObject.get("detail").asString.trim().take(200).takeIf { it.isNotEmpty() }
+    }.getOrNull()
+
     suspend fun upload(mission: MonitorMission.Stored, backendUrl: String, token: String, includePcap: Boolean = true): String =
         withContext(Dispatchers.IO) {
             if (!mission.log.isFile) return@withContext "No mission log to upload."
@@ -63,7 +69,7 @@ object MonitorMissionUploader {
                 if (response.isSuccessful && response.body()?.id == mission.directory.name) {
                     MonitorMission.markUploaded(mission, logBytes)
                     "Uploaded" + (if (mission.pcap != null && !includePcap) " (PCAP waits for Wi‑Fi)" else "") + ". Local files retained."
-                } else "Upload failed (HTTP ${response.code()})."
+                } else "Upload failed (HTTP ${response.code()})." + (serverDetail(response)?.let { " $it" } ?: "")
             } catch (e: Exception) {
                 "Upload failed: ${e.message ?: e.javaClass.simpleName}"
             } finally {
