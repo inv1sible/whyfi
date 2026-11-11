@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import type { RadioMapHandle } from "../components/RadioMap";
 import { describeDisplayMode, describeFilterWindow } from "../components/ReportHeader";
 import type { ReportField } from "../components/ReportHeader";
+import { describeArea } from "../focusArea";
 import { useFilter } from "../context/FilterContext";
 import { formatCoords } from "../reportLinks";
 
@@ -54,9 +55,7 @@ export function useReportViewSettings(selectedScanLabel: string | null): ReportF
     { label: "Range", value: describeFilterWindow(filter) },
     {
       label: "Focus area",
-      value: filter.area
-        ? `${Math.round(filter.area.radiusM)} m around ${formatCoords(filter.area.lat, filter.area.lng)}`
-        : "Whole survey",
+      value: filter.area ? describeArea(filter.area) : "Whole survey",
     },
     { label: "Display mode", value: describeDisplayMode(filter.mapDisplayMode) },
     { label: "Selected scan", value: selectedScanLabel ?? "No geotagged scans in range" },

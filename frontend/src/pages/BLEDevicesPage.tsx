@@ -31,9 +31,7 @@ export function BLEDevicesPage() {
     filter.since,
     filter.until,
     filter.sessionLimit,
-    filter.area?.lat,
-    filter.area?.lng,
-    filter.area?.radiusM,
+    areaQuery(filter.area),
   ];
   // A stale page number after the query changes underneath it would show
   // "page 3" of a result set that might only have one page now — reset

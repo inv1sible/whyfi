@@ -902,6 +902,78 @@ button:disabled {
   width: 5rem;
 }
 
+.map-area-controls .map-area-hint {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* The place search inside the map controls: a text field with Go, and a
+   dropdown of up to five hits above it (the controls sit at the bottom). */
+.map-place-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.map-place-search input {
+  width: 14rem;
+  max-width: 45vw;
+}
+
+.map-place-search .map-place-results {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 0.3rem);
+  min-width: 18rem;
+  max-width: 70vw;
+  max-height: 14rem;
+  overflow-y: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 0.25rem;
+  z-index: 1001;
+}
+
+.map-place-search .map-place-results button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  white-space: normal;
+  font-size: 0.8rem;
+  border: none;
+  background: transparent;
+}
+
+.map-place-search .map-place-results button:hover {
+  background: var(--bg-elevated);
+}
+
+.map-place-search .map-place-note {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  padding: 0.25rem 0.4rem;
+}
+
+/* "Focus area: … · Clear" under the time controls on every filtered page. */
+.global-area-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  padding: 0 0 0.8rem;
+}
+
+.global-area-line button {
+  padding: 0.15rem 0.6rem;
+  font-size: 0.8rem;
+}
+
 /* While arming the focus circle the whole map is a target, so say so. */
 .map-placing {
   cursor: crosshair;

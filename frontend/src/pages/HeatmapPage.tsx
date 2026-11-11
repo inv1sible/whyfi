@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api/client";
+import { api, areaQuery } from "../api/client";
 import { BLE_LABELS } from "../components/DeviceTypeBadge";
 import { MapDisplayModeControls } from "../components/MapDisplayModeControls";
 import { PrintReportButton } from "../components/PrintReportButton";
@@ -11,6 +11,7 @@ import { SightingTable } from "../components/SightingTable";
 import type { ReportField } from "../components/ReportHeader";
 import { SimpleLineChart } from "../components/SimpleLineChart";
 import { ALWAYS_MOBILE_BLE_TYPES, COVERAGE_STROKE_COLOR, classifyDeviceCoverage, soloShapes } from "../coverageConfig";
+import { describeArea } from "../focusArea";
 import { useFilter } from "../context/FilterContext";
 import { getEstimatorPreference } from "../estimatorPreference";
 import { resolveCurrentScanMultiDevice } from "../currentScan";
@@ -157,17 +158,14 @@ export function HeatmapPage() {
       return { bySource, truncatedSources, observationLimit: responses[0]?.observation_limit ?? null };
     },
     20000,
-    // The area is spread into primitives rather than passed as an object:
-    // usePolling compares deps by identity, and a fresh {lat,lng,radiusM}
-    // object every render would refetch on every render.
+    // The area goes in as its query string: usePolling compares deps by
+    // identity, and a fresh area object every render would refetch every render.
     [
       activeSources.join(","),
       filter.since,
       filter.until,
       filter.sessionLimit,
-      filter.area?.lat,
-      filter.area?.lng,
-      filter.area?.radiusM,
+      areaQuery(filter.area),
     ],
     { paused: printing },
   );
@@ -405,11 +403,11 @@ export function HeatmapPage() {
 
       {filter.area && (
         <p className="page-hint">
-          Focus area active: {Math.round(filter.area.radiusM)} m around {formatCoords(filter.area.lat, filter.area.lng)}.
-          Every page is narrowed to devices whose <em>estimated</em> position falls inside it — that estimate is the
-          signal-weighted centre of everywhere the device was heard, so a device only ever picked up from one side
-          sits off to that side of where it really is. Devices heard just once are placed at the phone's own position.
-          Narrowing the date range, not the circle, is what reduces how much data has to be read.
+          Focus area active: {describeArea(filter.area)}. Every page is narrowed to devices whose <em>estimated</em>{" "}
+          position falls inside it — that estimate is the signal-weighted centre of everywhere the device was heard, so a
+          device only ever picked up from one side sits off to that side of where it really is. Devices heard just once
+          are placed at the phone's own position. Narrowing the date range, not the area, is what reduces how much data
+          has to be read.
         </p>
       )}
 
@@ -434,7 +432,7 @@ export function HeatmapPage() {
       {data && activeSources.length > 0 && deviceCount === 0 && (
         <p className="empty-state">
           {filter.area
-            ? "No devices are estimated to be inside the focus area for this time range. Widen the radius, drag the circle, or clear it using the controls on the map."
+            ? "No devices are estimated to be inside the focus area for this time range. Widen it, move it, or clear it using the controls on the map."
             : "No geotagged observations yet for the active source(s) in this time range."}
         </p>
       )}

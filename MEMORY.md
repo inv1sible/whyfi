@@ -1241,3 +1241,39 @@ asked for "updates from both local and GitHub" (v119). Decisions:
 - Builds before v118 have no updater: the first in-app update is the one
   *after* v118.
 
+
+## Focus area: place search, circle or polygon (2026-11-11)
+
+User: "let the user search for a location, select on a map with a location
+picker and a region circle or polygon". The focus area existed as a circle
+(`◎ Focus area` on the Heatmap map, global via FilterContext, honoured by the
+WiFi/Cellular/BLE/LAN lists, channel congestion, dashboard, reports, export).
+Now:
+
+- **Shape:** `FocusArea = circle {lat,lng,radiusM} | polygon {points}`
+  (`frontend/src/focusArea.ts`; backend `scans/area.py` with `Circle`,
+  `Polygon.contains` (ray casting on degrees), `parse_area`). Query: circle
+  as before (`area_lat/area_lng/area_radius_m`), polygon as
+  `area_polygon=lat,lng;lat,lng;…` (3–200 corners; wins over a circle; a
+  malformed one means *no* filter, like a half circle). Every view goes
+  through `area.contains()`; `within_area` still judges the estimated
+  position (weighted centroid), not single readings.
+- **Place search** (`placeSearch.ts`, `components/PlaceSearch.tsx`): typed
+  coordinates (decimal, N/E, DMS) are resolved in the browser; anything else
+  goes to OpenStreetMap's Nominatim **only on Enter/Go** (no autocomplete:
+  Nominatim policy, and the user is privacy-minded). The circle's radius
+  comes from the hit's bounding box (100 m–20 km). The UI says where the
+  query goes. No server-side proxy, no API key.
+- **Polygon drawing** in `RadioMap.tsx` without a plugin: "⬠ Polygon" →
+  click corners → Done/Cancel; corners are draggable afterwards. The circle's
+  centre pin stays draggable, the radius field remains.
+- **Persistence:** FilterContext keeps the area in `localStorage`
+  (`whyfi.focusArea`) and writes `?area=c:lat,lng,r` / `?area=p:…` into the
+  current URL (`history.replaceState`); a pasted link with `?area=` wins on
+  load. Pages that call `setSearchParams` (Localization, Settings) drop the
+  param from the URL but the context keeps the area.
+- **Visibility:** `GlobalFilterBar` shows "◎ Focus area: … · Edit on the map
+  · Clear" on every filtered page. The controls to set it live on the
+  Heatmap map only (the detail pages' maps are not filtered by it).
+- Polling deps use `areaQuery(filter.area)` (a string) instead of the
+  circle's three primitives.

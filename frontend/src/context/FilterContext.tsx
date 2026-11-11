@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import type { FocusArea } from "../api/client";
+import { decodeArea, encodeArea, type FocusArea } from "../focusArea";
 import { useTimeScanFilter } from "../hooks/useTimeScanFilter";
 
 export type MapDisplayMode = "accumulate" | "solo";
@@ -34,6 +34,7 @@ interface FilterContextValue extends ReturnType<typeof useTimeScanFilter> {
 }
 
 const FilterContext = createContext<FilterContextValue | null>(null);
+const AREA_STORAGE_KEY = "whyfi.focusArea";
 
 // One shared time/scan-range + search-query state for the whole app,
 // rendered once (see GlobalFilterBar) instead of once per page — see
@@ -45,7 +46,31 @@ export function FilterProvider({ children }: { children: ReactNode }) {
   const [compactTables, setCompactTables] = useState(false);
   const [mapDisplayMode, setMapDisplayMode] = useState<MapDisplayMode>("accumulate");
   const [scanIndexPercent, setScanIndexPercent] = useState(100);
-  const [area, setArea] = useState<FocusArea | null>(null);
+  // ?area= in a pasted link wins; otherwise the last area this browser used.
+  // Written back to both on every change, so a reload keeps it and the URL
+  // of a report page carries its area (user, 2026-11-11).
+  const [area, setAreaState] = useState<FocusArea | null>(() => {
+    const fromUrl = decodeArea(new URLSearchParams(window.location.search).get("area"));
+    if (fromUrl) return fromUrl;
+    try {
+      return decodeArea(window.localStorage.getItem(AREA_STORAGE_KEY));
+    } catch {
+      return null;
+    }
+  });
+  const setArea = (next: FocusArea | null) => {
+    setAreaState(next);
+    try {
+      if (next) window.localStorage.setItem(AREA_STORAGE_KEY, encodeArea(next));
+      else window.localStorage.removeItem(AREA_STORAGE_KEY);
+    } catch {
+      // Private mode or blocked storage: the area still works for this page.
+    }
+    const url = new URL(window.location.href);
+    if (next) url.searchParams.set("area", encodeArea(next));
+    else url.searchParams.delete("area");
+    window.history.replaceState(window.history.state, "", url);
+  };
 
   // A body-level class (rather than something scoped to GlobalFilterBar's
   // own subtree) so it reaches every <table> on the page regardless of

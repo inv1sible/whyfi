@@ -215,27 +215,11 @@ export async function downloadWithProgress(
   return new Blob(chunks as BlobPart[], { type: "application/vnd.android.package-archive" });
 }
 
-/** The map's focus circle. Devices are kept when their *estimated* position
- * (the signal-weighted centre of everywhere they were heard — see
- * weightedCentroid in geo.ts) falls inside it, not when a single reading
- * happens to. */
-export interface FocusArea {
-  lat: number;
-  lng: number;
-  radiusM: number;
-}
-
-/** Query fragment for the focus circle, or "" when none is set.
- *
- * Always emitted as a suffix with a leading "&" so it can be appended to any
- * of the hand-built query strings across the pages without each of them
- * having to reason about whether it's the first parameter. Callers that start
- * a query with it are responsible for the "?".
- */
-export function areaQuery(area: FocusArea | null | undefined): string {
-  if (!area) return "";
-  return `&area_lat=${area.lat}&area_lng=${area.lng}&area_radius_m=${Math.round(area.radiusM)}`;
-}
+/** The focus area (circle or polygon) and its "&"-prefixed query fragment
+ * live in focusArea.ts; re-exported so the pages keep importing them here. */
+import { areaQuery, type FocusArea } from "../focusArea";
+export { areaQuery };
+export type { FocusArea };
 
 /** Query fragment for the server-side search box (see apply_search() in
  * scans/views.py) — `&`-prefixed, or "" for an empty query, same contract
@@ -279,9 +263,7 @@ function windowQuery(opts: {
   use_ground_truth?: string;
 }): string {
   const parts = sinceUntilParts(opts);
-  if (opts.area) {
-    parts.push(`area_lat=${opts.area.lat}`, `area_lng=${opts.area.lng}`, `area_radius_m=${Math.round(opts.area.radiusM)}`);
-  }
+  if (opts.area) parts.push(areaQuery(opts.area).slice(1));
   // Which estimator produced each result's `estimated_position`. Sent by the
   // coverage callers so the map's estimated-location markers honour the
   // user's global setting (see estimatorPreference.ts).

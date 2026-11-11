@@ -27,9 +27,7 @@ export function LANDevicesPage() {
     filter.since,
     filter.until,
     filter.sessionLimit,
-    filter.area?.lat,
-    filter.area?.lng,
-    filter.area?.radiusM,
+    areaQuery(filter.area),
   ];
   useEffect(() => {
     setPage(1);

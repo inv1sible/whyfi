@@ -48,9 +48,7 @@ export function DashboardPage() {
     filter.since,
     filter.until,
     filter.sessionLimit,
-    filter.area?.lat,
-    filter.area?.lng,
-    filter.area?.radiusM,
+    areaQuery(filter.area),
   ];
   const wifi = usePolling(() => api.accessPoints(rangeQuery()), 15000, rangeDeps);
   const ble = usePolling(() => api.bleDevices(rangeQuery()), 15000, rangeDeps);

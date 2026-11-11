@@ -42,6 +42,7 @@ from .estimators import (
     ranged_points_for,
 )
 from .geocoding import resolve_missing_addresses
+from .area import parse_area
 from .localization import (
     cluster_ap_hypotheses,
     haversine_m,
@@ -174,21 +175,6 @@ def parse_float(raw, default=None):
     return value
 
 
-def parse_area(request):
-    """The map's focus circle, as (lat, lng, radius_m), or None.
-
-    All three parameters must be present and usable, and the radius positive —
-    a half-specified circle means the caller's intent is unknown, and silently
-    filtering by a partial one is worse than not filtering at all.
-    """
-    lat = parse_float(request.query_params.get("area_lat"))
-    lng = parse_float(request.query_params.get("area_lng"))
-    radius = parse_float(request.query_params.get("area_radius_m"))
-    if lat is None or lng is None or radius is None or radius <= 0:
-        return None
-    if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
-        return None
-    return (lat, lng, radius)
 
 
 def weighted_centroid(points):
@@ -512,7 +498,7 @@ def ftm_points_for(access_point, request):
 
 
 def within_area(points, area):
-    """Whether a device's estimated position falls inside the focus circle.
+    """Whether a device's estimated position falls inside the focus area (scans/area.py).
 
     Deliberately judged on the *centroid*, not on whether any single reading
     lands inside: the circle asks "which devices are in this area", and a
@@ -528,8 +514,7 @@ def within_area(points, area):
     if not points:
         return False
     lat, lng = weighted_centroid(points)
-    center_lat, center_lng, radius_m = area
-    return haversine_m(center_lat, center_lng, lat, lng) <= radius_m
+    return area.contains(lat, lng)
 
 
 def apply_area_filter(results, area):
@@ -1202,7 +1187,6 @@ class ScanSessionViewSet(
             qs = qs.filter(wifi_observations__access_point__ssid=ssid_exact).distinct()
         area = parse_area(request)
         if area:
-            center_lat, center_lng, radius_m = area
             qs = qs.exclude(latitude__isnull=True).exclude(longitude__isnull=True)
 
         limit = positive_int(request.query_params.get("limit"), EXPORT_SESSION_CAP, maximum=EXPORT_SESSION_CAP)
@@ -1212,10 +1196,8 @@ class ScanSessionViewSet(
 
         payload = []
         for session in sessions:
-            if area:
-                center_lat, center_lng, radius_m = area
-                if haversine_m(center_lat, center_lng, session.latitude, session.longitude) > radius_m:
-                    continue
+            if area and not area.contains(session.latitude, session.longitude):
+                continue
             payload.append(export_session_payload(session))
 
         return Response({

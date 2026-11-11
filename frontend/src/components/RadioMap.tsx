@@ -1,7 +1,16 @@
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FocusArea } from "../api/client";
+import {
+  DEFAULT_AREA_RADIUS_M,
+  MIN_POLYGON_CORNERS,
+  areaBounds,
+  circleArea,
+  polygonArea,
+  type FocusArea,
+  type LatLng,
+} from "../focusArea";
+import { PlaceSearch } from "./PlaceSearch";
 import type { HeatmapPoint } from "../api/types";
 import { areaCenterIcon, calloutBadgeIcon, radioMarkerIcon, scanPointPinIcon } from "../mapIcons";
 import type { MapIconType } from "../mapIcons";
@@ -14,6 +23,11 @@ const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 // *and* there's no data to fit bounds to. Previously this was the only
 // behaviour, which left an empty map (the floor-plan calibration map, say)
 // sitting over a city the user has no connection to.
+function areaLatLngBounds(area: FocusArea): L.LatLngBounds {
+  const b = areaBounds(area);
+  return L.latLngBounds([b.south, b.west], [b.north, b.east]);
+}
+
 const DEFAULT_CENTER: [number, number] = [48.1351, 11.582];
 
 // The backend buckets coverage points to ~1.1m precision (5 decimal
@@ -287,8 +301,9 @@ interface RadioMapProps {
   // printing, which needs to reach past React into Leaflet — see
   // prepareForPrint below.
   onReady?: (handle: RadioMapHandle) => void;
-  // The focus circle. Drawn when set; when onAreaChange is also provided the
-  // map grows a "Focus area" control for placing and resizing it.
+  // The focus area (circle or polygon). Drawn when set; when onAreaChange is
+  // also provided the map grows the "Focus area" controls: place search,
+  // circle placing, polygon drawing, radius, clear.
   area?: FocusArea | null;
   onAreaChange?: (area: FocusArea | null) => void;
   // Plain click-to-pick, independent of the focus-area "placing" mode above.
@@ -316,8 +331,6 @@ function ringCenter(ring: { lat: number; lng: number }[]): { lat: number; lng: n
   const lng = ring.reduce((sum, p) => sum + p.lng, 0) / ring.length;
   return { lat, lng };
 }
-
-const DEFAULT_AREA_RADIUS_M = 250;
 
 // Tile-settling budget for printing. MIN gives Leaflet time to queue requests
 // after a re-frame (checking sooner reads "not loading" and prints a blank
@@ -372,6 +385,11 @@ export function RadioMap({
   // once, so a captured `placing` value would be stale forever after.
   const placingRef = useRef(false);
   const [placing, setPlacing] = useState(false);
+  // Polygon drawing: null when not drawing, else the corners clicked so far.
+  // Same ref+state pairing as `placing`, for the same reason.
+  const draftRef = useRef<LatLng[] | null>(null);
+  const [draft, setDraft] = useState<LatLng[] | null>(null);
+  const draftLayersRef = useRef<L.Layer[]>([]);
   const onAreaChangeRef = useRef(onAreaChange);
   onAreaChangeRef.current = onAreaChange;
   // Same reason as onAreaChangeRef: the click handler is registered once for
@@ -423,14 +441,18 @@ export function RadioMap({
         onMapClickRef.current(Number(event.latlng.lat.toFixed(6)), Number(event.latlng.lng.toFixed(6)));
         return;
       }
+      if (draftRef.current) {
+        const next = [...draftRef.current, { lat: event.latlng.lat, lng: event.latlng.lng }];
+        draftRef.current = next;
+        setDraft(next);
+        return;
+      }
       if (!placingRef.current) return;
       placingRef.current = false;
       setPlacing(false);
-      onAreaChangeRef.current?.({
-        lat: Number(event.latlng.lat.toFixed(6)),
-        lng: Number(event.latlng.lng.toFixed(6)),
-        radiusM: areaRef.current?.radiusM ?? DEFAULT_AREA_RADIUS_M,
-      });
+      const current = areaRef.current;
+      const radiusM = current?.kind === "circle" ? current.radiusM : DEFAULT_AREA_RADIUS_M;
+      onAreaChangeRef.current?.(circleArea(event.latlng.lat, event.latlng.lng, radiusM));
     });
 
     const resizeObserver = new ResizeObserver(() => map.invalidateSize());
@@ -739,14 +761,11 @@ export function RadioMap({
     // report, so the page should show that area rather than wherever the
     // surviving devices happen to sprawl.
     if (area) {
-      // LatLng.toBounds, not L.circle(...).getBounds(): a Circle only knows
-      // its bounds once it's been added to a map and projected, so calling
+      // Computed from the area itself, not from a Leaflet layer: a Circle
+      // only knows its bounds once it's been added to a map and projected, so
       // getBounds() on a detached one throws — which silently aborted the
       // whole prepare step and printed the un-reframed map.
-      map.fitBounds(L.latLng(area.lat, area.lng).toBounds(area.radiusM * 2), {
-        padding: [24, 24],
-        animate: false,
-      });
+      map.fitBounds(areaLatLngBounds(area), { padding: [24, 24], animate: false });
       await waitForTiles();
       return;
     }
@@ -801,42 +820,90 @@ export function RadioMap({
     areaLayersRef.current = [];
     if (!area) return;
 
-    const circle = L.circle([area.lat, area.lng], {
-      radius: area.radiusM,
-      color: "#2563eb",
-      weight: 2,
-      dashArray: "6 5",
-      fillColor: "#2563eb",
-      fillOpacity: 0.05,
-      // Non-interactive so it never swallows a click meant for the coverage
-      // shape underneath it.
-      interactive: false,
-    }).addTo(map);
-    areaLayersRef.current.push(circle);
-
-    if (onAreaChange) {
-      // Dragging the centre is the fast way to nudge the circle onto a
-      // building; the radius field handles size.
-      const handle = L.marker([area.lat, area.lng], { draggable: true, icon: areaCenterIcon() })
-        .on("dragend", (event) => {
-          const { lat, lng } = (event.target as L.Marker).getLatLng();
-          onAreaChangeRef.current?.({
-            lat: Number(lat.toFixed(6)),
-            lng: Number(lng.toFixed(6)),
-            radiusM: areaRef.current?.radiusM ?? DEFAULT_AREA_RADIUS_M,
-          });
-        })
-        .addTo(map);
-      areaLayersRef.current.push(handle);
+    // Non-interactive shapes so they never swallow a click meant for the
+    // coverage shape underneath them.
+    const style = { color: "#2563eb", weight: 2, dashArray: "6 5", fillColor: "#2563eb", fillOpacity: 0.05, interactive: false };
+    if (area.kind === "circle") {
+      areaLayersRef.current.push(L.circle([area.lat, area.lng], { ...style, radius: area.radiusM }).addTo(map));
+      if (onAreaChange) {
+        // Dragging the centre is the fast way to nudge the circle onto a
+        // building; the radius field handles size.
+        const handle = L.marker([area.lat, area.lng], { draggable: true, icon: areaCenterIcon() })
+          .on("dragend", (event) => {
+            const { lat, lng } = (event.target as L.Marker).getLatLng();
+            onAreaChangeRef.current?.(circleArea(lat, lng, area.radiusM));
+          })
+          .addTo(map);
+        areaLayersRef.current.push(handle);
+      }
+    } else {
+      areaLayersRef.current.push(L.polygon(area.points.map((p) => [p.lat, p.lng] as [number, number]), style).addTo(map));
+      if (onAreaChange) {
+        // Every corner is a drag handle; the polygon redraws on drop.
+        area.points.forEach((point, index) => {
+          const handle = L.marker([point.lat, point.lng], { draggable: true, icon: areaCenterIcon() })
+            .on("dragend", (event) => {
+              const { lat, lng } = (event.target as L.Marker).getLatLng();
+              const points = area.points.map((p, i) => (i === index ? { lat, lng } : p));
+              const next = polygonArea(points);
+              if (next) onAreaChangeRef.current?.(next);
+            })
+            .addTo(map);
+          areaLayersRef.current.push(handle);
+        });
+      }
     }
   }, [area, onAreaChange]);
+
+  // The polygon being drawn: its corners and the outline so far.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    draftLayersRef.current.forEach((layer) => map.removeLayer(layer));
+    draftLayersRef.current = [];
+    if (!draft || draft.length === 0) return;
+    const latlngs = draft.map((p) => [p.lat, p.lng] as [number, number]);
+    draftLayersRef.current.push(
+      L.polyline(latlngs, { color: "#2563eb", weight: 2, dashArray: "4 4", interactive: false }).addTo(map),
+    );
+    if (draft.length >= MIN_POLYGON_CORNERS) {
+      draftLayersRef.current.push(
+        L.polygon(latlngs, { color: "#2563eb", weight: 1, fillColor: "#2563eb", fillOpacity: 0.05, interactive: false }).addTo(map),
+      );
+    }
+    draft.forEach((p) => {
+      draftLayersRef.current.push(L.marker([p.lat, p.lng], { icon: areaCenterIcon(), interactive: false }).addTo(map));
+    });
+  }, [draft]);
+
+  const startDrawing = () => {
+    placingRef.current = false;
+    setPlacing(false);
+    draftRef.current = [];
+    setDraft([]);
+  };
+  const stopDrawing = (keep: boolean) => {
+    const corners = draftRef.current ?? [];
+    draftRef.current = null;
+    setDraft(null);
+    if (!keep) return;
+    const next = polygonArea(corners);
+    if (next) onAreaChange?.(next);
+  };
+  const onPlacePicked = (lat: number, lng: number, radiusM: number) => {
+    stopDrawing(false);
+    placingRef.current = false;
+    setPlacing(false);
+    onAreaChange?.(circleArea(lat, lng, radiusM));
+    mapRef.current?.fitBounds(areaLatLngBounds(circleArea(lat, lng, radiusM)), { padding: [24, 24], maxZoom: 18 });
+  };
 
   return (
     // Classed so the print stylesheet can hoist the map above the report
     // header — the coverage map is the substance of the report, and on paper
     // it should be the first thing on the page.
     <div className="radio-map-block" style={{ position: "relative" }}>
-      <div ref={containerRef} className={`map-container${placing ? " map-placing" : ""}`} />
+      <div ref={containerRef} className={`map-container${placing || draft ? " map-placing" : ""}`} />
       {(points.length > 0 || polygons.length > 0) && (
         <button
           onClick={handleFitToData}
@@ -850,33 +917,52 @@ export function RadioMap({
 
       {onAreaChange && (
         <div className="map-area-controls print-hide">
-          <button
-            className={placing ? "active" : ""}
-            onClick={() => {
-              const next = !placing;
-              placingRef.current = next;
-              setPlacing(next);
-            }}
-            title="Restrict every page to devices estimated to be inside a circle"
-          >
-            {placing ? "Click the map…" : area ? "Move focus area" : "◎ Focus area"}
-          </button>
-          {area && (
+          <PlaceSearch onPick={onPlacePicked} />
+          {draft ? (
             <>
-              <label>
-                <span>Radius (m)</span>
-                <input
-                  type="number"
-                  min={10}
-                  step={50}
-                  value={Math.round(area.radiusM)}
-                  onChange={(e) => {
-                    const radiusM = Number(e.target.value);
-                    if (Number.isFinite(radiusM) && radiusM > 0) onAreaChange({ ...area, radiusM });
-                  }}
-                />
-              </label>
-              <button onClick={() => onAreaChange(null)}>Clear</button>
+              <span className="map-area-hint">
+                {draft.length < MIN_POLYGON_CORNERS
+                  ? `Click the corners (${draft.length}/${MIN_POLYGON_CORNERS} at least)`
+                  : `${draft.length} corners`}
+              </span>
+              <button disabled={draft.length < MIN_POLYGON_CORNERS} onClick={() => stopDrawing(true)}>
+                Done
+              </button>
+              <button onClick={() => stopDrawing(false)}>Cancel</button>
+            </>
+          ) : (
+            <>
+              <button
+                className={placing ? "active" : ""}
+                onClick={() => {
+                  const next = !placing;
+                  placingRef.current = next;
+                  setPlacing(next);
+                }}
+                title="Restrict every page to devices estimated to be inside a circle: click where its centre goes"
+              >
+                {placing ? "Click the map…" : area?.kind === "circle" ? "Move circle" : "◎ Circle"}
+              </button>
+              <button onClick={startDrawing} title="Restrict every page to devices estimated to be inside a polygon: click its corners">
+                ⬠ Polygon
+              </button>
+              {area?.kind === "circle" && (
+                <label>
+                  <span>Radius (m)</span>
+                  <input
+                    type="number"
+                    min={10}
+                    step={50}
+                    value={Math.round(area.radiusM)}
+                    onChange={(e) => {
+                      const radiusM = Number(e.target.value);
+                      if (Number.isFinite(radiusM) && radiusM > 0) onAreaChange({ ...area, radiusM });
+                    }}
+                  />
+                </label>
+              )}
+              {area?.kind === "polygon" && <span className="map-area-hint">{area.points.length} corners · drag to adjust</span>}
+              {area && <button onClick={() => onAreaChange(null)}>Clear</button>}
             </>
           )}
         </div>

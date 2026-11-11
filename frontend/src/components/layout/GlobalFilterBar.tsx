@@ -1,4 +1,5 @@
-import { useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
+import { describeArea } from "../../focusArea";
 import { TimeScanFilterControls } from "../TimeScanFilterControls";
 import { useFilter } from "../../context/FilterContext";
 
@@ -43,6 +44,15 @@ export function GlobalFilterBar() {
         rangeTo={filter.rangeTo}
         onRangeToChange={filter.setRangeTo}
       />
+      {filter.area && (
+        <div className="global-area-line">
+          <span>◎ Focus area: {describeArea(filter.area)}</span>
+          {location.pathname !== "/heatmap" && <Link to="/heatmap">Edit on the map</Link>}
+          <button type="button" onClick={() => filter.setArea(null)}>
+            Clear
+          </button>
+        </div>
+      )}
     </div>
   );
 }
