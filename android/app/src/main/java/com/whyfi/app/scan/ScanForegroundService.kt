@@ -41,6 +41,9 @@ import com.whyfi.app.usbmon.MonitorReceiverFix
 import com.whyfi.app.usbmon.MonitorLocationCandidate
 import com.whyfi.app.usbmon.MonitorLocationPolicy
 import com.whyfi.app.usbmon.MonitorMovePrompt
+import com.whyfi.app.usbmon.MonitorCoTravel
+import com.whyfi.app.usbmon.MonitorEvidence
+import com.whyfi.app.usbmon.MonitorApVisibility
 import com.whyfi.app.usbmon.SniffedDevices
 import com.whyfi.app.usbmon.UsbMonitorNative
 import kotlinx.coroutines.CoroutineScope
@@ -88,6 +91,8 @@ data class MonitorUiState(
      * (`elapsedRealtime`), for the adapter workspace's status strip. */
     val channels: List<Int> = emptyList(),
     val startedAtElapsedMs: Long = 0,
+    /** Devices heard at two or more places of this mission (MonitorCoTravel). */
+    val coTravel: List<MonitorCoTravel.Trail> = emptyList(),
 )
 
 /** Counts each new radio reading from a pinned transmitter exactly once. */
@@ -780,6 +785,18 @@ class ScanForegroundService : Service() {
             var lastInsightBootMs = SystemClock.elapsedRealtime()
             var insightAnchor: MonitorLocationCandidate? = null
             var movePrompted = false
+            // 👣 "With me": readings grouped by where the phone was. A
+            // continued mission picks up its earlier places and alerts.
+            val coTravel = MonitorCoTravel.Tracker()
+            val coTravelFed = mutableMapOf<String, Long>()
+            val coTravelAlerted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+            if (resumedMission != null) launch(Dispatchers.IO) {
+                runCatching {
+                    val earlier = MonitorEvidence.read(mission.log)
+                    earlier.samples.sortedBy { it.atMs }.forEach { coTravel.add(it.mac, it.atMs, it.lat, it.lng, it.gpsAccuracyM) }
+                    earlier.events.filter { it.event == CO_TRAVEL_EVENT }.forEach { coTravelAlerted += it.details.substringBefore(" ") }
+                }
+            }
             val vendorTable = withContext(Dispatchers.IO) {
                 runCatching { assets.open("oui.tsv").use { OuiTable.read(it) } }.getOrNull()
             }
@@ -889,6 +906,34 @@ class ScanForegroundService : Service() {
                 }
                 geoDiagnostics = geoDiagnostics.copy(noMatchingFix = awaitingFix.size)
                 val currentFix = MonitorLocationPolicy.select(latestFixes, SystemClock.elapsedRealtime())
+                // Devices heard in the last 5 s are placed at the current fix
+                // (one lookup per poll; ≤140 m off at 100 km/h).
+                currentFix?.fix?.let { here ->
+                    val nowBoot = SystemClock.elapsedRealtime()
+                    val wallOffset = System.currentTimeMillis() - nowBoot
+                    raw.forEach { (device, _) ->
+                        val heard = device.lastRssiBootMs ?: return@forEach
+                        if (heard <= (coTravelFed[device.mac] ?: 0L) || nowBoot - heard > 5_000) return@forEach
+                        coTravelFed[device.mac] = heard
+                        coTravel.add(device.mac, wallOffset + heard, here.lat, here.lng, here.accuracyM)
+                    }
+                }
+                val coTravelTrails = coTravel.trails()
+                if (settingsRepository.monitorCoTravelAlerts) {
+                    val minPlaces = settingsRepository.monitorCoTravelMinPlaces
+                    val ignored = settingsRepository.monitorCoTravelIgnored
+                    val hidden = settingsRepository.monitorHiddenApMacs
+                    val byMac = raw.associateBy { it.first.mac }
+                    coTravelTrails.filter { it.qualifies(minPlaces) && it.mac !in ignored && it.mac !in coTravelAlerted }.forEach { trail ->
+                        val row = byMac[trail.mac]
+                        if (row != null && MonitorApVisibility.isHidden(row.first, hidden)) return@forEach
+                        coTravelAlerted += trail.mac
+                        val name = row?.let { MonitorMission.deviceName(it.first, it.second) } ?: trail.mac
+                        val summary = "${trail.places.size} places over ${MonitorCoTravel.spanLabel(trail.spanMs)}"
+                        withContext(Dispatchers.IO) { MonitorMission.append(mission, CO_TRAVEL_EVENT, "${trail.mac} $name · $summary") }
+                        showCoTravelAlert(trail.mac, name, summary)
+                    }
+                }
                 val newAp = raw.count { it.first.isAp && knownApMacs.add(it.first.mac) } > 0
                 val currentLocation = currentFix?.fix
                 val moved = MonitorMovePrompt.moved(insightAnchor, currentLocation)
@@ -925,6 +970,7 @@ class ScanForegroundService : Service() {
                         locationFixes = latestFixes,
                         locationUpdatesRegistered = locationSubscription != null,
                         geoDiagnostics = geoDiagnostics,
+                        coTravel = coTravelTrails,
                         geoStatus = when {
                             favorites.isEmpty() -> "Radio snapshots and receiver fixes are saved for AP and client estimates"
                             currentFix == null -> "Waiting for a recent GPS/network/fused fix"
@@ -1201,6 +1247,8 @@ class ScanForegroundService : Service() {
         getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
         getSystemService(NotificationManager::class.java)?.createNotificationChannel(
             NotificationChannel(MONITOR_MOVE_CHANNEL_ID, "Monitor field prompts", NotificationManager.IMPORTANCE_DEFAULT))
+        getSystemService(NotificationManager::class.java)?.createNotificationChannel(
+            NotificationChannel(CO_TRAVEL_CHANNEL_ID, "Travelling with you (USB)", NotificationManager.IMPORTANCE_HIGH))
     }
 
     private fun showMonitorMoveSuggestion() {
@@ -1216,6 +1264,22 @@ class ScanForegroundService : Service() {
         getSystemService(NotificationManager::class.java)?.notify(MONITOR_MOVE_NOTIFICATION_ID, notification)
     }
 
+    /** 👣 One notification per device and mission; ⊘ in Net ops → With me silences a device. */
+    private fun showCoTravelAlert(mac: String, name: String, summary: String) {
+        val openApp = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val notification = NotificationCompat.Builder(this, CO_TRAVEL_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("👣 Travelling with you: $name")
+            .setContentText("$mac heard at $summary. See USB → Net ops → With me.")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(
+                "$mac heard at $summary. See USB → Net ops → 👣 With me and the Mission map. ⊘ there stops alerts for it."))
+            .setContentIntent(openApp)
+            .setAutoCancel(true)
+            .build()
+        getSystemService(NotificationManager::class.java)?.notify(CO_TRAVEL_NOTIFICATION_BASE + (mac.hashCode() and 0xFFF), notification)
+    }
+
     override fun onDestroy() {
         stopMonitor()
         serviceScope.cancel()
@@ -1228,6 +1292,9 @@ class ScanForegroundService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val MONITOR_MOVE_CHANNEL_ID = "whyfi_monitor_move"
         private const val MONITOR_MOVE_NOTIFICATION_ID = 1002
+        private const val CO_TRAVEL_CHANNEL_ID = "whyfi_cotravel"
+        private const val CO_TRAVEL_NOTIFICATION_BASE = 3000
+        const val CO_TRAVEL_EVENT = "co_travel_alert"
 
         /** Slice length for [interruptibleDelay] — the worst-case latency
          * between a remote stop arriving and the loop noticing. */

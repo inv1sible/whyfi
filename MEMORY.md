@@ -106,6 +106,11 @@ stale, and don't duplicate what's already obvious from code/tests.
   informational badge, e.g. "possible AirTag"), with no derived alert state,
   no sighting-clustering job, no dismiss/"mark as mine" workflow. Do not
   reintroduce this without an explicit new ask.
+  **Partly reversed 2026-11-11 for whyfi USB only:** the user explicitly
+  asked for "clients following me", chose "with alerts" over an
+  informational-only list, and an adjustable places threshold. See the
+  "USB 👣 With me" entry. BLE stays as above (no follower logic), and nothing
+  server-side was added.
 
 - **BLE signature labels come from a vendored catalog, matched on the backend
   and (since 2026-11-08) identically on the phone.** (The "only on the backend"
@@ -255,6 +260,17 @@ stale, and don't duplicate what's already obvious from code/tests.
   follow the slider (`MonitorReplayMission.seenSpans`). PDF §4 adds First/
   Last seen and sorts by wall last seen. "Recorded" devices from earlier
   sessions keep that label live.
+- **USB 👣 With me** (v113, 2026-11-11): `MonitorCoTravel` groups each
+  device's readings by the *receiver's* position into places ≥500 m apart;
+  qualifies at ≥N places (chip 2/3/5, default 3, `monitorCoTravelMinPlaces`)
+  over ≥10 min (keeps drive-by fixed APs out). Live: the capture service
+  places devices heard in the last 5 s at the current fix (one lookup per
+  poll), exposes `MonitorUiState.coTravel`, and notifies once per device and
+  mission (channel `whyfi_cotravel`, event `co_travel_alert` in the PDF
+  timeline; continued missions re-seed places and alerted MACs from the log).
+  ⊘ in the table = `monitorCoTravelIgnored` (no alert); hidden APs never
+  alert; 🔔 chip = `monitorCoTravelAlerts`. Replay/stopped missions: computed
+  from `evidence.samples`. Net ops category first; row tap → Mission map.
 - **Map controls float on the map** (v109, 2026-11-10, user: recentering
   was hard to find while driving): `MapOverlayControls` (MapControls.kt) at
   the map's lower right on both maps, bottom up ⌖ follow, ⟳, ⓘ, ◧ layers

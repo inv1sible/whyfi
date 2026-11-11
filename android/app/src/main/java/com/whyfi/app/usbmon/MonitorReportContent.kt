@@ -33,7 +33,7 @@ internal object MonitorReportContent {
      * device snapshots are left out: there are thousands of them. */
     val TIMELINE_EVENTS = setOf(
         "mission_continued_from", "monitor_started", "mission_resumed", "monitor_finished",
-        "mission_target", "ap_hidden", "move_suggested", "capture_summary",
+        "mission_target", "ap_hidden", "move_suggested", "capture_summary", "co_travel_alert",
     )
     const val MAX_TIMELINE_ROWS = 150
     private const val METERS_PER_DEGREE = 111_320.0

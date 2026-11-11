@@ -67,10 +67,11 @@ fun MonitorScreen(
 private enum class MonitorTab(val label: String) {
     MISSIONS("Missions"), NEARBY("Live"), MAPPING("Map"), ACCESS_POINTS("APs"), UNASSOCIATED("Unassociated"),
     IOT("IoT"), CAMERAS("Cameras"), PHONES_LAPTOPS("Phones / laptops"), CLIENTS("Other clients"), SETUP("Settings"), NET_OPS("Net ops"),
+    CO_TRAVEL("👣 With me"),
 }
 
 private val DEVICE_CATEGORIES = listOf(
-    MonitorTab.ACCESS_POINTS, MonitorTab.UNASSOCIATED, MonitorTab.IOT,
+    MonitorTab.CO_TRAVEL, MonitorTab.ACCESS_POINTS, MonitorTab.UNASSOCIATED, MonitorTab.IOT,
     MonitorTab.CAMERAS, MonitorTab.PHONES_LAPTOPS, MonitorTab.CLIENTS,
 )
 
@@ -153,6 +154,10 @@ private fun MonitorWorkspace(
     var showHiddenAps by rememberSaveable { mutableStateOf(false) }
     var hideNoise by remember { mutableStateOf(settingsRepository.monitorHideNoise) }
     var seenWithinMin by remember { mutableIntStateOf(settingsRepository.monitorSeenWithinMin) }
+    // 👣 With me: threshold, alerts, ignored devices (MonitorCoTravel).
+    var coTravelMinPlaces by remember { mutableIntStateOf(settingsRepository.monitorCoTravelMinPlaces) }
+    var coTravelAlerts by remember { mutableStateOf(settingsRepository.monitorCoTravelAlerts) }
+    var coTravelIgnored by remember { mutableStateOf(settingsRepository.monitorCoTravelIgnored) }
     // 🔍 one query for Live, Net ops and the Mission map.
     var searchQuery by rememberSaveable { mutableStateOf("") }
     val noisePatterns = remember { MonitorNoiseFilter.compile(settingsRepository.monitorNoisePatterns).patterns }
@@ -325,6 +330,25 @@ private fun MonitorWorkspace(
         .filter { it.first.mac !in staleMacs && (searchKeep == null || it.first.mac in searchKeep) }
         .filter { (focusedKind == null || sectionOf(selected) == MonitorSection.NET_OPS || it.second.kind == focusedKind) && (replaying || !MonitorApVisibility.isHidden(it.first, resolvedHiddenAps)) }
     val newDevices = state.devices.count { incoming -> displayDevices.none { it.first.mac == incoming.first.mac } }
+    // Trails: live from the capture service; in replay (and for a stopped
+    // mission after an app restart) from the mission log's readings.
+    var loggedTrails by remember { mutableStateOf<List<MonitorCoTravel.Trail>>(emptyList()) }
+    val activeMissionIdForTrails = settingsRepository.activeMonitorMissionId
+    LaunchedEffect(activeReplay, replayCutoffMs, activeMissionIdForTrails, state.running, missionRevision) {
+        loggedTrails = withContext(Dispatchers.Default) {
+            val replay = activeReplay
+            when {
+                replay != null -> MonitorCoTravel.analyze(replay.samples, replayCutoffMs)
+                state.running || activeMissionIdForTrails == null -> emptyList()
+                else -> runCatching {
+                    val log = File(context.getExternalFilesDir(null), "monitor-missions/$activeMissionIdForTrails/mission.jsonl")
+                    if (log.isFile) MonitorCoTravel.analyze(MonitorEvidence.read(log).samples) else emptyList()
+                }.getOrDefault(emptyList())
+            }
+        }
+    }
+    val coTravelTrails = (if (replaying || state.coTravel.isEmpty()) loggedTrails else state.coTravel)
+        .filter { it.qualifies(coTravelMinPlaces) && (searchKeep == null || it.mac in searchKeep) }
 
     val recordAction: (String, String) -> Unit = { event, details ->
         if (state.running) service?.logMonitorEvent(event, details)
@@ -660,6 +684,23 @@ private fun MonitorWorkspace(
                 com.whyfi.app.mission.MapLayerChip("Path", mapPath) { mapPath = !mapPath }
             }
           }
+        } else if (selected == MonitorTab.CO_TRAVEL) {
+            CoTravelTable(coTravelTrails, (if (replaying) replayDevices else displayDevices).associateBy { it.first.mac },
+                coTravelMinPlaces, coTravelIgnored, favorites, Modifier.weight(1f).padding(12.dp),
+                nowWallMs = if (replaying) replayCutoffMs else System.currentTimeMillis(),
+                onIgnore = { mac ->
+                    coTravelIgnored = if (mac in coTravelIgnored) coTravelIgnored - mac else coTravelIgnored + mac
+                    settingsRepository.monitorCoTravelIgnored = coTravelIgnored
+                    if (!replaying) recordAction("co_travel_ignored", "$mac:${mac in coTravelIgnored}")
+                },
+                onFavorite = toggleFavorite,
+                onOpen = { mac ->
+                    // Map, focused on this device: where it was heard along the route.
+                    selectedLocationMac = mac
+                    followMe = false
+                    selectedName = MonitorTab.MAPPING.name
+                    locationRecenter++
+                })
         } else {
             if (replaying && activeReplay?.snapshots?.isEmpty() == true) Text(
                 "This older mission did not save device roles or category snapshots.",
@@ -790,10 +831,31 @@ private fun MonitorWorkspace(
                 }, label = { Text("Hide noise ($noiseCount)") })
                 // Net ops: the device categories, in this one bar (the old
                 // top bar is gone). Tap again to show every device.
+                if (selected == MonitorTab.CO_TRAVEL) {
+                    var placesMenu by remember { mutableStateOf(false) }
+                    Box {
+                        FilterChip(true, { placesMenu = true }, label = { Text(MonitorCoTravel.chipLabel(coTravelMinPlaces)) })
+                        DropdownMenu(placesMenu, { placesMenu = false }) {
+                            MonitorCoTravel.PLACE_OPTIONS.forEach { n ->
+                                DropdownMenuItem(text = { Text("Heard at ≥ $n places, ≥ 10 min") }, onClick = {
+                                    placesMenu = false
+                                    coTravelMinPlaces = n
+                                    settingsRepository.monitorCoTravelMinPlaces = n
+                                    if (!replaying) recordAction("co_travel_threshold", n.toString())
+                                })
+                            }
+                        }
+                    }
+                    FilterChip(coTravelAlerts, {
+                        coTravelAlerts = !coTravelAlerts
+                        settingsRepository.monitorCoTravelAlerts = coTravelAlerts
+                        if (!replaying) recordAction("co_travel_alerts", if (coTravelAlerts) "on" else "off")
+                    }, label = { Text(if (coTravelAlerts) "🔔 Alerts on" else "🔕 Alerts off") })
+                }
                 if (section == MonitorSection.NET_OPS) DEVICE_CATEGORIES.forEach { tab ->
                     FilterChip(tab == selected, {
                         if (tab == selected) selectTab(MonitorTab.NET_OPS.also { lastCategoryName = it.name }) else selectTab(tab)
-                    }, label = { Text("${tab.label} (${monitorRows(tab, categoryDevices).size})") })
+                    }, label = { Text("${tab.label} (${if (tab == MonitorTab.CO_TRAVEL) coTravelTrails.size else monitorRows(tab, categoryDevices).size})") })
                 } else SniffedDevices.Kind.entries.forEach { kind ->
                     FilterChip(kind == focusedKind, {
                         focusedKind = if (focusedKind == kind) null else kind
@@ -875,6 +937,7 @@ private fun monitorRows(
         MonitorTab.PHONES_LAPTOPS -> guess.kind == SniffedDevices.Kind.PHONE_LAPTOP
         MonitorTab.CLIENTS -> device.isClient && guess.kind == SniffedDevices.Kind.CLIENT
         MonitorTab.NET_OPS -> true
+        MonitorTab.CO_TRAVEL -> false // its own table, from MonitorCoTravel trails
         MonitorTab.NEARBY, MonitorTab.MAPPING, MonitorTab.MISSIONS, MonitorTab.SETUP -> false
     } }.sortedWith(
         compareByDescending<Pair<SniffedDevices.Device, SniffedDevices.Guess>> { it.first.lastMs }
@@ -1176,4 +1239,70 @@ private fun MonitorSearchBar(query: String, counts: String?, onChange: (String) 
                 TextButton({ onChange("") }) { Text("✕") }
             }
         }))
+}
+
+/**
+ * 👣 With me: devices heard at several places of the route (MonitorCoTravel).
+ * Tap a row for the map; ⊘ stops alerts for a device (own phone, car), ★ pins it.
+ */
+@Composable
+private fun CoTravelTable(
+    trails: List<MonitorCoTravel.Trail>,
+    devices: Map<String, Pair<SniffedDevices.Device, SniffedDevices.Guess>>,
+    minPlaces: Int,
+    ignored: Set<String>,
+    favorites: Set<String>,
+    modifier: Modifier,
+    nowWallMs: Long,
+    onIgnore: (String) -> Unit,
+    onFavorite: (String) -> Unit,
+    onOpen: (String) -> Unit,
+) {
+    val clock = remember { DateFormat.getTimeInstance(DateFormat.SHORT) }
+    val apNames = devices.values.filter { it.first.isAp && it.first.ssid.isNotBlank() }.associate { it.first.mac to it.first.ssid }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Heard at ≥ $minPlaces places at least ${MonitorCoTravel.SEPARATION_M.toInt()} m apart, over ≥ 10 min, " +
+            "by where this phone was. Tap a row for the map. Devices that rotate their MAC split into several rows.",
+            style = MaterialTheme.typography.bodySmall)
+        if (trails.isEmpty()) Text("No device has travelled with you yet. It needs location fixes while moving.",
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        DataTable(
+            columns = listOf(
+                TableColumn("Device", 150.dp),
+                TableColumn("MAC", 150.dp),
+                TableColumn("Places", 70.dp),
+                TableColumn("Over", 90.dp),
+                TableColumn("First seen", 90.dp),
+                TableColumn("Last seen", 130.dp),
+                TableColumn("Type", 130.dp),
+                TableColumn("Connected to", 200.dp),
+                TableColumn("Readings", 80.dp),
+            ),
+            rows = trails.map { trail ->
+                val row = devices[trail.mac]
+                DataTableRow(
+                    key = trail.mac,
+                    onClick = { onOpen(trail.mac) },
+                    dimmed = trail.mac in ignored,
+                    isHidden = trail.mac in ignored,
+                    onHideToggle = { onIgnore(trail.mac) },
+                    isFavorite = trail.mac in favorites,
+                    onFavoriteToggle = { onFavorite(trail.mac) },
+                    cells = listOf(
+                        (row?.let { SniffedDevices.displayName(it.first, it.second) } ?: "Device") + "  ↗ map",
+                        trail.mac,
+                        trail.places.size.toString(),
+                        MonitorCoTravel.spanLabel(trail.spanMs),
+                        clock.format(Date(trail.firstMs)),
+                        "${clock.format(Date(trail.lastMs))} · ${MonitorSeenClock.ago((nowWallMs - trail.lastMs).coerceAtLeast(0))}",
+                        row?.second?.kind?.label ?: "—",
+                        row?.first?.bssids?.joinToString { b -> apNames[b]?.let { "$it ($b)" } ?: b }?.ifBlank { null } ?: "—",
+                        trail.readings.toString(),
+                    ),
+                )
+            },
+            modifier = Modifier.weight(1f),
+            showBadgeColumn = false,
+        )
+    }
 }

@@ -165,6 +165,21 @@ class SettingsRepository(context: Context) {
         get() = prefs.getInt("monitor_seen_within_min", 0)
         set(value) = prefs.edit { putInt("monitor_seen_within_min", value) }
 
+    /** USB "👣 With me": places a device must be heard at (MonitorCoTravel). */
+    var monitorCoTravelMinPlaces: Int
+        get() = prefs.getInt("monitor_cotravel_min_places", 3)
+        set(value) = prefs.edit { putInt("monitor_cotravel_min_places", value) }
+
+    /** Notify while capturing when a device starts travelling with the phone. */
+    var monitorCoTravelAlerts: Boolean
+        get() = prefs.getBoolean("monitor_cotravel_alerts", true)
+        set(value) = prefs.edit { putBoolean("monitor_cotravel_alerts", value) }
+
+    /** Devices the user ⊘-ignored in "With me" (own phone, car): never alerted. */
+    var monitorCoTravelIgnored: Set<String>
+        get() = prefs.getStringSet("monitor_cotravel_ignored", emptySet()).orEmpty().toSet()
+        set(value) = prefs.edit { putStringSet("monitor_cotravel_ignored", value) }
+
     /** Phone Mission map "⏱ Seen" filter in minutes, 0 = any time. */
     var missionSeenWithinMin: Int
         get() = prefs.getInt("mission_seen_within_min", 0)
