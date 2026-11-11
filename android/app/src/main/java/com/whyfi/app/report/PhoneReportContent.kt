@@ -286,6 +286,8 @@ object ScanReportContent {
     /** One table per radio of every unique device this session, strongest reading first. */
     fun sessionTable(kind: RadioKind, devices: List<com.whyfi.app.scan.SurveyTally.SeenDevice>, catalog: Map<String, String> = emptyMap()): ReportTable {
         val withCatalog = kind != RadioKind.CELLULAR && devices.any { catalog[it.id.uppercase()] != null }
+        val withTimes = devices.any { it.lastMs > 0 }
+        val time = ReportFormat.clock(devices.flatMap { listOf(it.firstMs, it.lastMs) })
         val (label, id, detail) = when (kind) {
             RadioKind.WIFI -> Triple("SSID", "BSSID", "Band")
             RadioKind.CELLULAR -> Triple("Carrier", "Cell", "Type · cell ID")
@@ -294,10 +296,12 @@ object ScanReportContent {
         return ReportTable(
             columns = listOf(ReportColumn(label, 1.6f), ReportColumn(id, 1.6f, CellKind.MONO), ReportColumn(detail, 1.3f)) +
                 (if (withCatalog) listOf(ReportColumn("Catalog", 1.2f)) else emptyList()) +
-                ReportColumn("Best signal", 0.8f, CellKind.NUMBER),
+                ReportColumn("Best signal", 0.8f, CellKind.NUMBER) +
+                (if (withTimes) listOf(ReportColumn("First seen", 0.9f, CellKind.MONO), ReportColumn("Last seen", 0.9f, CellKind.MONO)) else emptyList()),
             rows = devices.map {
                 listOf(it.label.ifBlank { "–" }, it.id, it.detail.ifBlank { "–" }) +
-                    (if (withCatalog) listOf(catalog[it.id.uppercase()] ?: "–") else emptyList()) + "${it.best} dBm"
+                    (if (withCatalog) listOf(catalog[it.id.uppercase()] ?: "–") else emptyList()) + "${it.best} dBm" +
+                    (if (withTimes) listOf(time(it.firstMs), time(it.lastMs)) else emptyList())
             },
             empty = "Nothing heard this session.",
             note = if (withCatalog) "Catalog: Fieldwatch signature pattern matches, informational, not identifications." else null,

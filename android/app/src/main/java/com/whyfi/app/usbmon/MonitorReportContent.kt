@@ -52,12 +52,16 @@ internal object MonitorReportContent {
     )
 
     /** Section 2: one row per starred device, numbered like the overview map. */
-    fun positionsTable(targets: List<String>, estimates: Map<String, MonitorEstimate?>, names: Map<String, String>): ReportTable =
+    fun positionsTable(
+        targets: List<String>, estimates: Map<String, MonitorEstimate?>, names: Map<String, String>,
+        seen: Map<String, MonitorSeenClock.Span> = emptyMap(), time: (Long) -> String = { it.toString() },
+    ): ReportTable =
         ReportTable(
             columns = listOf(
-                ReportColumn("#", 0.35f, CellKind.NUMBER), ReportColumn("Device", 1.5f), ReportColumn("MAC", 1.45f, CellKind.MONO),
+                ReportColumn("#", 0.35f, CellKind.NUMBER), ReportColumn("Device", 1.4f), ReportColumn("MAC", 1.45f, CellKind.MONO),
                 ReportColumn("Latitude", 1.05f, CellKind.NUMBER), ReportColumn("Longitude", 1.05f, CellKind.NUMBER),
-                ReportColumn("Uncertainty", 0.85f, CellKind.NUMBER), ReportColumn("Places", 0.6f, CellKind.NUMBER), ReportColumn("Status", 1f),
+                ReportColumn("Uncertainty", 0.85f, CellKind.NUMBER), ReportColumn("Places", 0.6f, CellKind.NUMBER), ReportColumn("Status", 0.95f),
+                ReportColumn("Last seen", 0.95f, CellKind.MONO),
             ),
             rows = targets.mapIndexed { index, mac ->
                 val e = estimates[mac]
@@ -66,25 +70,30 @@ internal object MonitorReportContent {
                     e?.let { coord(it.lat) } ?: "–", e?.let { coord(it.lng) } ?: "–",
                     e?.let { metres(it.uncertaintyM) } ?: "–", e?.spatialGroups?.toString() ?: "–",
                     when { e == null -> "no location fix"; e.provisional -> "provisional"; else -> "estimate" },
+                    seen[mac]?.let { time(it.lastMs) } ?: "–",
                 )
             },
             empty = "No device was pinned. Star a device in Live to collect position readings.",
         )
 
     /** Section 3: receiver-derived hints for every device heard while a fix was available. */
-    fun observationsTable(samplesByMac: Map<String, List<MonitorGeoSample>>, names: Map<String, String>): ReportTable {
+    fun observationsTable(
+        samplesByMac: Map<String, List<MonitorGeoSample>>, names: Map<String, String>, time: (Long) -> String = { it.toString() },
+    ): ReportTable {
         val rows = samplesByMac.entries.sortedByDescending { it.value.size }.mapNotNull { (mac, samples) ->
             val e = MonitorLocalization.estimate(samples) ?: return@mapNotNull null
             listOf(
                 names[mac] ?: "Device", mac, number(samples.size.toLong()),
                 coord(e.lat), coord(e.lng), metres(e.uncertaintyM), if (e.provisional) "receiver hint" else "estimate",
+                time(samples.minOf { it.atMs }), time(samples.maxOf { it.atMs }),
             )
         }
         return ReportTable(
             columns = listOf(
-                ReportColumn("Device", 1.5f), ReportColumn("MAC", 1.45f, CellKind.MONO), ReportColumn("Readings", 0.75f, CellKind.NUMBER),
-                ReportColumn("Latitude", 1.05f, CellKind.NUMBER), ReportColumn("Longitude", 1.05f, CellKind.NUMBER),
-                ReportColumn("Uncertainty", 0.85f, CellKind.NUMBER), ReportColumn("Kind", 0.95f),
+                ReportColumn("Device", 1.35f), ReportColumn("MAC", 1.45f, CellKind.MONO), ReportColumn("Readings", 0.7f, CellKind.NUMBER),
+                ReportColumn("Latitude", 1.0f, CellKind.NUMBER), ReportColumn("Longitude", 1.0f, CellKind.NUMBER),
+                ReportColumn("Uncertainty", 0.8f, CellKind.NUMBER), ReportColumn("Kind", 0.9f),
+                ReportColumn("First seen", 0.9f, CellKind.MONO), ReportColumn("Last seen", 0.9f, CellKind.MONO),
             ),
             rows = rows,
             empty = "No device reading could be matched to a phone location fix.",

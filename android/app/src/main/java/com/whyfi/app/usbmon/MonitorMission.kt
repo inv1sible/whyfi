@@ -417,14 +417,20 @@ object MonitorMission {
         val generated = DateFormat.getDateTimeInstance().format(Date())
         val route = receiverFixes.sortedBy { it.atMs }.map { it.lat to it.lng }
         val markers = MonitorReportContent.markers(targetMacs, estimates, names)
-        val timeFormat = DateFormat.getTimeInstance(DateFormat.MEDIUM)
+        // Whole-mission period; times carry their date when it spans days.
+        val missionTimes = (evidence.events.map { it.atMs } + evidence.snapshots.map { it.atMs } +
+            receiverFixes.map { it.atMs } + geoSamples.map { it.atMs }).filter { it > 0 }
+        val clock = com.whyfi.app.report.ReportFormat.clock(missionTimes)
+        val seen = if (savedDevices.isNotEmpty()) MonitorSeenClock.fromSnapshots(evidence.parsedSnapshots)
+            else MonitorSeenClock.spans(allDevices, System.currentTimeMillis(), SystemClock.elapsedRealtime())
 
         val doc = ReportPdf("Monitor mission report", missionName, "whyfi · local monitor mission · generated $generated")
         try {
             // Cover
             doc.keyValues(listOf(
                 "Mission" to missionName,
-                "Recorded" to dateTime.format(Date(readDate(files.directory, files.log))),
+                "Period" to (if (missionTimes.isEmpty()) dateTime.format(Date(readDate(files.directory, files.log)))
+                    else com.whyfi.app.report.ReportFormat.period(missionTimes.min(), missionTimes.max())),
                 "Mission ID" to files.directory.name,
                 "Adapter" to state.device.ifBlank { "unknown" },
                 "Status" to state.status,
@@ -458,24 +464,16 @@ object MonitorMission {
             doc.heading("2", "Pinned device positions")
             doc.paragraph("${geoSamples.size} location-tagged radio readings (GPS, network or fused source) for ${targetMacs.size} " +
                 "pinned devices.", muted = true)
-            doc.table(MonitorReportContent.positionsTable(targetMacs, estimates, names))
+            doc.table(MonitorReportContent.positionsTable(targetMacs, estimates, names, seen, clock))
 
             doc.heading("3", "Device observations")
             doc.paragraph("${deviceSamples.size} access point and client readings matched to phone location fixes, " +
                 "including devices that were not pinned.", muted = true)
-            doc.table(MonitorReportContent.observationsTable(deviceSamplesByMac, names))
+            doc.table(MonitorReportContent.observationsTable(deviceSamplesByMac, names, clock))
 
             doc.heading("4", "Observed devices")
-            val seen = if (savedDevices.isNotEmpty()) MonitorSeenClock.fromSnapshots(evidence.parsedSnapshots)
-                else MonitorSeenClock.spans(allDevices, System.currentTimeMillis(), SystemClock.elapsedRealtime())
-            val seenDays = seen.values.flatMap { listOf(it.firstMs, it.lastMs) }
-                .map { it / 86_400_000 }.distinct().size
-            val seenFormat = if (seenDays > 1) DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM) else timeFormat
-            val seenDay = seen.values.firstOrNull()?.lastMs?.takeIf { seenDays == 1 }
-            doc.paragraph("Most recently heard first; first and last seen in the phone's local time" +
-                (seenDay?.let { " on " + DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(it)) } ?: "") + ".",
-                muted = true)
-            doc.table(MonitorReportContent.devicesTable(reportDevices, seen) { seenFormat.format(Date(it)) })
+            doc.paragraph("Most recently heard first; first and last seen in the phone's local time.", muted = true)
+            doc.table(MonitorReportContent.devicesTable(reportDevices, seen, clock))
 
             doc.heading("5", "Channels")
             doc.paragraph("Frames received per channel in the latest capture.", muted = true)
@@ -525,7 +523,7 @@ object MonitorMission {
             ), labelWidth = 140f)
 
             doc.heading("C", "Appendix C · Mission timeline")
-            doc.table(MonitorReportContent.timelineTable(evidence.events) { timeFormat.format(Date(it)) })
+            doc.table(MonitorReportContent.timelineTable(evidence.events, clock))
 
             doc.heading("D", "Appendix D · Method and interpretation")
             doc.bullets(listOf(

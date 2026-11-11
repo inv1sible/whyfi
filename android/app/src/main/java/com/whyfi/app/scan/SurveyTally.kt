@@ -45,10 +45,10 @@ data class StrongestSighting(val label: String, val detail: String, val signal: 
  * The Dashboard says so rather than letting the number look like an all-time
  * figure. Don't "fix" this with a Room table without reading AGENT.md first.
  */
-class SurveyTally {
+class SurveyTally(private val clock: () -> Long = System::currentTimeMillis) {
 
-    private data class WifiSeen(val ssid: String, val band: String, val bestRssi: Int)
-    private data class SignalSeen(val label: String, val detail: String, val best: Int)
+    private data class WifiSeen(val ssid: String, val band: String, val bestRssi: Int, val firstMs: Long = 0, val lastMs: Long = 0)
+    private data class SignalSeen(val label: String, val detail: String, val best: Int, val firstMs: Long = 0, val lastMs: Long = 0)
 
     private val wifi = HashMap<String, WifiSeen>()
     private val cellular = HashMap<String, SignalSeen>()
@@ -74,15 +74,15 @@ class SurveyTally {
     fun recordWifi(observations: List<WifiObservationDto>) {
         for (ap in observations) {
             val existing = wifi[ap.bssid]
+            val now = clock()
             // Keep the strongest reading ever taken of this AP, not the latest
             // — walking past a router and back shouldn't downgrade it.
-            if (existing == null || ap.rssi > existing.bestRssi) {
-                wifi[ap.bssid] = WifiSeen(
-                    ssid = RadioFormat.ssidLabel(ap.ssid),
-                    band = RadioFormat.bandFor(ap.frequencyMhz),
-                    bestRssi = ap.rssi,
-                )
-            }
+            wifi[ap.bssid] = if (existing == null || ap.rssi > existing.bestRssi) WifiSeen(
+                ssid = RadioFormat.ssidLabel(ap.ssid),
+                band = RadioFormat.bandFor(ap.frequencyMhz),
+                bestRssi = ap.rssi,
+                firstMs = existing?.firstMs ?: now, lastMs = now,
+            ) else existing.copy(lastMs = now)
         }
     }
 
@@ -92,13 +92,13 @@ class SurveyTally {
             val key = ScanDiff.cellKey(cell.mcc, cell.mnc, cell.tacOrLac, cell.cellId)
             val signal = cell.signalDbm ?: continue
             val existing = cellular[key]
-            if (existing == null || signal > existing.best) {
-                cellular[key] = SignalSeen(
-                    label = cell.carrierName.ifBlank { "${cell.mcc}-${cell.mnc}" },
-                    detail = "${cell.radioType} · ${cell.cellId}",
-                    best = signal,
-                )
-            }
+            val now = clock()
+            cellular[key] = if (existing == null || signal > existing.best) SignalSeen(
+                label = cell.carrierName.ifBlank { "${cell.mcc}-${cell.mnc}" },
+                detail = "${cell.radioType} · ${cell.cellId}",
+                best = signal,
+                firstMs = existing?.firstMs ?: now, lastMs = now,
+            ) else existing.copy(lastMs = now)
         }
     }
 
@@ -106,13 +106,13 @@ class SurveyTally {
     fun recordBle(observations: List<BleObservationDto>) {
         for (device in observations) {
             val existing = ble[device.bleMac]
-            if (existing == null || device.rssi > existing.best) {
-                ble[device.bleMac] = SignalSeen(
-                    label = device.deviceName.ifBlank { "(unnamed)" },
-                    detail = device.deviceTypeGuess,
-                    best = device.rssi,
-                )
-            }
+            val now = clock()
+            ble[device.bleMac] = if (existing == null || device.rssi > existing.best) SignalSeen(
+                label = device.deviceName.ifBlank { "(unnamed)" },
+                detail = device.deviceTypeGuess,
+                best = device.rssi,
+                firstMs = existing?.firstMs ?: now, lastMs = now,
+            ) else existing.copy(lastMs = now)
         }
     }
 
@@ -125,16 +125,16 @@ class SurveyTally {
 
     /** Every unique device this session with its strongest reading, for
      * the scan report: (id, label, detail, best signal), strongest first. */
-    data class SeenDevice(val id: String, val label: String, val detail: String, val best: Int)
+    data class SeenDevice(val id: String, val label: String, val detail: String, val best: Int, val firstMs: Long = 0, val lastMs: Long = 0)
     data class SessionDevices(
         val wifi: List<SeenDevice>, val cellular: List<SeenDevice>, val ble: List<SeenDevice>, val satellites: List<String>,
     )
 
     @Synchronized
     fun devices(): SessionDevices = SessionDevices(
-        wifi = wifi.map { (bssid, w) -> SeenDevice(bssid, w.ssid, w.band, w.bestRssi) }.sortedByDescending { it.best },
-        cellular = cellular.map { (key, c) -> SeenDevice(key, c.label, c.detail, c.best) }.sortedByDescending { it.best },
-        ble = ble.map { (mac, b) -> SeenDevice(mac, b.label, b.detail, b.best) }.sortedByDescending { it.best },
+        wifi = wifi.map { (bssid, w) -> SeenDevice(bssid, w.ssid, w.band, w.bestRssi, w.firstMs, w.lastMs) }.sortedByDescending { it.best },
+        cellular = cellular.map { (key, c) -> SeenDevice(key, c.label, c.detail, c.best, c.firstMs, c.lastMs) }.sortedByDescending { it.best },
+        ble = ble.map { (mac, b) -> SeenDevice(mac, b.label, b.detail, b.best, b.firstMs, b.lastMs) }.sortedByDescending { it.best },
         satellites = satellites.sorted(),
     )
 

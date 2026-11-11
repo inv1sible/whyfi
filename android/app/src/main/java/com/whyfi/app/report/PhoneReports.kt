@@ -108,8 +108,7 @@ object PhoneReports {
         val satellites = ScanDiff.rowsFor(RadioKind.SATELLITE, state.latestPass, state.previousPass)
         val doc = ReportPdf("GPS report", "Location path and accuracy", "whyfi · GPS · generated $generated")
         doc.keyValues(listOf(
-            "Path" to if (track.isEmpty()) "no positions recorded" else
-                "${DateFormat.getDateTimeInstance().format(Date(track.first().atMs))} – ${time.format(Date(track.last().atMs))}",
+            "Path" to if (track.isEmpty()) "no positions recorded" else ReportFormat.period(track.first().atMs, track.last().atMs),
             "Last position" to (track.lastOrNull()?.let { "%.6f, %.6f".format(Locale.US, it.lat, it.lng) +
                 (it.accuracyM?.let { a -> " · ±%.0f m · ${it.provider}".format(Locale.US, a) } ?: "") } ?: "–"),
             "Report generated" to generated,
@@ -131,7 +130,7 @@ object PhoneReports {
         doc.heading("2", "Accuracy by source")
         doc.table(GpsReportContent.providersTable(track))
         doc.heading("3", "Positions")
-        doc.table(GpsReportContent.trackTable(track) { time.format(Date(it)) })
+        doc.table(GpsReportContent.trackTable(track, ReportFormat.clock(track.map { it.atMs })))
 
         doc.pageBreak()
         doc.heading("A", "Appendix A · Satellites in the last pass")
@@ -170,8 +169,8 @@ object PhoneReports {
         else RadioKind.entries.associateWith { ScanDiff.rowsFor(it, state.latestPass, state.previousPass) }
         val doc = ReportPdf("Overview report", "Scanning session", "whyfi · overview · generated $generated")
         doc.keyValues(listOf(
-            "Session started" to if (survey.startedAtMs > 0) DateFormat.getDateTimeInstance().format(Date(survey.startedAtMs)) else "–",
-            "Last pass" to (state.latestPass?.startedAt ?: "none"),
+            "Session" to ReportFormat.period(survey.startedAtMs, System.currentTimeMillis()),
+            "Last pass" to (state.latestPass?.startedAt?.let { ReportFormat.isoLocal(it) } ?: "none"),
             "Public IP" to publicIpLine(state),
             "Report generated" to generated,
         ))
@@ -232,8 +231,7 @@ object PhoneReports {
         val doc = ReportPdf("Scan report", "Scanning session", "whyfi · scan · generated $generated")
         val last = track.lastOrNull() ?: positions.lastOrNull()
         doc.keyValues(listOf(
-            "Session" to (if (survey.startedAtMs > 0) DateFormat.getDateTimeInstance().format(Date(survey.startedAtMs)) else "–") +
-                " – " + time.format(Date(endedAtMs ?: System.currentTimeMillis())),
+            "Session" to ReportFormat.period(survey.startedAtMs, endedAtMs ?: System.currentTimeMillis()),
             "Passes" to "${survey.passCount} this session · ${state.completedScanCount} completed",
             "Public IP" to publicIpLine(state),
             "Last position" to (last?.let { "%.6f, %.6f".format(Locale.US, it.lat, it.lng) +
@@ -273,7 +271,7 @@ object PhoneReports {
         var notes = "A"
         if (positions.isNotEmpty()) {
             doc.heading("A", "Appendix A · Pass positions")
-            doc.table(GpsReportContent.trackTable(positions) { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM).format(Date(it)) })
+            doc.table(GpsReportContent.trackTable(positions, ReportFormat.clock(positions.map { it.atMs })))
             notes = "B"
         }
         doc.heading(notes, "Appendix $notes · Notes")
@@ -312,7 +310,7 @@ object PhoneReports {
         val title = "${kind.label} report"
         val doc = ReportPdf(title, "Last scan pass", "whyfi · ${kind.label} · generated $generated")
         doc.keyValues(listOf(
-            "Pass started" to (pass?.startedAt ?: "none"),
+            "Pass started" to (pass?.startedAt?.let { ReportFormat.isoLocal(it) } ?: "none"),
             "Location" to (pass?.latitude?.let { "%.6f, %.6f".format(Locale.US, it, pass.longitude ?: 0.0) +
                 (pass.locationAccuracyMeters?.let { a -> " · ±%.0f m".format(Locale.US, a) } ?: "") } ?: "no fix"),
             "Report generated" to generated,
@@ -380,8 +378,11 @@ object PhoneReports {
         asked: com.whyfi.app.scan.ScanOptions? = null,
     ): File = withContext(Dispatchers.IO) {
         val radioPasses = passes.filter { it.lanObservations.isEmpty() && it.ftmObservations.isEmpty() }
-        val tally = com.whyfi.app.scan.SurveyTally()
+        // First/last seen from each pass's own time, not the report's.
+        var passMs = recording.startedAtMs
+        val tally = com.whyfi.app.scan.SurveyTally { passMs }
         radioPasses.forEach {
+            passMs = com.whyfi.app.scan.RecordingFormat.epochMs(it.startedAt) ?: passMs
             tally.beginPass()
             tally.recordWifi(it.wifiObservations); tally.recordCellular(it.cellObservations)
             tally.recordBle(it.bleObservations); tally.recordSatellite(it.satelliteObservations)
