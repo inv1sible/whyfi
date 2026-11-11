@@ -192,6 +192,11 @@ credentials, or publish secrets.
   Android UI or behavior work; only skip it when the maintainer explicitly
   asks for source-only work. Report the published version and Download-page
   availability, and verify that the built APK contains the new code.
+  Since v118 a phone with a server set up asks `app/latest/` on start and
+  offers the newest successful build (`android/.../update/`, MEMORY.md), so
+  every published test build reaches the maintainer's phone as an update
+  prompt. Notes passed to the build are shown there as "What's new": write
+  them for the user.
 - **Generate migrations against a real Postgres, then copy the file to the
   host immediately.** `backend/` is not bind-mounted into the `backend`
   container, so `docker compose exec backend python manage.py

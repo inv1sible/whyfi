@@ -37,6 +37,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.whyfi.app.BuildConfig
 import com.whyfi.app.data.SettingsRepository
+import com.whyfi.app.update.AppUpdateController
 import com.whyfi.app.data.ThemePreference
 import com.whyfi.app.diagnostics.CrashLogReader
 import com.whyfi.app.diagnostics.CrashReportSender
@@ -97,6 +98,8 @@ fun SettingsScreen(
             ThemeOption("Light", ThemePreference.LIGHT, themePreference, onThemePreferenceChange)
             ThemeOption("Dark", ThemePreference.DARK, themePreference, onThemePreferenceChange)
         }
+
+        if (serverConfigured) TextButton(onClick = { AppUpdateController.check(context) }) { Text("Check for update") }
 
         // -- Location source --
         SettingsSection("Location source", "Best fresh fix per scan: GPS, network, fused") {

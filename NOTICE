@@ -12,6 +12,9 @@ android/app/src/main/assets/fieldwatch-signatures-v2.json (byte-identical).
 The matching rules in backend/scans/ble_signatures.py and wifi_signatures.py
 are a Python port of Fieldwatch's SignatureEngine.kt and related helpers, and
 android/app/src/main/java/com/whyfi/app/signatures/ a Kotlin port of those.
+The in-app update (android/app/src/main/java/com/whyfi/app/update/) follows
+the approach of Fieldwatch's AppUpdate*.kt: check, download, compare package,
+version and signing certificate, then hand over to Android's installer.
 All are used under the MIT License:
 
 MIT License

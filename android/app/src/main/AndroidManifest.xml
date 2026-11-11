@@ -13,6 +13,11 @@
          ACCESS_FINE_LOCATION above, just the hardware capability. -->
     <uses-feature android:name="android.hardware.wifi.rtt" android:required="false" />
 
+    <!-- In-app update from the user's own server (update/AppUpdater.kt):
+         lets whyfi hand a downloaded build to Android's installer. Android
+         still asks the user to allow this once and to confirm every install. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- Cellular serving/neighbor cell info -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 

@@ -84,6 +84,13 @@ interface WhyfiApiService {
         @Body report: CrashReportRequest,
     ): Response<CrashReportResponse>
 
+    /** In-app update (update/AppUpdater.kt): the newest build on this server.
+     * The server accepts the sensor token here; 404 = nothing built yet. */
+    @GET("app/latest/")
+    suspend fun latestRelease(
+        @Header("Authorization") authorization: String,
+    ): Response<AppReleaseResponse>
+
     /** Feeds the Mission view — see mission/MissionController.kt. The first
      * GET this service has ever needed; every call above is a POST. */
     @GET("mission/wifi-observations/")

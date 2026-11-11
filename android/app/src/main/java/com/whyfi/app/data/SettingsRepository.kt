@@ -165,6 +165,11 @@ class SettingsRepository(context: Context) {
         get() = prefs.getInt("monitor_seen_within_min", 0)
         set(value) = prefs.edit { putInt("monitor_seen_within_min", value) }
 
+    /** In-app update: the build the user answered "Later" to (update/AppUpdate.kt). */
+    var updateSkippedCode: Int
+        get() = prefs.getInt("update_skipped_code", 0)
+        set(value) = prefs.edit { putInt("update_skipped_code", value) }
+
     /** USB missions upload after every Stop (log; PCAP on Wi‑Fi). */
     var monitorAutoUpload: Boolean
         get() = prefs.getBoolean("monitor_auto_upload", true)

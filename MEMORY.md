@@ -1194,3 +1194,34 @@ the user's request (no hint bars). The choice is saved
   Report button opens it, regenerating if passes ran since.
 - Reports only contain sections that have data (`PhoneReports.Sections`),
   matching what the screen shows.
+
+## In-app update from the user's own server (v118, 2026-11-11)
+
+User saw Fieldwatch's in-app update and asked for the same. Fieldwatch asks
+GitHub (a fixed `dist/app-update.json` + APK on `main`); whyfi asks **only the
+configured server** (`GET app/latest/` with the sensor token, which that
+endpoint was built for). A standalone install checks nowhere. Decisions:
+
+- **No GitHub check.** Test builds live on the local server only, and a start
+  check against GitHub would be a new third-party call. Ask before adding one
+  for standalone installs.
+- Check on app start (once per process and server, silent unless newer) plus
+  "Check for update" in phone Settings and USB Settings → App update.
+  `update/AppUpdate.kt` (pure, tested), `AppUpdater.kt`, `AppUpdateUi.kt`
+  (`AppUpdateController` singleton + `AppUpdateDialog`, mounted in `WhyfiApp`).
+- "Later" stores `update_skipped_code`: the start check stays quiet about that
+  build, the Settings button still offers it, a newer build asks again.
+- **The download is pinned to the configured server** (`AppUpdate.pinnedUrl`):
+  only path + token come from the server's `download_url`. "Update now" asks
+  the server again first because that token expires after 30 min.
+- Before the installer opens: zip header, same package, announced and higher
+  version code, same signing certificate as the installed app. The server may
+  be plain HTTP, so this is the integrity check; Android enforces the signer
+  as well. Unreadable signers (old Android) are let through to the installer.
+- **Never while a scan or USB capture runs**: the install kills the process.
+  The start offer waits; the manual one disables "Update now".
+- Android always asks to confirm (`ACTION_VIEW` + `REQUEST_INSTALL_PACKAGES`).
+  Silent install via `PackageInstaller` was deliberately not done.
+- Builds before v118 have no updater: the first in-app update is the one
+  *after* v118.
+

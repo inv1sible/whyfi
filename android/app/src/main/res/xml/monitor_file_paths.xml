@@ -2,4 +2,6 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <external-files-path name="monitor-missions" path="monitor-missions/" />
     <external-files-path name="reports" path="reports/" />
+    <!-- In-app update download, handed to Android's installer (update/AppUpdater.kt). -->
+    <cache-path name="update" path="update/" />
 </paths>

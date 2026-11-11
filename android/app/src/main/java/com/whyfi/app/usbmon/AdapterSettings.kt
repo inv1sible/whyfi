@@ -22,7 +22,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.whyfi.app.BuildConfig
 import com.whyfi.app.data.SettingsRepository
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
 import com.whyfi.app.ui.SettingsSection
+import com.whyfi.app.update.AppUpdateController
 
 /** Settings that only concern the external USB adapter, shown in the
  * adapter workspace's Settings tab, folded like the phone's (SettingsSection). */
@@ -71,6 +74,15 @@ fun AdapterSettings(settingsRepository: SettingsRepository) {
                 noiseMessage = "Noise patterns saved."
             }, enabled = validation.error == null) { Text("Save noise patterns") }
             noiseMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        }
+    }
+
+    if (settingsRepository.isConfigured) {
+        val updateContext = LocalContext.current
+        SettingsSection("App update", "whyfi ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})") {
+            Text("whyfi asks your server for a newer build when it starts. Android asks you to confirm every install.",
+                style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { AppUpdateController.check(updateContext) }) { Text("Check for update") }
         }
     }
 

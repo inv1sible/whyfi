@@ -139,6 +139,16 @@ data class CrashReportResponse(
     @SerializedName("id") val id: String,
 )
 
+/** `GET app/latest/`: the newest built APK on the server (update/AppUpdate.kt).
+ * Everything nullable: the answer is checked, not trusted. */
+data class AppReleaseResponse(
+    @SerializedName("version_code") val versionCode: Int?,
+    @SerializedName("version_name") val versionName: String?,
+    @SerializedName("release_notes") val releaseNotes: String?,
+    @SerializedName("download_url") val downloadUrl: String?,
+    @SerializedName("apk_size") val apkSize: Long?,
+)
+
 /** Every estimator's answer for a Mission target, plus how far apart they
  * land — mirrors compare_estimators() in backend/scans/estimators.py. Lets
  * Mission view draw the cone from the user's chosen algorithm while showing

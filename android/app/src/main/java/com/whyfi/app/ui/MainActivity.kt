@@ -41,6 +41,7 @@ import com.whyfi.app.scan.MonitorUiState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.collectAsState
 import com.whyfi.app.ui.theme.WhyfiTheme
+import com.whyfi.app.update.AppUpdateDialog
 import kotlinx.coroutines.launch
 
 /** A whyfi-setup:{json} payload waiting on user confirmation before it's
@@ -258,6 +259,9 @@ private fun WhyfiApp(
 
     // Standalone recordings are offered for upload once a server is set up.
     ConnectUploadPrompt()
+    // In-app update from the configured server; never interrupts a running scan.
+    val monitorRunning = service?.monitorState?.collectAsState()?.value?.running == true
+    AppUpdateDialog(busy = uiState.isScanning || uiState.isContinuous || uiState.isLanScanning || monitorRunning)
 
     if (workspace == Workspace.ADAPTER) {
         MaterialTheme(colorScheme = adapterColorScheme(MaterialTheme.colorScheme)) {
