@@ -7,7 +7,10 @@ import { useFilter } from "../../context/FilterContext";
 // fetched for the whole page (maps included), so it isn't table-specific.
 // The controls that act on a table (search, show-all-columns) sit directly
 // above that table instead; see TableControls.
-const LIST_PATHS = new Set(["/", "/channel-congestion", "/cellular", "/ble-devices", "/heatmap", "/lan-devices"]);
+// "/scans" (Manage scans) joined on 2026-11-11: the same window, date range
+// and focus area narrow the list of scans themselves, so "the scans from
+// Tuesday afternoon at the depot" can be reviewed, exported or deleted as one.
+const LIST_PATHS = new Set(["/", "/channel-congestion", "/cellular", "/ble-devices", "/heatmap", "/lan-devices", "/scans"]);
 
 // A single entity's own detail page (one AP/tower/BLE/LAN device) also
 // fetches its sighting history scoped to this same filter (see

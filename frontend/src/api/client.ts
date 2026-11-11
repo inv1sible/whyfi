@@ -421,7 +421,9 @@ export const api = {
   setCalibrationActive: (isActive: boolean) =>
     post<{ is_active: boolean }>("/calibration/activate/", { radio_kind: "wifi", is_active: isActive }),
 
-  exportScanSessions: (opts: { since?: string; until?: string; sessionLimit?: number; ssidExact?: string } = {}) =>
+  exportScanSessions: (
+    opts: { since?: string; until?: string; sessionLimit?: number; area?: FocusArea | null; ssidExact?: string } = {},
+  ) =>
     get<ExportBundle>(
       `/scan-sessions/export/?${windowQuery(opts)}` +
         `${opts.ssidExact ? `&ssid_exact=${encodeURIComponent(opts.ssidExact)}` : ""}`,
@@ -483,6 +485,11 @@ export const api = {
     ),
 
   scanSessions: (query = "") => get<Paginated<ScanSession>>(`/scan-sessions/${query}`),
+  /** The scans inside the shared window/date range and focus area — what the
+   * Manage scans page lists, and exactly what exportScanSessions with the
+   * same opts writes. */
+  scanSessionsIn: (opts: { since?: string; until?: string; sessionLimit?: number; area?: FocusArea | null }, limit = 1000) =>
+    get<Paginated<ScanSession>>(`/scan-sessions/?limit=${limit}&${windowQuery(opts)}`),
   bulkDeleteScanSessions: (ids: string[]) => del<{ deleted: number }>("/scan-sessions/bulk-delete/", { ids }),
   resolveScanAddresses: (limit = 20) =>
     post<{ resolved: number }>("/scan-sessions/resolve-addresses/", { limit }),

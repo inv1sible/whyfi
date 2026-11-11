@@ -1,12 +1,31 @@
 import { useEffect, useState } from "react";
-import { api } from "../api/client";
+import { api, areaQuery } from "../api/client";
 import { SortableTh } from "../components/SortableTh";
 import { TableControls } from "../components/TableControls";
 import { TruncationNotice } from "../components/TruncationNotice";
+import { useFilter } from "../context/FilterContext";
+import { describeArea } from "../focusArea";
 import { useSortableData } from "../hooks/useSortableData";
+import { formatDuration } from "../hooks/useTimeScanFilter";
 import { usePolling } from "../hooks/usePolling";
 import { filterBySearch } from "../searchFilter";
 import type { ScanSession } from "../api/types";
+
+/** The window and area in words, for the line above the table and the export
+ * message: "the last 5 scans inside 250 m around 52.52000, 13.40500". */
+function describeScope(filter: ReturnType<typeof useFilter>): string {
+  let scope: string;
+  if (filter.mode === "last-n-scans") {
+    scope = filter.isAllScans ? "all scans" : `the last ${filter.scanCount} scan${filter.scanCount === 1 ? "" : "s"}`;
+  } else if (filter.mode === "range") {
+    const from = filter.rangeFrom ? new Date(filter.rangeFrom).toLocaleString() : "the beginning";
+    const to = filter.rangeTo ? new Date(filter.rangeTo).toLocaleString() : "now";
+    scope = `scans started between ${from} and ${to}`;
+  } else {
+    scope = filter.isAllTime ? "all scans" : `scans started ${formatDuration(filter.minutes)} or later`;
+  }
+  return filter.area ? `${scope} inside ${describeArea(filter.area)}` : scope;
+}
 
 // Free-text search runs on this instead of the raw ScanSession so a typed
 // date/time (in whatever format is actually shown in the table) matches,
@@ -39,7 +58,17 @@ export function ManageScansPage() {
   // has no public refetch(), but changing a dep re-fires its effect right
   // away.
   const [refreshKey, setRefreshKey] = useState(0);
-  const { data, error, loading } = usePolling(() => api.scanSessions("?limit=1000"), 15000, [refreshKey]);
+  // The shared window / date range / focus area from the filter bar narrows
+  // this list like every other page (user, 2026-11-11), and the export below
+  // writes exactly the scans listed.
+  const filter = useFilter();
+  const windowOpts = { since: filter.since, until: filter.until, sessionLimit: filter.sessionLimit, area: filter.area };
+  const { data, error, loading } = usePolling(
+    () => api.scanSessionsIn(windowOpts),
+    15000,
+    [refreshKey, filter.since, filter.until, filter.sessionLimit, areaQuery(filter.area)],
+  );
+  const scope = describeScope(filter);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // Set the moment "Delete selected" is clicked — a snapshot of exactly what
@@ -68,7 +97,7 @@ export function ManageScansPage() {
     setIoError(null);
     setIoMessage(null);
     try {
-      const bundle = await api.exportScanSessions({});
+      const bundle = await api.exportScanSessions(windowOpts);
       const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -79,7 +108,7 @@ export function ManageScansPage() {
       setIoMessage(
         bundle.truncated
           ? `Exported ${bundle.session_count} scans — this hit the ${bundle.session_limit} cap, so it is NOT a complete backup. Narrow the range and export again.`
-          : `Exported ${bundle.session_count} scans.`,
+          : `Exported ${bundle.session_count} scans (${scope}).`,
       );
     } catch {
       setIoError("Export failed.");
@@ -225,9 +254,10 @@ export function ManageScansPage() {
         </label>
       </div>
       <p className="page-hint">
-        Export writes every scan and its observations to a JSON file in the same format the app uploads with, so it's
-        a restore point rather than a report. Importing it recreates the data; importing the same file twice changes
-        nothing, because scans are matched on their original id.
+        Export writes the scans listed below ({scope}) with their observations to a JSON file in the same format the
+        app uploads with, so it's a restore point rather than a report. For a full backup choose "All scans" in the
+        filter bar and clear the focus area first. Importing it recreates the data; importing the same file twice
+        changes nothing, because scans are matched on their original id.
       </p>
       {ioMessage && <p className={ioMessage.includes("NOT a complete") ? "warning-text" : "page-hint"}>{ioMessage}</p>}
       {ioError && <p className="error-text">{ioError}</p>}
@@ -252,7 +282,20 @@ export function ManageScansPage() {
       {loading && !data && <p>Loading…</p>}
       {error && <p className="error-text">Could not reach the backend: {error.message}</p>}
       {data && <TruncationNotice shown={data.results.length} total={data.count} noun="scans" />}
-      {data && rows.length === 0 && <p className="empty-state">No scan sessions recorded yet.</p>}
+      {data && (
+        <p className="page-hint">
+          Showing {scope}
+          {data.count > 0 ? ` — ${data.count} scan${data.count === 1 ? "" : "s"}` : ""}. Change the window, date range or
+          focus area in the bar above.
+        </p>
+      )}
+      {data && rows.length === 0 && (
+        <p className="empty-state">
+          {filter.area || filter.sessionLimit || filter.since
+            ? "No scans match the current window and focus area."
+            : "No scan sessions recorded yet."}
+        </p>
+      )}
 
       {rows.length > 0 && (
         <>

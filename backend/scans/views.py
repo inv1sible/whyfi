@@ -95,7 +95,7 @@ def health(request):
     return Response({"status": "ok"})
 
 
-def recent_session_ids(n, radio_related_name=None):
+def recent_session_ids(n, radio_related_name=None, area=None):
     """The N most recent ScanSessions' ids — "last N scans" filtering used
     across several list endpoints (as an alternative to a time-based cutoff,
     which doesn't line up with how often you actually scanned).
@@ -108,11 +108,32 @@ def recent_session_ids(n, radio_related_name=None):
     regular passes and often contain zero LAN scans at all, silently
     returning nothing. Pass radio_related_name="lan_observations" for that;
     leave it unset for WiFi/cellular/BLE/satellite, which all share one
-    session type and don't have this problem."""
+    session type and don't have this problem.
+
+    With a focus area (user, 2026-11-11: "combine filters, like scans and
+    location") it is the N most recent scans recorded *inside* the area, not
+    the N most recent overall with the area applied afterwards — otherwise a
+    survey elsewhere this morning would empty every page about last week's
+    site. A scan without a position is never inside an area."""
     qs = ScanSession.objects.order_by("-started_at")
     if radio_related_name:
         qs = qs.filter(**{f"{radio_related_name}__isnull": False}).distinct()
-    return list(qs.values_list("id", flat=True)[:n])
+    if area is None:
+        return list(qs.values_list("id", flat=True)[:n])
+    return session_ids_in_area(qs, area, limit=n)
+
+
+def session_ids_in_area(qs, area, limit=None):
+    """Ids of the sessions in `qs` (in its order) whose own corrected position
+    lies inside the focus area — at most `limit` of them."""
+    positioned = qs.exclude(latitude__isnull=True).exclude(longitude__isnull=True)
+    ids = []
+    for pk, lat, lng in positioned.values_list("id", "latitude", "longitude").iterator():
+        if area.contains(lat, lng):
+            ids.append(pk)
+            if limit is not None and len(ids) >= limit:
+                break
+    return ids
 
 
 # Grouped coverage/heatmap payloads are assembled row-by-row in Python, so
@@ -392,7 +413,7 @@ def observation_points(qs, request, weight_field):
         qs = qs.filter(observed_at__lte=until)
     session_limit = parse_session_limit(request)
     if session_limit:
-        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(request)))
 
     observations, _ = capped_take(qs.select_related("scan_session"), COVERAGE_OBSERVATION_CAP)
     overrides = ground_truth_overrides(request)
@@ -478,7 +499,7 @@ def ftm_points_for(access_point, request):
         qs = qs.filter(observed_at__lte=until)
     session_limit = parse_session_limit(request)
     if session_limit:
-        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(request)))
 
     overrides = ground_truth_overrides(request)
     return [
@@ -560,7 +581,7 @@ def area_device_ids(request, obs_model, id_field, weight_field, area, session_li
     if until:
         obs_qs = obs_qs.filter(observed_at__lte=until)
     if session_limit:
-        obs_qs = obs_qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+        obs_qs = obs_qs.filter(scan_session_id__in=recent_session_ids(session_limit, area=area))
     obs_qs = obs_qs.exclude(scan_session__latitude__isnull=True).exclude(scan_session__longitude__isnull=True)
 
     groups = {}
@@ -734,7 +755,7 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
         qs = apply_active_window(qs, self.request)
         session_limit = parse_session_limit(self.request)
         if session_limit:
-            qs = qs.filter(observations__scan_session_id__in=recent_session_ids(session_limit)).distinct()
+            qs = qs.filter(observations__scan_session_id__in=recent_session_ids(session_limit, area=parse_area(self.request))).distinct()
         band = self.request.query_params.get("band")
         if band:
             qs = qs.filter(observations__band=band).distinct()
@@ -759,7 +780,7 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
             obs = obs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(request)
         if session_limit:
-            obs = obs.filter(scan_session_id__in=recent_session_ids(session_limit))
+            obs = obs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(request)))
         limit = parse_observation_limit(request)
         return Response(WiFiObservationSerializer(obs[:limit], many=True).data)
 
@@ -872,7 +893,7 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
             qs = qs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(request)
         if session_limit:
-            qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+            qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(request)))
         if ssid_exact:
             # Powers the SSID-group page — one coverage polygon per BSSID
             # sharing an SSID (e.g. a mesh network), not the whole dataset.
@@ -960,7 +981,7 @@ class AccessPointViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
             qs = qs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(request)
         if session_limit:
-            qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+            qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(request)))
         ssid_exact = request.query_params.get("ssid_exact")
         if ssid_exact:
             qs = qs.filter(access_point__ssid=ssid_exact)
@@ -1057,6 +1078,23 @@ class ScanSessionViewSet(
         sensor_id = self.request.query_params.get("sensor")
         if sensor_id:
             qs = qs.filter(sensor_id=sensor_id)
+        # The same window and focus area as every other list (user,
+        # 2026-11-11: filter the scans page by date/time and location, and
+        # combine the two). `since`/`until` bound the scan's start, not its
+        # observations, because this list is about scans as units; the area
+        # judges the scan's own corrected position. Applied before the
+        # annotations below so no to-many join sneaks under a Count.
+        since, until = parse_window(self.request)
+        if since:
+            qs = qs.filter(started_at__gte=since)
+        if until:
+            qs = qs.filter(started_at__lte=until)
+        area = parse_area(self.request)
+        session_limit = parse_session_limit(self.request)
+        if session_limit:
+            qs = qs.filter(pk__in=recent_session_ids(session_limit, area=area))
+        elif area:
+            qs = qs.filter(pk__in=session_ids_in_area(qs.order_by(), area))
         # Annotated once here (list/retrieve) rather than one .count() query
         # per radio type per row — see ScanSessionSerializer._count().
         #
@@ -1188,6 +1226,11 @@ class ScanSessionViewSet(
         area = parse_area(request)
         if area:
             qs = qs.exclude(latitude__isnull=True).exclude(longitude__isnull=True)
+        # "Last N scans" (inside the area, when one is set) — the Manage scans
+        # page exports exactly what it shows (user, 2026-11-11).
+        session_limit = parse_session_limit(request)
+        if session_limit:
+            qs = qs.filter(pk__in=recent_session_ids(session_limit, area=area))
 
         limit = positive_int(request.query_params.get("limit"), EXPORT_SESSION_CAP, maximum=EXPORT_SESSION_CAP)
         sessions = list(qs.order_by("-started_at")[: limit + 1])
@@ -1329,7 +1372,7 @@ class CellTowerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         qs = apply_active_window(qs, self.request)
         session_limit = parse_session_limit(self.request)
         if session_limit:
-            qs = qs.filter(observations__scan_session_id__in=recent_session_ids(session_limit)).distinct()
+            qs = qs.filter(observations__scan_session_id__in=recent_session_ids(session_limit, area=parse_area(self.request))).distinct()
         area = parse_area(self.request)
         if area:
             ids = area_device_ids(self.request, CellObservation, "cell_tower_id", "signal_dbm", area, session_limit)
@@ -1374,7 +1417,7 @@ class CellTowerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
             obs = obs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(request)
         if session_limit:
-            obs = obs.filter(scan_session_id__in=recent_session_ids(session_limit))
+            obs = obs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(request)))
         limit = parse_observation_limit(request)
         return Response(CellObservationSerializer(obs[:limit], many=True).data)
 
@@ -1398,7 +1441,7 @@ class CellTowerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
             qs = qs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(request)
         if session_limit:
-            qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+            qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(request)))
 
         observations, truncated = capped_take(qs, COVERAGE_OBSERVATION_CAP)
         by_tower = {}
@@ -1489,7 +1532,7 @@ class BLEObservationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
             qs = qs.filter(Q(ble_mac=identifier) | Q(stable_identifier=identifier))
         session_limit = parse_session_limit(self.request)
         if session_limit:
-            qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+            qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(self.request)))
         return qs
 
     @action(detail=False, methods=["get"])
@@ -1516,7 +1559,7 @@ class BLEObservationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
             qs = qs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(request)
         if session_limit:
-            qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+            qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(request)))
 
         observations, truncated = capped_take(qs, COVERAGE_OBSERVATION_CAP)
         catalog = load_catalog()
@@ -1628,7 +1671,7 @@ class BLEDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         qs = apply_active_window(qs, self.request)
         session_limit = parse_session_limit(self.request)
         if session_limit:
-            qs = qs.filter(observations__scan_session_id__in=recent_session_ids(session_limit)).distinct()
+            qs = qs.filter(observations__scan_session_id__in=recent_session_ids(session_limit, area=parse_area(self.request))).distinct()
         area = parse_area(self.request)
         if area:
             ids = area_device_ids(self.request, BLEObservation, "ble_device_id", "rssi", area, session_limit)
@@ -1667,7 +1710,7 @@ class BLEDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
             obs = obs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(request)
         if session_limit:
-            obs = obs.filter(scan_session_id__in=recent_session_ids(session_limit))
+            obs = obs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(request)))
         limit = parse_observation_limit(request)
         return Response(BLEObservationSerializer(obs[:limit], many=True).data)
 
@@ -1689,7 +1732,7 @@ class LANObservationViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, vi
             qs = qs.filter(observed_at__lte=until)
         session_limit = parse_session_limit(self.request)
         if session_limit:
-            qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit, radio_related_name="lan_observations"))
+            qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(self.request), radio_related_name="lan_observations"))
         return qs
 
 
@@ -1704,7 +1747,7 @@ class LANDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         session_limit = parse_session_limit(self.request)
         if session_limit:
             qs = qs.filter(
-                observations__scan_session_id__in=recent_session_ids(session_limit, radio_related_name="lan_observations")
+                observations__scan_session_id__in=recent_session_ids(session_limit, area=parse_area(self.request), radio_related_name="lan_observations")
             ).distinct()
         area = parse_area(self.request)
         if area:
@@ -1753,7 +1796,7 @@ class LANDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         # against.
         session_limit = parse_session_limit(request)
         if session_limit and session_limit >= 2 and devices:
-            window_session_ids = recent_session_ids(session_limit, radio_related_name="lan_observations")
+            window_session_ids = recent_session_ids(session_limit, area=parse_area(request), radio_related_name="lan_observations")
             window_latest_id = window_session_ids[0] if window_session_ids else None
             membership = {}
             for device_id, session_id in LANObservation.objects.filter(
@@ -1789,7 +1832,7 @@ class LANDeviceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
             # recent_session_ids(n) window (most recent N sessions overall)
             # regularly contains zero LAN scans. See MEMORY.md.
             obs = obs.filter(
-                scan_session_id__in=recent_session_ids(session_limit, radio_related_name="lan_observations")
+                scan_session_id__in=recent_session_ids(session_limit, area=parse_area(request), radio_related_name="lan_observations")
             )
         limit = parse_observation_limit(request)
         return Response(LANObservationSerializer(obs[:limit], many=True).data)
@@ -1803,7 +1846,7 @@ def channel_congestion(request):
 
     qs = WiFiObservation.objects.filter(band=band)
     if session_limit:
-        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(request)))
     elif since or until:
         if since:
             qs = qs.filter(observed_at__gte=since)
@@ -1847,7 +1890,7 @@ def heatmap(request):
     # recent handful of passes look like" than picking a duration and
     # hoping it lines up with how often you actually scanned.
     if session_limit:
-        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(request)))
     else:
         if since:
             qs = qs.filter(observed_at__gte=since)
@@ -2007,7 +2050,7 @@ def mission_wifi_observations(request):
         qs = qs.filter(observed_at__lte=until)
     session_limit = parse_session_limit(request)
     if session_limit:
-        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(request)))
 
     # The near-radius filter MUST see every window-filtered observation
     # before any cap is applied — iterate the full queryset first, the same
@@ -2080,7 +2123,7 @@ def mission_ble_observations(request):
         qs = qs.filter(observed_at__lte=until)
     session_limit = parse_session_limit(request)
     if session_limit:
-        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(request)))
 
     near_points = []
     for obs in qs.iterator():
@@ -2149,7 +2192,7 @@ def mission_cell_observations(request):
         qs = qs.filter(observed_at__lte=until)
     session_limit = parse_session_limit(request)
     if session_limit:
-        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit))
+        qs = qs.filter(scan_session_id__in=recent_session_ids(session_limit, area=parse_area(request)))
 
     near_points = []
     for obs in qs.iterator():

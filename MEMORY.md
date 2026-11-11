@@ -1277,3 +1277,14 @@ Now:
   Heatmap map only (the detail pages' maps are not filtered by it).
 - Polling deps use `areaQuery(filter.area)` (a string) instead of the
   circle's three primitives.
+- **Scans page + combined filters (2026-11-11, user: "location filter added
+  to scans, time date picker … combine filters, like scans and location"):**
+  `/scans` is in `GlobalFilterBar`'s LIST_PATHS; `GET /scan-sessions/` takes
+  `since`/`until` (on `started_at`), `session_limit` and `area_*`
+  (`api.scanSessionsIn(opts)`), and the export follows the same opts, so
+  "Export scans" writes exactly what is listed (the hint says so; a full
+  backup needs "All scans" + no area). `recent_session_ids(n, …, area=)`:
+  with an area, "last N scans" means the last N recorded *inside* it
+  (`session_ids_in_area`), on every endpoint — otherwise a survey elsewhere
+  this morning emptied every page about last week's site. Scans without a
+  position are never inside an area. Tests: `scans/test_scan_list_filters.py`.
