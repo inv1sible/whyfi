@@ -43,10 +43,18 @@ class MonitorCoTravelTest {
         assertTrue(MonitorCoTravel.analyze(samples, cutoffMs = 20 * 60_000L).isEmpty())
     }
 
+    @Test fun placesAreHundredMetresApart() {
+        // 40 m steps across 400 m: places open at 0, 120, 240 and 360 m.
+        val walk = (0..10).map { sample("w", it, 52.0 + it * 0.00036) }
+        assertEquals(4, MonitorCoTravel.analyze(walk).single().places.size)
+        // Fixes worse than 50 m are skipped.
+        assertTrue(MonitorCoTravel.analyze(listOf(sample("x", 0, 52.0), sample("x", 20, 52.01, accuracy = 80.0))).isEmpty())
+    }
+
     @Test fun trackerReportsNewPlaces() {
         val tracker = MonitorCoTravel.Tracker()
         assertTrue(tracker.add("a", 0, 52.0, 13.0))
-        assertFalse(tracker.add("a", 1, 52.001, 13.0))
+        assertFalse(tracker.add("a", 1, 52.0005, 13.0)) // ~55 m
         assertTrue(tracker.add("a", 2, 52.01, 13.0))
         assertEquals(listOf("a"), tracker.trails().map { it.mac })
     }

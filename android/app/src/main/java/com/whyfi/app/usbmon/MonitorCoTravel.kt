@@ -17,12 +17,12 @@ import kotlin.math.sqrt
  * rotate break the trail into several devices; this cannot be avoided.
  */
 object MonitorCoTravel {
-    const val SEPARATION_M = 500.0
+    const val SEPARATION_M = 100.0
     const val MIN_SPAN_MS = 10 * 60_000L
     const val DEFAULT_MIN_PLACES = 3
     val PLACE_OPTIONS = listOf(2, 3, 5)
     private const val MAX_PLACES = 100
-    private const val MAX_ACCURACY_M = 150.0
+    private const val MAX_ACCURACY_M = 50.0
 
     data class Place(val lat: Double, val lng: Double, val firstMs: Long, val lastMs: Long, val readings: Int)
 

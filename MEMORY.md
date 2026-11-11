@@ -261,7 +261,8 @@ stale, and don't duplicate what's already obvious from code/tests.
   Last seen and sorts by wall last seen. "Recorded" devices from earlier
   sessions keep that label live.
 - **USB 👣 With me** (v113, 2026-11-11): `MonitorCoTravel` groups each
-  device's readings by the *receiver's* position into places ≥500 m apart;
+  device's readings by the *receiver's* position into places ≥100 m apart
+  (v114; was 500 m in v113; fixes worse than 50 m skipped);
   qualifies at ≥N places (chip 2/3/5, default 3, `monitorCoTravelMinPlaces`)
   over ≥10 min (keeps drive-by fixed APs out). Live: the capture service
   places devices heard in the last 5 s at the current fix (one lookup per
