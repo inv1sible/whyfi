@@ -77,7 +77,7 @@ object MonitorMission {
             ?.map { directory ->
                 val pcap = File(directory, "capture.pcap").takeIf { it.isFile }
                 Stored(directory, File(directory, "report.pdf"), File(directory, "mission.jsonl"),
-                    pcap, File(directory, ".uploaded").isFile).also {
+                    pcap, isUploaded(directory)).also {
                     loaded += it
                     if (loaded.size == 1 || loaded.size % 4 == 0) onBatch?.invoke(loaded.sortedByDescending { row -> row.modifiedMs })
                 }
@@ -86,8 +86,25 @@ object MonitorMission {
             .orEmpty()
     }
 
-    fun markUploaded(mission: Stored) {
-        File(mission.directory, ".uploaded").writeText(System.currentTimeMillis().toString())
+    /** `.uploaded` holds "<upload ms> <log bytes sent>"; older markers hold only the time. */
+    fun uploadedLogBytes(directory: File): Long? {
+        val marker = File(directory, ".uploaded").takeIf { it.isFile } ?: return null
+        val parts = runCatching { marker.readText().trim().split(' ') }.getOrDefault(emptyList())
+        return parts.getOrNull(1)?.toLongOrNull() ?: Long.MAX_VALUE
+    }
+
+    /** Uploaded, and nothing appended since (a continued mission needs another upload). */
+    fun isUploaded(directory: File): Boolean =
+        uploadedLogBytes(directory)?.let { it >= File(directory, "mission.jsonl").length() } == true
+
+    fun markUploaded(mission: Stored, logBytes: Long = mission.log.length()) {
+        File(mission.directory, ".uploaded").writeText("${System.currentTimeMillis()} $logBytes")
+    }
+
+    /** A consistent copy of a log that may still be written to (no half line). */
+    fun copyLog(log: File, dest: File): Long = synchronized(logLock) {
+        log.copyTo(dest, overwrite = true)
+        dest.length()
     }
 
     /** Deletes only one UUID-named local mission; an active capture is never removable. */
@@ -146,12 +163,12 @@ object MonitorMission {
         }
     }
 
-    /** Resume only the app's own UUID mission directory; never overwrite a completed upload. */
+    /** Resume only the app's own UUID mission directory. An uploaded mission
+     * can be continued: the next upload replaces it on the server (2026-11-11). */
     fun resume(context: Context, id: String?, recordPcap: Boolean): Files? {
         val uuid = runCatching { UUID.fromString(id) }.getOrNull() ?: return null
         val directory = File(context.getExternalFilesDir(null), "monitor-missions/$uuid")
-        if (!directory.isDirectory || !File(directory, "mission.jsonl").isFile ||
-            File(directory, ".uploaded").exists()) return null
+        if (!directory.isDirectory || !File(directory, "mission.jsonl").isFile) return null
         val pcap = File(directory, "capture.pcap").takeIf { recordPcap || it.isFile }
         return Files(directory, pcap, File(directory, "report.pdf"), File(directory, "mission.jsonl"))
     }

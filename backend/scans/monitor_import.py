@@ -245,10 +245,10 @@ def _store(mission, groups, snapshot_count, fix_count) -> dict:
     }
 
 
-def import_safely(mission: MonitorMission) -> None:
+def import_safely(mission: MonitorMission, force: bool = False) -> None:
     """Upload hook: an import failure must never fail the upload itself."""
     try:
-        import_mission(mission)
+        import_mission(mission, force=force)
     except Exception:  # noqa: BLE001 — logged; the files are stored either way
         log.exception("USB mission import failed for %s", mission.id)
         MonitorMission.objects.filter(pk=mission.pk).update(

@@ -17,7 +17,8 @@ class MonitorMission(models.Model):
 
     id = models.UUIDField(primary_key=True, editable=False)
     sensor = models.ForeignKey(Sensor, null=True, blank=True, on_delete=models.SET_NULL, related_name="monitor_missions")
-    report = models.FileField(upload_to=monitor_file_path)
+    # Optional since 2026-11-11: the app uploads the log after every Stop.
+    report = models.FileField(upload_to=monitor_file_path, blank=True)
     log = models.FileField(upload_to=monitor_file_path)
     pcap = models.FileField(upload_to=monitor_file_path, blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)

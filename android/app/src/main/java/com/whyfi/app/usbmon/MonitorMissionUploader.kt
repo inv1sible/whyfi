@@ -24,20 +24,26 @@ private interface MonitorUploadApi {
     suspend fun upload(
         @Header("Authorization") authorization: String,
         @Part("id") id: okhttp3.RequestBody,
-        @Part report: MultipartBody.Part,
+        @Part report: MultipartBody.Part?,
         @Part log: MultipartBody.Part,
         @Part pcap: MultipartBody.Part?,
     ): Response<UploadReceipt>
 }
 
-/** The upload is explicit and keeps all local files even after success. */
+/**
+ * Uploads one mission: the log always (the server imports its AP readings),
+ * the PDF if one was made, the PCAP only when [includePcap] (Wi‑Fi). Open
+ * missions too; uploading again replaces the server copy. Local files stay.
+ */
 object MonitorMissionUploader {
-    suspend fun upload(mission: MonitorMission.Stored, backendUrl: String, token: String): String =
+    suspend fun upload(mission: MonitorMission.Stored, backendUrl: String, token: String, includePcap: Boolean = true): String =
         withContext(Dispatchers.IO) {
-            if (!mission.complete) return@withContext "Wait for the report and log to finish."
+            if (!mission.log.isFile) return@withContext "No mission log to upload."
             if (backendUrl.isBlank() || token.isBlank()) return@withContext "Configure backend URL and sensor token in Settings."
             val base = backendUrl.trimEnd('/') + "/api/v1/"
+            val logCopy = java.io.File.createTempFile("mission-upload", ".jsonl")
             try {
+                val logBytes = MonitorMission.copyLog(mission.log, logCopy)
                 val client = OkHttpClient.Builder()
                     .writeTimeout(15, TimeUnit.MINUTES)
                     .readTimeout(2, TimeUnit.MINUTES)
@@ -45,21 +51,23 @@ object MonitorMissionUploader {
                 val api = Retrofit.Builder().baseUrl(base).client(client)
                     .addConverterFactory(GsonConverterFactory.create())
                     .build().create(MonitorUploadApi::class.java)
-                fun part(name: String, file: java.io.File, mediaType: String) =
-                    MultipartBody.Part.createFormData(name, file.name, RequestBody.create(MediaType.parse(mediaType), file))
+                fun part(name: String, file: java.io.File, fileName: String, mediaType: String) =
+                    MultipartBody.Part.createFormData(name, fileName, RequestBody.create(MediaType.parse(mediaType), file))
                 val response = api.upload(
                     "Token $token",
                     RequestBody.create(MediaType.parse("text/plain"), mission.directory.name),
-                    part("report", mission.report, "application/pdf"),
-                    part("log", mission.log, "application/x-ndjson"),
-                    mission.pcap?.let { part("pcap", it, "application/vnd.tcpdump.pcap") },
+                    mission.report.takeIf { it.isFile }?.let { part("report", it, "report.pdf", "application/pdf") },
+                    part("log", logCopy, "mission.jsonl", "application/x-ndjson"),
+                    mission.pcap?.takeIf { includePcap && it.isFile }?.let { part("pcap", it, "capture.pcap", "application/vnd.tcpdump.pcap") },
                 )
                 if (response.isSuccessful && response.body()?.id == mission.directory.name) {
-                    MonitorMission.markUploaded(mission)
-                    "Uploaded. Local files retained."
+                    MonitorMission.markUploaded(mission, logBytes)
+                    "Uploaded" + (if (mission.pcap != null && !includePcap) " (PCAP waits for Wi‑Fi)" else "") + ". Local files retained."
                 } else "Upload failed (HTTP ${response.code()})."
             } catch (e: Exception) {
                 "Upload failed: ${e.message ?: e.javaClass.simpleName}"
+            } finally {
+                logCopy.delete()
             }
         }
 }

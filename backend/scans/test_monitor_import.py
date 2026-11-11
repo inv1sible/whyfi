@@ -130,6 +130,15 @@ class MonitorImportTests(TestCase):
         client.credentials(HTTP_AUTHORIZATION=f"Token {usb.token}")
         self.assertIn(client.get("/api/v1/scan-sessions/").status_code, (401, 403))
 
+    def test_reupload_of_a_continued_mission_reimports(self):
+        mission_id = uuid.uuid4()
+        self.upload(mission_log(ROWS[:3]), mission_id)
+        self.assertEqual(WiFiObservation.objects.count(), 1)
+        response = self.upload(mission_log(ROWS), mission_id)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["import_summary"]["observations"], 2)
+        self.assertEqual(WiFiObservation.objects.count(), 2)
+
     def test_unreadable_log_still_stores_the_upload(self):
         response = self.upload(b"not json\n{\"event\": \"devices_snapshot\"}\n")
         self.assertEqual(response.status_code, 201)

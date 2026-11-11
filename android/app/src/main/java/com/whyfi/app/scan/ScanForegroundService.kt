@@ -1032,6 +1032,9 @@ class ScanForegroundService : Service() {
                     reportPath = null,
                     status = if (saved.isFailure) "${finished.status}; capture statistics could not be saved" else finished.status,
                 )
+                if (settingsRepository.monitorAutoUpload && settingsRepository.isConfigured) runCatching {
+                    com.whyfi.app.usbmon.MonitorUploadWorker.enqueue(applicationContext, mission.directory.name, mission.pcap?.isFile == true)
+                }
                 monitorMission = null
                 stopIfNothingKeepsUsAlive()
             }

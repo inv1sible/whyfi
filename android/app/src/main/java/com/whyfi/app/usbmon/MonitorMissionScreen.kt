@@ -34,6 +34,8 @@ internal fun MissionView(
     onDeleted: (String) -> Unit,
     activeLogPath: String?,
     modifier: Modifier = Modifier,
+    /** Ends the open mission (like Reset); null while capturing. */
+    onClose: (() -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf<String?>(null) }
@@ -49,8 +51,15 @@ internal fun MissionView(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Saved missions", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.weight(1f))
+                val waiting = missions.filter { it.log.isFile && !it.uploaded }
+                if (settings.isConfigured && waiting.isNotEmpty()) TextButton({
+                    waiting.forEach { MonitorUploadWorker.enqueue(context, it.directory.name, it.pcap?.isFile == true) }
+                    messages = messages + ("" to "Queued ${waiting.size} mission${if (waiting.size == 1) "" else "s"} for upload " +
+                        "(log now, PCAP on Wi‑Fi). Refresh to see them marked uploaded.")
+                }) { Text("Upload all (${waiting.size})") }
                 TextButton({ onRefresh() }) { Text("Refresh") }
             }
+            messages[""]?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             if (loading) Text("Loading missions…")
             else if (missions.isEmpty()) Text("No monitor missions saved yet.")
             continueError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -103,6 +112,8 @@ internal fun MissionView(
                     Text("PDF: ${fileSize(mission.reportBytes)} · Log: ${fileSize(mission.logBytes)} · PCAP: ${mission.pcapBytes?.let(::fileSize) ?: "not recorded"}",
                         style = MaterialTheme.typography.bodySmall)
                     if (mission.uploaded) Text("Uploaded · local files retained", color = MaterialTheme.colorScheme.primary)
+                    else if (MonitorMission.uploadedLogBytes(mission.directory) != null)
+                        Text("Uploaded earlier · new data since, not yet on the server", color = MaterialTheme.colorScheme.tertiary)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (reportReady) TextButton({
                             messages = messages + (id to openReport(context, mission))
@@ -155,19 +166,34 @@ internal fun MissionView(
                         }
                         if (devices.orEmpty().size > deviceLimit) TextButton({ deviceLimit += 40 }) { Text("Show more devices") }
                     }
+                    val open = id == settings.activeMonitorMissionId
+                    if (open && onClose != null && activeLogPath == null) OutlinedButton({ onClose() },
+                        enabled = busy == null && continuingMissionId == null) { Text("Close mission") }
                     // Uploading needs a server; standalone, missions stay on the phone.
-                    if ((mission.captured || reportReady) && id != settings.activeMonitorMissionId && settings.isConfigured) Button({
+                    // Open missions upload what they have so far; a closed one gets its PDF first.
+                    if (mission.log.isFile && settings.isConfigured) Button({
                         busy = id
                         scope.launch {
                             messages = messages + (id to runCatching {
-                                withContext(Dispatchers.IO) { MonitorMission.ensureReport(context, mission) }
-                                MonitorMissionUploader.upload(mission, settings.backendUrl.orEmpty(), settings.sensorToken.orEmpty())
+                                if (!open) withContext(Dispatchers.IO) { MonitorMission.ensureReport(context, mission) }
+                                val metered = context.getSystemService(android.net.ConnectivityManager::class.java)
+                                    ?.isActiveNetworkMetered ?: true
+                                if (metered && mission.pcap?.isFile == true)
+                                    MonitorUploadWorker.enqueue(context, id, hasPcap = true) // PCAP follows on Wi‑Fi
+                                MonitorMissionUploader.upload(mission, settings.backendUrl.orEmpty(), settings.sensorToken.orEmpty(),
+                                    includePcap = !metered)
                             }.getOrElse { "Upload preparation failed: ${it.message}" })
                             busy = null
                             onRefresh()
                         }
                     }, enabled = busy == null && continuingMissionId == null) {
-                        Text(if (busy == id) "Preparing / uploading…" else if (mission.uploaded) "Upload again" else "Create PDF and upload")
+                        Text(when {
+                            busy == id -> "Preparing / uploading…"
+                            open -> if (mission.uploaded) "Uploaded · upload again" else "Upload so far"
+                            mission.uploaded -> "Upload again"
+                            reportReady -> "Upload"
+                            else -> "Create PDF and upload"
+                        })
                     }
                     messages[id]?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 }

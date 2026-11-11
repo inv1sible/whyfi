@@ -47,6 +47,28 @@ class MonitorMissionTests(TestCase):
         self.assertEqual(self.upload().status_code, 200)
         self.assertEqual(MonitorMission.objects.count(), 1)
 
+    def test_log_only_upload_and_replace(self):
+        # After every Stop the app sends the log alone (2026-11-11).
+        data = {"id": str(self.mission_id),
+                "log": SimpleUploadedFile("mission.jsonl", b'{"event":"a"}\n', content_type="application/x-ndjson")}
+        response = self.phone.post("/api/v1/monitor-missions/upload/", data, format="multipart")
+        self.assertEqual(response.status_code, 201)
+        self.assertIsNone(response.json()["report_url"])
+        # A continued mission uploads again: the log is replaced, the PDF added.
+        response = self.upload(pcap=False)
+        self.assertEqual(response.status_code, 200)
+        mission = MonitorMission.objects.get(id=self.mission_id)
+        self.assertEqual(mission.log.read(), b'{"event":"monitor_finished"}\n')
+        self.assertEqual(mission.report.read(4), b"%PDF")
+        import os
+        self.assertEqual(sorted(os.listdir(os.path.join(self.media_dir.name, "monitor-missions", str(self.mission_id)))),
+                         sorted([os.path.basename(mission.log.name), os.path.basename(mission.report.name)]))
+
+    def test_upload_without_log_is_rejected(self):
+        data = {"id": str(self.mission_id),
+                "report": SimpleUploadedFile("report.pdf", b"%PDF-1.4", content_type="application/pdf")}
+        self.assertEqual(self.phone.post("/api/v1/monitor-missions/upload/", data, format="multipart").status_code, 400)
+
     def test_upload_requires_sensor_token(self):
         self.assertIn(self.upload(APIClient()).status_code, (401, 403))
         self.assertIn(self.upload(self.operator).status_code, (401, 403))

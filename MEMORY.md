@@ -295,6 +295,20 @@ stale, and don't duplicate what's already obvious from code/tests.
   nothing. Backfill 2026-11-11: 3 of 9 missions had data → 7,559
   observations, 1,138 APs (995 not seen by the phone). USB RSSI is the
   Realtek PHY reading, a different scale from ScanResult.
+- **USB missions upload automatically** (v117, 2026-11-11; user expected
+  "upload everything"; supersedes AGENT.md's explicit-upload-only rule).
+  After every Stop `MonitorUploadWorker` sends the log (any network) and
+  log+PCAP (unmetered), unique work per mission, retry with backoff; setting
+  `monitorAutoUpload` (default on, USB Settings → Mission upload). Server:
+  log required, PDF/PCAP optional; re-upload by the same sensor replaces the
+  files it carries and force re-imports (was a silent 200 no-op, so
+  continued missions never updated). `.uploaded` = "<ms> <log bytes>";
+  `isUploaded` false once the log grew; old time-only markers count as
+  uploaded; uploaded missions can be continued now. Missions: "Upload so
+  far" on the open mission, "Upload all (N)", "Close mission" (= Reset,
+  then upload). Live cards: "first · last (ago)" from `seenSpans` = mission
+  log snapshot spans (read when a capture starts/stops) merged with live
+  spans; Last-seen sort and Net ops use it, so "Recorded" devices get times.
 - **Map controls float on the map** (v109, 2026-11-10, user: recentering
   was hard to find while driving): `MapOverlayControls` (MapControls.kt) at
   the map's lower right on both maps, bottom up ⌖ follow, ⟳, ⓘ, ◧ layers

@@ -9,7 +9,10 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.Alignment
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -68,6 +71,16 @@ fun AdapterSettings(settingsRepository: SettingsRepository) {
                 noiseMessage = "Noise patterns saved."
             }, enabled = validation.error == null) { Text("Save noise patterns") }
             noiseMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        }
+    }
+
+    var autoUpload by remember { mutableStateOf(settingsRepository.monitorAutoUpload) }
+    SettingsSection("Mission upload", if (!settingsRepository.isConfigured) "No server set" else if (autoUpload) "After every Stop" else "Manual") {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Upload missions automatically after every Stop: the log on any network, the PCAP on Wi‑Fi. " +
+                "The server adds the AP readings to its WiFi data (source \"<phone>_USB\"). Local files stay.",
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            Switch(autoUpload, { autoUpload = it; settingsRepository.monitorAutoUpload = it })
         }
     }
 }

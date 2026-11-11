@@ -9,7 +9,7 @@ export interface MonitorMission {
   id: string;
   sensor: string;
   uploaded_at: string;
-  report_url: string;
+  report_url: string | null;
   log_url: string;
   pcap_url: string | null;
   report_bytes: number;

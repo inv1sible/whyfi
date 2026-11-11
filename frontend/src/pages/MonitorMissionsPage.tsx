@@ -28,7 +28,9 @@ export function MonitorMissionsPage() {
                 <td>{mission.sensor}</td>
                 <td><code>{mission.id}</code></td>
                 <td>
-                  <a href={mission.report_url} target="_blank" rel="noreferrer">PDF ({size(mission.report_bytes)})</a>
+                  {mission.report_url
+                    ? <a href={mission.report_url} target="_blank" rel="noreferrer">PDF ({size(mission.report_bytes)})</a>
+                    : <span className="muted">no PDF yet</span>}
                   {" · "}
                   <a href={mission.log_url} download>Log ({size(mission.log_bytes)})</a>
                   {mission.pcap_url && <>

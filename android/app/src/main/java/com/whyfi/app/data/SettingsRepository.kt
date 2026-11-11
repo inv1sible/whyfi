@@ -165,6 +165,11 @@ class SettingsRepository(context: Context) {
         get() = prefs.getInt("monitor_seen_within_min", 0)
         set(value) = prefs.edit { putInt("monitor_seen_within_min", value) }
 
+    /** USB missions upload after every Stop (log; PCAP on Wi‑Fi). */
+    var monitorAutoUpload: Boolean
+        get() = prefs.getBoolean("monitor_auto_upload", true)
+        set(value) = prefs.edit { putBoolean("monitor_auto_upload", value) }
+
     /** USB "👣 With me": places a device must be heard at (MonitorCoTravel). */
     var monitorCoTravelMinPlaces: Int
         get() = prefs.getInt("monitor_cotravel_min_places", 3)

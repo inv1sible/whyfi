@@ -206,8 +206,10 @@ credentials, or publish secrets.
 The Android USB Monitor feature currently receives frames only. It is
 explicitly started on the phone and available after a successful adapter
 test. The live device list stays local to the app session; each completed
-mission keeps a PDF, JSONL log, and optional PCAP locally until the operator
-explicitly uploads that mission to the self-hosted backend.
+mission keeps a PDF, JSONL log, and optional PCAP locally. Since
+2026-11-11 (maintainer request) missions upload automatically after every
+Stop when a server is configured (log on any network, PCAP on Wi‑Fi; can be
+turned off in USB Settings); local files are always kept.
 On upload the backend also imports the mission's AP readings as ordinary
 WiFi observations under a "<phone>_USB" sensor (`scans/monitor_import.py`),
 so localization uses them; keep that path on the existing session/

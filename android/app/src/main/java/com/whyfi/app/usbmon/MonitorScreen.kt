@@ -199,6 +199,8 @@ private fun MonitorWorkspace(
     var locationSummary by remember { mutableStateOf("") }
     var missionRevision by remember { mutableIntStateOf(0) }
     var pendingReset by remember { mutableStateOf(false) }
+    // The same as Reset, asked from the open mission's card in Missions.
+    var closingFromMissions by remember { mutableStateOf(false) }
     var continuingMissionId by remember { mutableStateOf<String?>(null) }
     var continueError by remember { mutableStateOf<String?>(null) }
     var missions by remember { mutableStateOf<List<MonitorMission.Stored>>(emptyList()) }
@@ -300,6 +302,21 @@ private fun MonitorWorkspace(
     // Live: wall-clock first/last seen of this capture's devices.
     val liveSeen = remember(state.devices) {
         MonitorSeenClock.spans(state.devices.map { it.first }, System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime())
+    }
+    // Devices from earlier sessions of the open mission ("Recorded"): their
+    // times are only in the mission log, read once when a capture starts or stops.
+    var recordedSeen by remember { mutableStateOf<Map<String, MonitorSeenClock.Span>>(emptyMap()) }
+    val openMissionId = settingsRepository.activeMonitorMissionId
+    LaunchedEffect(openMissionId, state.running, missionRevision) {
+        recordedSeen = withContext(Dispatchers.Default) {
+            openMissionId?.let { File(context.getExternalFilesDir(null), "monitor-missions/$it/mission.jsonl") }
+                ?.takeIf { it.isFile }
+                ?.let { runCatching { MonitorSeenClock.fromSnapshots(MonitorEvidence.read(it).parsedSnapshots) }.getOrNull() }
+                .orEmpty()
+        }
+    }
+    val seenSpans = remember(recordedSeen, liveSeen) {
+        HashMap(recordedSeen).also { MonitorSeenClock.merge(it, liveSeen) }
     }
     val replaying = selectedMissionLogPath != null
     // Net ops shows the device category tables.
@@ -565,6 +582,7 @@ private fun MonitorWorkspace(
             // Lazy: a long mission holds thousands of devices, and drawing a
             // card for each at once ran the app out of memory (crash report
             // 2026-10-27, OOM while accessibility walked the whole tree).
+            CompositionLocalProvider(LocalSeenSpans provides seenSpans) {
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
               item(key = "nearby-controls") {
@@ -603,6 +621,7 @@ private fun MonitorWorkspace(
                     showFavoriteCards, { showFavoriteCards = !showFavoriteCards },
                     showUnassociatedCards, { showUnassociatedCards = !showUnassociatedCards },
                     showApCards, { showApCards = !showApCards }, matchedMacs, matchesFirst, deviceStatus,
+                    seen = seenSpans,
                     onLocate = { mac ->
                         // 📍 on a card: the Mission map, focused on that device.
                         selectedLocationMac = mac
@@ -610,6 +629,7 @@ private fun MonitorWorkspace(
                         selectTab(MonitorTab.MAPPING)
                         locationRecenter++
                     })
+            }
             }
         } else if (selected == MonitorTab.MISSIONS) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -628,6 +648,7 @@ private fun MonitorWorkspace(
                     selectedName = MonitorTab.MAPPING.name
                     locationRecenter++
                 }, onContinue = continueMission, continuingMissionId = continuingMissionId,
+                onClose = if (state.running) null else ({ closingFromMissions = true; pendingReset = true }),
                 continueError = continueError, onDeleted = { path ->
                     missions = missions.filterNot { it.log.absolutePath == path }
                     if (File(path).parentFile?.name == settingsRepository.activeMonitorMissionId) {
@@ -709,7 +730,7 @@ private fun MonitorWorkspace(
                 referenceMs = replayReferenceMs.takeIf { replaying },
                 matches = if (replaying) emptySet() else matchedMacs, matchesFirst = matchesFirst,
                 deviceStatus = if (replaying) emptyMap() else deviceStatus,
-                seen = if (replaying) replaySeen else liveSeen,
+                seen = if (replaying) replaySeen else seenSpans,
                 nowWallMs = if (replaying) replayCutoffMs else System.currentTimeMillis(),
                 onOpenApLocation = { mac ->
                     selectedLocationMac = mac
@@ -865,12 +886,20 @@ private fun MonitorWorkspace(
             }
         }
 
-        if (pendingReset) AlertDialog(onDismissRequest = { pendingReset = false },
-            title = { Text("Start a fresh mission?") },
-            text = { Text("This closes the current mission and clears favorites. Its PDF, log and PCAP remain saved in Missions.") },
+        if (pendingReset) AlertDialog(onDismissRequest = { pendingReset = false; closingFromMissions = false },
+            title = { Text(if (closingFromMissions) "Close this mission?" else "Start a fresh mission?") },
+            text = { Text("This closes the current mission and clears favorites. Its PDF, log and PCAP remain saved in Missions" +
+                (if (settingsRepository.monitorAutoUpload && settingsRepository.isConfigured) " and it is uploaded" else "") +
+                "; Start then begins a new mission.") },
             confirmButton = { TextButton({
                 pendingReset = false
+                closingFromMissions = false
                 recordAction("mission_closed", "")
+                val closedId = settingsRepository.activeMonitorMissionId
+                if (closedId != null && settingsRepository.monitorAutoUpload && settingsRepository.isConfigured) runCatching {
+                    val dir = File(context.getExternalFilesDir(null), "monitor-missions/$closedId")
+                    MonitorUploadWorker.enqueue(context, closedId, File(dir, "capture.pcap").isFile)
+                }
                 settingsRepository.activeMonitorMissionId = null
                 favorites = emptySet()
                 settingsRepository.monitorFavoriteMacs = emptySet()
@@ -880,8 +909,8 @@ private fun MonitorWorkspace(
                 displayMatches = emptySet()
                 service?.clearFinishedMonitor()
                 missionRevision++
-            }) { Text("Reset") } },
-            dismissButton = { TextButton({ pendingReset = false }) { Text("Cancel") } })
+            }) { Text(if (closingFromMissions) "Close mission" else "Reset") } },
+            dismissButton = { TextButton({ pendingReset = false; closingFromMissions = false }) { Text("Cancel") } })
 
     }
 }
@@ -1027,13 +1056,21 @@ private fun relativeSeen(ageMs: Long): String = when {
 }
 
 /** Relationship view for use in the field. Its parent scrolls while the command bar stays fixed. */
-private fun nearbyOrder(sort: NearbySort): Comparator<Pair<SniffedDevices.Device, SniffedDevices.Guess>> =
+/** Wall-clock first/last seen for the Live cards (MonitorSeenClock), keyed by MAC. */
+private val LocalSeenSpans = staticCompositionLocalOf<Map<String, MonitorSeenClock.Span>> { emptyMap() }
+
+private fun nearbyOrder(
+    sort: NearbySort, seen: Map<String, MonitorSeenClock.Span> = emptyMap(),
+): Comparator<Pair<SniffedDevices.Device, SniffedDevices.Guess>> =
     if (sort == NearbySort.RSSI) {
         compareByDescending<Pair<SniffedDevices.Device, SniffedDevices.Guess>> { it.first.bestRssi ?: Int.MIN_VALUE }
             .thenByDescending { it.first.lastMs }
             .thenBy { it.first.mac }
     } else {
-        compareByDescending<Pair<SniffedDevices.Device, SniffedDevices.Guess>> { it.first.lastMs }
+        // Wall clock first: capture-relative lastMs restarts with every
+        // continued session, so "Recorded" devices would sort wrongly.
+        compareByDescending<Pair<SniffedDevices.Device, SniffedDevices.Guess>> { seen[it.first.mac]?.lastMs ?: Long.MIN_VALUE }
+            .thenByDescending { it.first.lastMs }
             .thenByDescending { it.first.bestRssi ?: Int.MIN_VALUE }
             .thenBy { it.first.mac }
     }
@@ -1058,9 +1095,10 @@ private fun LazyListScope.nearbyItems(
     matches: Set<String>,
     matchesFirst: Boolean,
     deviceStatus: Map<String, String>,
+    seen: Map<String, MonitorSeenClock.Span> = emptyMap(),
     onLocate: ((String) -> Unit)? = null,
 ) {
-    val order = if (matchesFirst) MonitorInventory.matchOrder(matches) else nearbyOrder(sort)
+    val order = if (matchesFirst) MonitorInventory.matchOrder(matches) else nearbyOrder(sort, seen)
     if (showHiddenAps) {
         val groups = MonitorApVisibility.groups(hiddenAps, devices.map { it.first })
         item(key = "hidden-title") { Text("Hidden APs (${groups.size})", style = MaterialTheme.typography.titleMedium) }
@@ -1166,6 +1204,7 @@ private fun DeviceCard(
                     Text("${(device.lastRssi ?: device.bestRssi)?.let { "$it dBm" } ?: "RSSI ?"} · ch ${channel.ifBlank { "?" }} · " +
                         (deviceStatus[device.mac] ?: relativeSeen((newest - device.lastMs).coerceAtLeast(0))),
                         style = MaterialTheme.typography.bodySmall)
+                    LocalSeenSpans.current[device.mac]?.let { span -> Text(seenLine(span), style = MaterialTheme.typography.bodySmall) }
                 }
                 if (onLocate != null) IconButton({ onLocate(device.mac) },
                     modifier = Modifier.size(40.dp).semantics { contentDescription = "Show on Mission map" }) {
@@ -1213,7 +1252,7 @@ private fun DeviceCard(
                 if (stations.isNotEmpty()) {
                     HorizontalDivider()
                     Text("Associated stations (${stations.size})", style = MaterialTheme.typography.labelLarge)
-                    stations.sortedWith(if (matchesFirst) MonitorInventory.matchOrder(matches) else nearbyOrder(sort)).forEach {
+                    stations.sortedWith(if (matchesFirst) MonitorInventory.matchOrder(matches) else nearbyOrder(sort, LocalSeenSpans.current)).forEach {
                         DeviceCard(it, newest, it.first.mac in favorites, onFavorite, sort = sort,
                             onHideAp = onHideAp, deviceStatus = deviceStatus, matches = matches, matchesFirst = matchesFirst, onLocate = onLocate)
                     }
@@ -1305,4 +1344,15 @@ private fun CoTravelTable(
             showBadgeColumn = false,
         )
     }
+}
+
+/** "first 09:12 · last 15:48 (3m ago)"; times on another day carry their date. */
+private fun seenLine(span: MonitorSeenClock.Span, nowMs: Long = System.currentTimeMillis()): String {
+    val today = java.util.Calendar.getInstance().run { timeInMillis = nowMs; get(java.util.Calendar.DAY_OF_YEAR) to get(java.util.Calendar.YEAR) }
+    fun at(ms: Long): String {
+        val day = java.util.Calendar.getInstance().run { timeInMillis = ms; get(java.util.Calendar.DAY_OF_YEAR) to get(java.util.Calendar.YEAR) }
+        val format = if (day == today) DateFormat.getTimeInstance(DateFormat.SHORT) else DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+        return format.format(Date(ms))
+    }
+    return "first ${at(span.firstMs)} · last ${at(span.lastMs)} (${MonitorSeenClock.ago((nowMs - span.lastMs).coerceAtLeast(0))})"
 }
