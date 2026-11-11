@@ -208,6 +208,10 @@ explicitly started on the phone and available after a successful adapter
 test. The live device list stays local to the app session; each completed
 mission keeps a PDF, JSONL log, and optional PCAP locally until the operator
 explicitly uploads that mission to the self-hosted backend.
+On upload the backend also imports the mission's AP readings as ordinary
+WiFi observations under a "<phone>_USB" sensor (`scans/monitor_import.py`),
+so localization uses them; keep that path on the existing session/
+observation models rather than a USB-specific store.
 The maintainer has changed the project's direction toward authorized
 pentesting now that an external monitor-mode adapter works. The older blanket
 ban on active RF features is superseded; scope and design each new active

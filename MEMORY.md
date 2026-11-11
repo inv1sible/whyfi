@@ -272,6 +272,29 @@ stale, and don't duplicate what's already obvious from code/tests.
   ⊘ in the table = `monitorCoTravelIgnored` (no alert); hidden APs never
   alert; 🔔 chip = `monitorCoTravelAlerts`. Replay/stopped missions: computed
   from `evidence.samples`. Net ops category first; row tap → Mission map.
+- **PDF times** (v116, 2026-11-11, user: "still missing time and date info
+  in reports"): `ReportFormat.period/clock/duration/isoLocal`
+  (report/ReportTable.kt). Every PDF cover shows "start – end (duration)";
+  times carry the date only when the data spans days; "Pass started" is
+  local time, not the raw UTC ISO stamp. `SurveyTally` keeps first/last
+  seen per device (injectable clock; recordings replay each pass's own
+  time), so the session tables get First/Last seen. Mission PDF: §2 Last
+  seen, §3 First/Last seen, timeline dated.
+- **USB missions feed server localization** (2026-11-11): on upload (and
+  `manage.py import_monitor_missions [--force|--mission ID]` for older
+  uploads) `scans/monitor_import.py` rebuilds AP readings from the log like
+  MonitorSampleReconciler + MonitorLocationPolicy (fix within 180 s, best
+  effective accuracy; readings worse than 100 m skipped), one ScanSession
+  per receiver fix, strongest reading per AP, as plain WiFiObservations.
+  Source = Sensor type `usb_adapter` named "<phone>_USB" (user's choice),
+  `parent` = phone, created deactivated (its token never authenticates).
+  client_scan_id `usb:<mission>:<provider>:<boot ms>`; re-import replaces.
+  Phone tokens still see only their own sessions (the app's Dashboard
+  backfill must not pick a USB session). RemoteScanPage hides usb_adapter
+  sensors. Logs without `clock_ms`/receiver fixes (pre-2026-11) yield
+  nothing. Backfill 2026-11-11: 3 of 9 missions had data → 7,559
+  observations, 1,138 APs (995 not seen by the phone). USB RSSI is the
+  Realtek PHY reading, a different scale from ScanResult.
 - **Map controls float on the map** (v109, 2026-11-10, user: recentering
   was hard to find while driving): `MapOverlayControls` (MapControls.kt) at
   the map's lower right on both maps, bottom up ⌖ follow, ⟳, ⓘ, ◧ layers

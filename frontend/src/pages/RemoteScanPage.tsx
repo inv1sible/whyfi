@@ -345,7 +345,8 @@ export function RemoteScanPage() {
     [refreshKey],
   );
 
-  const sensors = data?.results ?? [];
+  // A "<phone>_USB" source is data only, not a device that can be driven.
+  const sensors = (data?.results ?? []).filter((s) => s.sensor_type !== "usb_adapter");
 
   return (
     <div>

@@ -12,6 +12,7 @@ from sensors.authentication import SensorTokenAuthentication
 from sensors.models import Sensor
 
 from .models import MonitorMission
+from .monitor_import import import_safely
 
 MAX_PCAP_BYTES = 200 * 1024 * 1024
 MAX_SMALL_FILE_BYTES = 10 * 1024 * 1024
@@ -28,6 +29,9 @@ def mission_data(mission):
         "report_bytes": mission.report.size,
         "log_bytes": mission.log.size,
         "pcap_bytes": mission.pcap.size if mission.pcap else 0,
+        # USB AP readings stored as WiFi observations ("<phone>_USB").
+        "imported_at": mission.imported_at,
+        "import_summary": mission.import_summary,
     }
 
 
@@ -87,4 +91,6 @@ def upload_monitor_mission(request):
             if field.name:
                 field.delete(save=False)
         raise
+    import_safely(mission)
+    mission.refresh_from_db()
     return Response(mission_data(mission), status=status.HTTP_201_CREATED)

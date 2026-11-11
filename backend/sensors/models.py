@@ -32,6 +32,10 @@ class Sensor(models.Model):
     class SensorType(models.TextChoices):
         ANDROID = "android", "Android"
         KALI_LINUX = "kali_linux", "Kali Linux (reserved for v-next)"
+        # The phone's USB monitor-mode adapter, as its own data source
+        # ("<phone>_USB"). Created by scans/monitor_import.py, never by a
+        # device; it sends nothing itself (see MEMORY.md).
+        USB_ADAPTER = "usb_adapter", "USB adapter"
         OTHER = "other", "Other"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -46,6 +50,8 @@ class Sensor(models.Model):
     # "when did this device last actually contribute data".
     last_seen_at = models.DateTimeField(null=True, blank=True)
     last_scan_upload_at = models.DateTimeField(null=True, blank=True)
+    # Set only on a USB_ADAPTER source: the phone it is plugged into.
+    parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="usb_sources")
 
     def __str__(self):
         return f"{self.name} ({self.sensor_type})"

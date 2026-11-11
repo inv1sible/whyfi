@@ -21,6 +21,10 @@ class MonitorMission(models.Model):
     log = models.FileField(upload_to=monitor_file_path)
     pcap = models.FileField(upload_to=monitor_file_path, blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
+    # scans/monitor_import.py: the log's AP readings as WiFiObservations
+    # under the "<phone>_USB" sensor. Null = not imported (yet).
+    imported_at = models.DateTimeField(null=True, blank=True)
+    import_summary = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["-uploaded_at"]
