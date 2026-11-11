@@ -170,6 +170,11 @@ class SettingsRepository(context: Context) {
         get() = prefs.getInt("update_skipped_code", 0)
         set(value) = prefs.edit { putInt("update_skipped_code", value) }
 
+    /** In-app update: also ask the project's GitHub releases (a third-party call; can be switched off). */
+    var updateFromGithub: Boolean
+        get() = prefs.getBoolean("update_from_github", true)
+        set(value) = prefs.edit { putBoolean("update_from_github", value) }
+
     /** USB missions upload after every Stop (log; PCAP on Wi‑Fi). */
     var monitorAutoUpload: Boolean
         get() = prefs.getBoolean("monitor_auto_upload", true)

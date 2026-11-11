@@ -1195,25 +1195,41 @@ the user's request (no hint bars). The choice is saved
 - Reports only contain sections that have data (`PhoneReports.Sections`),
   matching what the screen shows.
 
-## In-app update from the user's own server (v118, 2026-11-11)
+## In-app update from the user's server and GitHub (v118/v119, 2026-11-11)
 
 User saw Fieldwatch's in-app update and asked for the same. Fieldwatch asks
-GitHub (a fixed `dist/app-update.json` + APK on `main`); whyfi asks **only the
-configured server** (`GET app/latest/` with the sensor token, which that
-endpoint was built for). A standalone install checks nowhere. Decisions:
+GitHub (a fixed `dist/app-update.json` + APK on `main`). whyfi v118 asked only
+the configured server (`GET app/latest/` with the sensor token); the user then
+asked for "updates from both local and GitHub" (v119). Decisions:
 
-- **No GitHub check.** Test builds live on the local server only, and a start
-  check against GitHub would be a new third-party call. Ask before adding one
-  for standalone installs.
+- **Two sources, newest wins** (`AppUpdate.best`; the server on a tie):
+  the configured server and `api.github.com/repos/inv1sible/whyfi/releases/latest`
+  (anonymous GET, nothing about the phone is sent). A standalone install
+  therefore updates from GitHub. Switch "Also look on GitHub" in Settings →
+  App update (`update_from_github`, default on).
+- **A GitHub release is visible to the app only through its title
+  "whyfi <name> (<versionCode>)"**: the code is the last bracket of the title
+  (`AppUpdate.githubRelease`). Keep that title format. Drafts and pre-releases
+  are ignored; the APK must be an asset under
+  `github.com/inv1sible/whyfi/releases/download/`; GitHub's asset `digest`
+  (sha256) is checked after the download.
+- **One signing key for both** (user asked for this; it already was so):
+  server builds and GitHub releases come from `android-builder` with the
+  keystore at `ANDROID_KEYSTORE_PATH` (outside git, never publish it). Its
+  certificate SHA-256 is `AppUpdate.OFFICIAL_SIGNER`. A copy signed with
+  another key (someone's own build) does not ask GitHub, because Android would
+  refuse that update; Settings says so. Losing the keystore would break
+  updates for every install: it needs a backup.
 - Check on app start (once per process and server, silent unless newer) plus
   "Check for update" in phone Settings and USB Settings → App update.
   `update/AppUpdate.kt` (pure, tested), `AppUpdater.kt`, `AppUpdateUi.kt`
   (`AppUpdateController` singleton + `AppUpdateDialog`, mounted in `WhyfiApp`).
 - "Later" stores `update_skipped_code`: the start check stays quiet about that
   build, the Settings button still offers it, a newer build asks again.
-- **The download is pinned to the configured server** (`AppUpdate.pinnedUrl`):
-  only path + token come from the server's `download_url`. "Update now" asks
-  the server again first because that token expires after 30 min.
+- **The server download is pinned to the configured server**
+  (`AppUpdate.pinnedUrl`): only path + token come from the server's
+  `download_url`. "Update now" asks the offered build's own source again first
+  because that token expires after 30 min.
 - Before the installer opens: zip header, same package, announced and higher
   version code, same signing certificate as the installed app. The server may
   be plain HTTP, so this is the integrity check; Android enforces the signer

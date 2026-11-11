@@ -4,6 +4,7 @@ import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
@@ -11,17 +12,23 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.whyfi.app.BuildConfig
 import com.whyfi.app.data.SettingsRepository
+import com.whyfi.app.ui.SettingsSection
 import com.whyfi.app.ui.rememberServerKey
 import java.io.File
 import java.io.IOException
@@ -38,8 +45,8 @@ import kotlinx.coroutines.withContext
 sealed interface UpdateState {
     data object Idle : UpdateState
     data object Checking : UpdateState
-    /** Settings check only: nothing newer. [serverVersion] is null when the server has no build. */
-    data class Current(val serverVersion: String?) : UpdateState
+    /** Settings check only: nothing newer. One line per source asked. */
+    data class Current(val lines: List<String>) : UpdateState
     data class Offer(val release: AppRelease, val manual: Boolean) : UpdateState
     data class Downloading(val release: AppRelease, val done: Long, val total: Long) : UpdateState
     /** Downloaded and checked. [opened] = the installer was already started once. */
@@ -57,54 +64,82 @@ object AppUpdateController {
     val state: StateFlow<UpdateState> = _state.asStateFlow()
     private var job: Job? = null
     private var startCheckedFor: String? = null
+    /** The source of the last "Update now", for "Try again". */
+    private var retrySource: UpdateSource? = null
 
-    /** Once per app start and server; says nothing unless a newer build is there. */
-    fun checkOnStart(context: Context, serverKey: String) {
-        if (startCheckedFor == serverKey || _state.value != UpdateState.Idle) return
-        startCheckedFor = serverKey
-        val settings = SettingsRepository(context.applicationContext)
+    private fun found(answers: List<AppUpdater.Answer>): AppRelease? =
+        AppUpdate.best(answers.mapNotNull { (it.check as? AppUpdater.Check.Found)?.release })
+
+    private fun line(answer: AppUpdater.Answer): String = when (val check = answer.check) {
+        is AppUpdater.Check.Found -> "${answer.source.label}: whyfi ${check.release.versionName} (${check.release.versionCode})"
+        AppUpdater.Check.Nothing -> "${answer.source.label}: no build yet"
+        is AppUpdater.Check.Failed -> check.reason
+    }
+
+    /**
+     * Once per app start and set of sources ([sourcesKey]); says nothing
+     * unless a newer build is there.
+     */
+    fun checkOnStart(context: Context, sourcesKey: String) {
+        if (startCheckedFor == sourcesKey || _state.value != UpdateState.Idle) return
+        startCheckedFor = sourcesKey
+        val app = context.applicationContext
+        val settings = SettingsRepository(app)
         scope.launch {
-            val found = AppUpdater.latest(settings) as? AppUpdater.Check.Found ?: return@launch
+            val release = found(AppUpdater.latestAll(app, settings)) ?: return@launch
             if (_state.value == UpdateState.Idle &&
-                AppUpdate.shouldOffer(BuildConfig.VERSION_CODE, found.release, settings.updateSkippedCode, manual = false))
-                _state.value = UpdateState.Offer(found.release, manual = false)
+                AppUpdate.shouldOffer(BuildConfig.VERSION_CODE, release, settings.updateSkippedCode, manual = false))
+                _state.value = UpdateState.Offer(release, manual = false)
         }
     }
 
     /** The button in Settings: always answers, also "up to date" and "could not check". */
     fun check(context: Context) {
         if (_state.value is UpdateState.Checking || _state.value is UpdateState.Downloading) return
-        val settings = SettingsRepository(context.applicationContext)
+        val app = context.applicationContext
+        val settings = SettingsRepository(app)
         _state.value = UpdateState.Checking
         job = scope.launch {
-            val next = when (val result = AppUpdater.latest(settings)) {
-                is AppUpdater.Check.Failed -> UpdateState.Failed(result.reason, retry = false)
-                AppUpdater.Check.Nothing -> UpdateState.Current(null)
-                is AppUpdater.Check.Found ->
-                    if (AppUpdate.shouldOffer(BuildConfig.VERSION_CODE, result.release, settings.updateSkippedCode, manual = true))
-                        UpdateState.Offer(result.release, manual = true)
-                    else UpdateState.Current("${result.release.versionName} (${result.release.versionCode})")
+            val answers = AppUpdater.latestAll(app, settings)
+            val release = found(answers)
+            val next = when {
+                answers.isEmpty() -> UpdateState.Failed(
+                    if (AppUpdater.officialBuild(app)) "There is nowhere to look: set up a server or switch on GitHub."
+                    else "There is nowhere to look: set up a server. This copy was built with its own signing key, " +
+                        "so builds from GitHub cannot update it.",
+                    retry = false)
+                release != null && AppUpdate.shouldOffer(BuildConfig.VERSION_CODE, release, settings.updateSkippedCode, manual = true) ->
+                    UpdateState.Offer(release, manual = true)
+                answers.all { it.check is AppUpdater.Check.Failed } -> UpdateState.Failed(answers.joinToString(" ", transform = ::line), retry = false)
+                else -> UpdateState.Current(answers.map(::line))
             }
             if (_state.value is UpdateState.Checking) _state.value = next
         }
     }
 
     /**
-     * "Update now". Asks the server again first: the download address carries
-     * a token that expires, and a newer build may have appeared meanwhile.
+     * "Update now" for the build that was offered. Asks its source again
+     * first: the server's download address carries a token that expires, and
+     * a newer build may have appeared meanwhile.
      */
     fun download(context: Context) {
-        if (_state.value is UpdateState.Downloading) return
+        val source = when (val now = _state.value) {
+            is UpdateState.Offer -> now.release.source
+            is UpdateState.Failed -> retrySource ?: return
+            else -> return
+        }
+        retrySource = source
         val app = context.applicationContext
         val settings = SettingsRepository(app)
         _state.value = UpdateState.Checking
         job = scope.launch {
-            val release = when (val result = AppUpdater.latest(settings)) {
+            val release = when (val result = AppUpdater.latest(source, settings)) {
                 is AppUpdater.Check.Found -> result.release
                 is AppUpdater.Check.Failed -> return@launch finish(UpdateState.Failed(result.reason, retry = true))
-                AppUpdater.Check.Nothing -> return@launch finish(UpdateState.Failed("The server has no build any more.", retry = false))
+                AppUpdater.Check.Nothing -> return@launch finish(UpdateState.Failed("${source.label} has no build any more.", retry = false))
             }
-            if (release.versionCode <= BuildConfig.VERSION_CODE) return@launch finish(UpdateState.Current("${release.versionName} (${release.versionCode})"))
+            if (release.versionCode <= BuildConfig.VERSION_CODE)
+                return@launch finish(UpdateState.Current(listOf("${source.label}: whyfi ${release.versionName} (${release.versionCode})")))
             _state.value = UpdateState.Downloading(release, 0, release.apkBytes)
             var shownPercent = -1
             val next = try {
@@ -160,7 +195,9 @@ fun AppUpdateDialog(busy: Boolean) {
     val context = LocalContext.current
     val serverKey = rememberServerKey()
     LaunchedEffect(serverKey) {
-        if (serverKey != null) AppUpdateController.checkOnStart(context.applicationContext, serverKey)
+        val app = context.applicationContext
+        val sources = withContext(Dispatchers.IO) { AppUpdater.sources(app, SettingsRepository(app)) }
+        if (sources.isNotEmpty()) AppUpdateController.checkOnStart(app, "$serverKey|$sources")
     }
     val state by AppUpdateController.state.collectAsState()
     val installed = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
@@ -186,8 +223,10 @@ fun AppUpdateDialog(busy: Boolean) {
             onDismissRequest = AppUpdateController::close,
             title = { Text("This phone is up to date") },
             text = {
-                Text(if (s.serverVersion == null) "Your server has no build yet. This phone has whyfi $installed."
-                    else "The newest build on your server is whyfi ${s.serverVersion}. This phone has $installed.")
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("This phone has whyfi $installed. Nothing newer was found.")
+                    s.lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                }
             },
             confirmButton = { TextButton(onClick = AppUpdateController::close) { Text("OK") } },
         )
@@ -196,7 +235,7 @@ fun AppUpdateDialog(busy: Boolean) {
             title = { Text("Update available") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("whyfi ${s.release.versionName} (${s.release.versionCode}) is on your server. This phone has $installed.")
+                    Text("whyfi ${s.release.versionName} (${s.release.versionCode}) is ${s.release.source.where}. This phone has $installed.")
                     if (s.release.notes.isNotEmpty()) {
                         Text("What's new", style = MaterialTheme.typography.labelLarge)
                         Text(s.release.notes, style = MaterialTheme.typography.bodySmall,
@@ -255,5 +294,33 @@ fun AppUpdateDialog(busy: Boolean) {
             },
             dismissButton = { if (s.retry) TextButton(onClick = AppUpdateController::close) { Text("Close") } },
         )
+    }
+}
+
+/**
+ * The "App update" section of phone Settings and USB Settings: where whyfi
+ * looks, the GitHub switch, and the manual check.
+ */
+@Composable
+fun AppUpdateSettings(settings: SettingsRepository) {
+    val context = LocalContext.current
+    val serverKey = rememberServerKey()
+    val official = remember { AppUpdater.officialBuild(context.applicationContext) }
+    var github by remember { mutableStateOf(settings.updateFromGithub) }
+    val places = listOfNotNull("your server".takeIf { serverKey != null }, "GitHub".takeIf { github && official })
+    SettingsSection("App update", if (places.isEmpty()) "Off" else "From ${places.joinToString(" and ")}") {
+        Text(
+            "When whyfi starts it looks for a newer build" +
+                (if (places.isEmpty()) ": nowhere at the moment." else " on ${places.joinToString(" and ")} and offers the newest one.") +
+                " Android asks you to confirm every install.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (official) Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Also look on GitHub (github.com/${AppUpdate.GITHUB_REPO}). Nothing about this phone is sent.",
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            Switch(github, { github = it; settings.updateFromGithub = it })
+        } else Text("This copy was built with its own signing key, so builds from GitHub cannot update it.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        TextButton(enabled = places.isNotEmpty(), onClick = { AppUpdateController.check(context) }) { Text("Check for update") }
     }
 }

@@ -149,6 +149,24 @@ data class AppReleaseResponse(
     @SerializedName("apk_size") val apkSize: Long?,
 )
 
+/** GitHub's `releases/latest` answer, the fields the update check reads. */
+data class GithubReleaseResponse(
+    @SerializedName("tag_name") val tagName: String?,
+    @SerializedName("name") val name: String?,
+    @SerializedName("body") val body: String?,
+    @SerializedName("draft") val draft: Boolean?,
+    @SerializedName("prerelease") val prerelease: Boolean?,
+    @SerializedName("assets") val assets: List<GithubAssetResponse>?,
+)
+
+data class GithubAssetResponse(
+    @SerializedName("name") val name: String?,
+    @SerializedName("size") val size: Long?,
+    @SerializedName("browser_download_url") val downloadUrl: String?,
+    /** "sha256:<hex>" on newer uploads. */
+    @SerializedName("digest") val digest: String?,
+)
+
 /** Every estimator's answer for a Mission target, plus how far apart they
  * land — mirrors compare_estimators() in backend/scans/estimators.py. Lets
  * Mission view draw the cone from the user's chosen algorithm while showing

@@ -196,7 +196,11 @@ credentials, or publish secrets.
   offers the newest successful build (`android/.../update/`, MEMORY.md), so
   every published test build reaches the maintainer's phone as an update
   prompt. Notes passed to the build are shown there as "What's new": write
-  them for the user.
+  them for the user. Since v119 the app also asks the GitHub releases: a
+  release must be titled "whyfi <name> (<versionCode>)" and carry the APK as
+  an asset, or installed apps do not see it; its notes are shown the same
+  way. Server builds and GitHub releases must stay signed with the same
+  keystore.
 - **Generate migrations against a real Postgres, then copy the file to the
   host immediately.** `backend/` is not bind-mounted into the `backend`
   container, so `docker compose exec backend python manage.py
