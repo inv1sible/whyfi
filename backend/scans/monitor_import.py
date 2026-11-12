@@ -118,22 +118,34 @@ def parse_log(lines):
     return snapshots, fixes
 
 
-def ap_readings(snapshots, fixes):
-    """Every AP reading with its receiver fix, like MonitorSampleReconciler(apOnly)."""
+def ap_readings(snapshots, fixes, stats=None):
+    """Every AP reading with its receiver fix, like MonitorSampleReconciler(apOnly).
+
+    `stats`, when given, receives why readings were left out, so the import
+    summary can say what the server did not keep (user, 2026-11-12: a day of
+    indoor captures imported as "0 observations" with no hint why):
+    "no_fix" (no receiver fix within MAX_FIX_AGE_MS), "poor_fix" (the best fix
+    was worse than MAX_EFFECTIVE_ACCURACY_M), "unpaired" (older logs without
+    the boot clock). Counted after deduplication, like the kept readings.
+    """
     fixes = sorted(fixes, key=lambda f: f["boot_ms"])
     boots = [f["boot_ms"] for f in fixes]
     seen = {}
     out = []
+    counts = {"no_fix": 0, "poor_fix": 0, "unpaired": 0}
     for at_ms, clock_ms, tsv in snapshots:
-        if clock_ms <= 0:
-            continue  # older logs without the boot clock cannot be paired
         for line in tsv.splitlines():
             f = line.split("\t")
             if len(f) < 20:
                 continue
             roles = _int(f[1], 0)
             rssi, boot, channel = _int(f[17]), _int(f[18], 0), _int(f[19], 0)
-            if not roles & ROLE_AP or rssi is None or boot <= 0 or channel <= 0 or boot > clock_ms + 2_000:
+            if not roles & ROLE_AP or rssi is None or boot <= 0 or channel <= 0:
+                continue
+            if clock_ms <= 0:
+                counts["unpaired"] += 1  # older logs without the boot clock cannot be paired
+                continue
+            if boot > clock_ms + 2_000:
                 continue
             mac = f[0].strip().lower()
             reading_at = at_ms - clock_ms + boot
@@ -147,7 +159,11 @@ def ap_readings(snapshots, fixes):
                 effective = fix["accuracy_m"] + age / 1000.0 * max(MIN_MOTION_M_PER_S, fix["speed_mps"] * 1.5)
                 if best is None or (effective, age) < (best[0], best[1]):
                     best = (effective, age, fix)
-            if best is None or best[0] > MAX_EFFECTIVE_ACCURACY_M:
+            if best is None:
+                counts["no_fix"] += 1
+                continue
+            if best[0] > MAX_EFFECTIVE_ACCURACY_M:
+                counts["poor_fix"] += 1
                 continue
             out.append({
                 "mac": mac, "at_ms": reading_at, "rssi": rssi, "channel": channel,
@@ -155,6 +171,8 @@ def ap_readings(snapshots, fixes):
                 "akms": f[27] if len(f) > 27 else "", "pairwise": f[28] if len(f) > 28 else "",
                 "fix": best[2], "effective_accuracy_m": best[0],
             })
+    if stats is not None:
+        stats.update(counts)
     return out
 
 
@@ -193,7 +211,8 @@ def _import_locked(mission: MonitorMission, force: bool) -> dict:
     else:
         with mission.log.open("rb") as handle:
             snapshots, fixes = parse_log(line.decode("utf-8", "replace") for line in handle)
-        readings = ap_readings(snapshots, fixes)
+        dropped = {}
+        readings = ap_readings(snapshots, fixes, dropped)
         groups = {}
         for r in readings:
             freq = frequency_for_channel(r["channel"])
@@ -204,6 +223,14 @@ def _import_locked(mission: MonitorMission, force: bool) -> dict:
             if r["mac"] not in per_ap or r["rssi"] > per_ap[r["mac"]]["rssi"]:
                 per_ap[r["mac"]] = {**r, "frequency": freq}
         summary = _store(mission, groups, len(snapshots), len(fixes))
+        # What the position rule did, next to what it kept (see ap_readings).
+        summary.update({
+            "readings": len(readings),
+            "dropped_no_fix": dropped["no_fix"], "dropped_poor_fix": dropped["poor_fix"],
+            "dropped_unpaired": dropped["unpaired"],
+            "position_limit_m": MAX_EFFECTIVE_ACCURACY_M,
+            "best_fix_accuracy_m": min((f["accuracy_m"] for f in fixes), default=None),
+        })
     mission.imported_at = dj_timezone.now()
     mission.import_summary = summary
     mission.save(update_fields=["imported_at", "import_summary"])

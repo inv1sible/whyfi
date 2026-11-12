@@ -58,9 +58,20 @@ class MonitorImportParsingTests(TestCase):
     def test_coarse_fixes_and_logs_without_boot_clock_are_skipped(self):
         coarse = [fix(0, 52.5, 13.4, accuracy=900.0, provider="network"),
                   snapshot(1_000, [device_line(AP, 1, -61, BOOT0 + 900, 6)])]
-        self.assertEqual(ap_readings(*parse_log(mission_log(coarse).decode().splitlines())), [])
+        stats = {}
+        self.assertEqual(ap_readings(*parse_log(mission_log(coarse).decode().splitlines()), stats), [])
+        self.assertEqual(stats, {"no_fix": 0, "poor_fix": 1, "unpaired": 0})
         old = [fix(0, 52.5, 13.4), {**snapshot(1_000, [device_line(AP, 1, -61, BOOT0 + 900, 6)]), "clock_ms": 0}]
-        self.assertEqual(ap_readings(*parse_log(mission_log(old).decode().splitlines())), [])
+        stats = {}
+        self.assertEqual(ap_readings(*parse_log(mission_log(old).decode().splitlines()), stats), [])
+        self.assertEqual(stats, {"no_fix": 0, "poor_fix": 0, "unpaired": 1})
+        # No fix at all within three minutes of the reading; the client
+        # station on the same line is not an AP reading and is not counted.
+        unfixed = [fix(0, 52.5, 13.4), snapshot(600_000, [device_line(AP, 1, -61, BOOT0 + 599_000, 6),
+                                                          device_line(CLIENT, 2, -50, BOOT0 + 599_000, 6)])]
+        stats = {}
+        self.assertEqual(ap_readings(*parse_log(mission_log(unfixed).decode().splitlines()), stats), [])
+        self.assertEqual(stats, {"no_fix": 1, "poor_fix": 0, "unpaired": 0})
 
     def test_channels_and_security(self):
         self.assertEqual((frequency_for_channel(6), frequency_for_channel(36), frequency_for_channel(14)), (2437, 5180, 2484))
@@ -95,6 +106,12 @@ class MonitorImportTests(TestCase):
         summary = response.json()["import_summary"]
         self.assertEqual((summary["status"], summary["source"], summary["sessions"], summary["observations"]),
                          ("imported", "Pixel 8_USB", 2, 2))
+        self.assertEqual(
+            {k: summary[k] for k in ("readings", "dropped_no_fix", "dropped_poor_fix", "dropped_unpaired",
+                                     "position_limit_m", "best_fix_accuracy_m")},
+            {"readings": 2, "dropped_no_fix": 0, "dropped_poor_fix": 0, "dropped_unpaired": 0,
+             "position_limit_m": 100.0, "best_fix_accuracy_m": 8.0},
+        )
         usb = Sensor.objects.get(sensor_type=Sensor.SensorType.USB_ADAPTER)
         self.assertEqual((usb.name, usb.parent_id, usb.is_active), ("Pixel 8_USB", self.phone_sensor.id, False))
         sessions = ScanSession.objects.filter(sensor=usb).order_by("started_at")

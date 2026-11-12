@@ -1242,6 +1242,32 @@ asked for "updates from both local and GitHub" (v119). Decisions:
   *after* v118.
 
 
+## USB import: dropped readings, Live fix banner (2026-11-12)
+
+User: "showing dropped-for-no-position readings in the USB import summary …
+rename the tab … style the table … a Live warning when capturing without a
+GPS fix … status banner in red, orange and green, subtle colors".
+
+- `ap_readings(snapshots, fixes, stats=None)` fills `stats` with `no_fix`
+  (no receiver fix within 3 min), `poor_fix` (best effective accuracy >
+  `MAX_EFFECTIVE_ACCURACY_M` = 100 m), `unpaired` (logs without the boot
+  clock). `import_summary` gained `readings`, `dropped_no_fix`,
+  `dropped_poor_fix`, `dropped_unpaired`, `position_limit_m`,
+  `best_fix_accuracy_m`. Older summaries lack them; all stored missions were
+  re-imported with `import_mission(m, force=True)` on 2026-11-12 (derived
+  data only; the logs are the source).
+- Web: nav tab "USB Monitoring" (route still `/monitor-missions`), page
+  "USB monitoring" with search + sortable Uploaded/Sensor, an Import column
+  (badge ok/warning/danger/neutral + "N readings positioned, M dropped
+  (reasons)" + a hint with the best fix when nothing was kept).
+- App: `usbmon/MonitorFixQuality.classify(fixes, nowBootMs)` → GOOD (≤ 30 m
+  effective), FAIR (≤ 100 m), POOR (worse, no fix, or older than 3 min),
+  using `MonitorLocationPolicy.select` like the capture. `FixBanner` on the
+  Live tab (MonitorScreen), re-judged every 5 s, tints
+  green/orange/red at 10–16 % alpha with the colour on a "●" dot. Shown
+  before and during capture. Test build v121 (2026.11.12-0524) on the
+  Download page; no GitHub release.
+
 ## Focus area: place search, circle or polygon (2026-11-11)
 
 User: "let the user search for a location, select on a map with a location

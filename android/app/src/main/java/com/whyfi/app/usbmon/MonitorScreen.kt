@@ -5,6 +5,7 @@ import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.location.Location
+import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -16,6 +17,8 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
@@ -579,6 +582,19 @@ private fun MonitorWorkspace(
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) { setup() }
         } else if (selected == MonitorTab.NEARBY) {
+            // The receiver-position banner (MonitorFixQuality): judged at the
+            // current boot clock, re-judged every few seconds so a fix that
+            // ages out turns orange and then red without a new fix arriving.
+            var nowBootMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+            LaunchedEffect(Unit) { while (true) { nowBootMs = SystemClock.elapsedRealtime(); delay(5_000) } }
+            val fixStatus = remember(liveLocations, nowBootMs) {
+                MonitorFixQuality.classify(liveLocations.values.map { fix ->
+                    MonitorLocationCandidate(fix.provider ?: "unknown", fix.elapsedRealtimeNanos / 1_000_000,
+                        fix.latitude, fix.longitude,
+                        if (fix.hasAccuracy() && fix.accuracy.isFinite() && fix.accuracy >= 0f) fix.accuracy.toDouble() else 1_000.0,
+                        if (fix.hasSpeed() && fix.speed.isFinite() && fix.speed >= 0f) fix.speed.toDouble() else 0.0)
+                }, nowBootMs)
+            }
             // Lazy: a long mission holds thousands of devices, and drawing a
             // card for each at once ran the app out of memory (crash report
             // 2026-10-27, OOM while accessibility walked the whole tree).
@@ -602,6 +618,7 @@ private fun MonitorWorkspace(
                 if (showChannels) ChannelPanel(state, allChannels, channels, allMode,
                     { allMode = it; recordAction("channel_mode", if (it) "all" else "selected") },
                     setChannels)
+                FixBanner(fixStatus)
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (searchKeep != null && nearbyDevices.isEmpty()) Text("Nothing matches “${searchQuery.trim()}”. ✕ clears the search.",
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -912,6 +929,30 @@ private fun MonitorWorkspace(
             }) { Text(if (closingFromMissions) "Close mission" else "Reset") } },
             dismissButton = { TextButton({ pendingReset = false; closingFromMissions = false }) { Text("Cancel") } })
 
+    }
+}
+
+/** Receiver-position banner on the Live tab (user, 2026-11-12): green,
+ * orange or red for "readings will be positioned on the server / coarsely /
+ * not at all", in subtle tints with the colour carried by the dot. */
+@Composable
+private fun FixBanner(status: MonitorFixQuality.Status) {
+    val dark = isSystemInDarkTheme()
+    val dot = when (status.level) {
+        MonitorFixQuality.Level.GOOD -> Color(0xFF43A047)
+        MonitorFixQuality.Level.FAIR -> Color(0xFFFB8C00)
+        MonitorFixQuality.Level.POOR -> Color(0xFFE53935)
+    }
+    Surface(color = dot.copy(alpha = if (dark) 0.16f else 0.10f), shape = MaterialTheme.shapes.small,
+        modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("●", color = dot, style = MaterialTheme.typography.bodyMedium)
+            Column {
+                Text(status.headline, style = MaterialTheme.typography.bodyMedium)
+                Text(status.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
 }
 

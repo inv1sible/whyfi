@@ -5,6 +5,25 @@ export interface Paginated<T> {
   results: T[];
 }
 
+/** What the server made of an uploaded USB capture (scans/monitor_import.py).
+ * Missions imported before 2026-11-12 lack the `readings`/`dropped_*` keys. */
+export interface MonitorImportSummary {
+  status?: "imported" | "skipped" | "failed";
+  reason?: string;
+  source?: string;
+  sessions?: number;
+  observations?: number;
+  access_points?: number;
+  snapshots?: number;
+  receiver_fixes?: number;
+  readings?: number;
+  dropped_no_fix?: number;
+  dropped_poor_fix?: number;
+  dropped_unpaired?: number;
+  position_limit_m?: number;
+  best_fix_accuracy_m?: number | null;
+}
+
 export interface MonitorMission {
   id: string;
   sensor: string;
@@ -15,6 +34,8 @@ export interface MonitorMission {
   report_bytes: number;
   log_bytes: number;
   pcap_bytes: number;
+  imported_at: string | null;
+  import_summary: MonitorImportSummary;
 }
 
 /** Remote scanning control for one device.
